@@ -1,0 +1,17 @@
+ipykernel
+scipy
+matplotlib
+pandas
+beautifulsoup4
+selenium
+pycountry
+requests
+pillow
+pycountry
+pyautogui
+opencv-python
+torch
+transformers
+paddlepaddle==3.0.0b1 --index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/
+paddleocr
+ib_async
