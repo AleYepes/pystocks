@@ -1,4 +1,4 @@
 {
     "search.showLineNumbers": true,
-    "notebook.lineNumbers": "off"
+    "notebook.lineNumbers": "on"
 }

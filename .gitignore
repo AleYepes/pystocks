@@ -23,6 +23,7 @@ prospects/
 bin/
 include/
 old/
+.vscode/
 
 # Compiled source code
 *.com
