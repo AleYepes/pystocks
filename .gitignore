@@ -49,7 +49,6 @@ old/
 __pycache__/
 *.py[cod]
 *$py.class
-*.ipynb
 
 # Distribution / packaging
 .Python
