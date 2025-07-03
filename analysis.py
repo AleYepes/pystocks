@@ -1,25 +1,32 @@
 import os
-from ib_async import *
 import pandas as pd
 import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
-from tqdm.auto import tqdm
-from collections import defaultdict
-from time import sleep
-from scipy.optimize import minimize
-from fredapi import Fred
-import pandas_datareader.data as web
-import math
 import re
 import ast
+from tqdm.auto import tqdm
+from datetime import datetime, timedelta
+
+from ib_async import *
+import pandas_datareader.data as web
+import wbgapi as wb
 import country_converter as coco
 
-pd.set_option('display.max_colwidth', None)
-pd.set_option('display.max_columns', None)
+from scipy.stats import skew
+from scipy.optimize import minimize_scalar
 
-# Prep functions
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import ElasticNetCV
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, r2_score
+
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import statsmodels.api as sm
+
+# pd.set_option('display.max_colwidth', None)
+# pd.set_option('display.max_columns', None)
+
+
 def evaluate_literal(val):
     try:
         return ast.literal_eval(val)
@@ -32,14 +39,415 @@ def load(path):
         df[col] = df[col].apply(evaluate_literal)
     return df
 
+def ensure_series_types(df, price_col):
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date').reset_index(drop=True)
+    for col in ['volume', price_col]:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    return df
+
+def validate_raw_prices(df, price_col):
+    invalid_price_mask = df[price_col] <= 0
+    inconsistent_mask = pd.Series(False, index=df.index)
+    if 'low' in df.columns and 'high' in df.columns:
+        inconsistent_mask = (df['low'] > df['high'])
+    local_error_mask = invalid_price_mask | inconsistent_mask
+    df = df[~local_error_mask].copy()
+    return df
+
+def handle_stale_periods(df, price_col, max_stale_days=5):
+    stale_groups = (df[price_col].diff() != 0).cumsum()
+    if stale_groups.empty:
+        return df
+    period_lengths = df.groupby(stale_groups)[price_col].transform('size')
+    long_stale_mask = period_lengths > max_stale_days
+    is_intermediate_stale_row = (stale_groups.duplicated(keep='first') & stale_groups.duplicated(keep='last'))
+    rows_to_drop_mask = long_stale_mask & is_intermediate_stale_row
+    df = df[~rows_to_drop_mask].copy()
+    return df
+
+def detect_and_nullify_global_outliers(meta_df, price_col, z_threshold=120.0, window=5):
+    all_pct_changes = pd.concat(
+        [row['df']['pct_change'] for _, row in meta_df.iterrows()],
+        ignore_index=True
+    ).dropna()
+    all_pct_changes = all_pct_changes[~np.isinf(all_pct_changes) & (all_pct_changes != 0)]
+
+    global_median_return = all_pct_changes.median()
+    global_mad = (all_pct_changes - global_median_return).abs().median()
+
+    for idx, row in meta_df.iterrows():
+        df = row['df']
+        df = df.reset_index(drop=True)
+        if df['pct_change'].isnull().all():
+            continue
+        cols_to_null = [price_col, 'volume', 'high', 'low', 'pct_change']
+        cols_to_null = [c for c in cols_to_null if c in df.columns]
+
+        absolute_modified_z = (df['pct_change'] - global_median_return).abs() / global_mad
+        outlier_mask = absolute_modified_z > z_threshold
+
+        if outlier_mask.any():
+
+            candidate_indices = df.index[outlier_mask]
+            for df_idx in candidate_indices:
+                price_to_check_idx = df_idx - 1
+                price_to_check = df.loc[price_to_check_idx, price_col]
+                local_window_start = max(0, price_to_check_idx - window)
+                local_window = df.loc[local_window_start : price_to_check_idx - 1, price_col].dropna()
+                local_mean = local_window.mean()
+                local_std = local_window.std()
+                if local_std != 0: 
+                    price_z_score = abs(price_to_check - local_mean) / local_std
+                    if price_z_score > z_threshold / 10:
+                        df.loc[price_to_check_idx, cols_to_null] = np.nan
+
+                price_to_check = df.loc[df_idx, price_col]
+                local_window_end = min(df_idx + window, df.index[outlier_mask].max())
+                local_window = df.loc[df_idx + 1: local_window_end, price_col].dropna()
+                local_mean = local_window.mean()
+                local_std = local_window.std()
+                if local_std != 0:
+                    price_z_score = abs(price_to_check - local_mean) / local_std
+                    if price_z_score > z_threshold / 10:
+                        df.loc[df_idx, cols_to_null] = np.nan
+
+            df['pct_change'] = df[price_col].pct_change(fill_method=None)
+            meta_df.at[idx, 'df'] = df
+
+def calculate_slope(value1, value2, time1, time2):
+    return (value1 - value2) / (time1 - time2)
+
+def get_return_stats(df, training_cutoff, momentum_cutoffs, risk_free_df):
+    training_df = df[df.index < training_cutoff]
+    training_rf = risk_free_df[risk_free_df.index < training_cutoff]
+
+    excess_returns = training_df['pct_change'] - training_rf['daily_nominal_rate']
+    sharpe = excess_returns.mean() / excess_returns.std()
+
+    momentum_3mo = training_df[training_df.index >= momentum_cutoffs['3mo']]['pct_change'].mean()
+    momentum_6mo = training_df[training_df.index >= momentum_cutoffs['6mo']]['pct_change'].mean()
+    momentum_1y  = training_df[training_df.index >= momentum_cutoffs['1y']]['pct_change'].mean()
+
+    return pd.Series(
+        [momentum_3mo, momentum_6mo, momentum_1y, sharpe],
+        index=['momentum_3mo', 'momentum_6mo', 'momentum_1y', 'stats_sharpe']
+    )
+
+def create_continent_map(standard_names):
+    continents = cc.convert(names=standard_names, to='continent', not_found=None)
+    return {name: (cont if cont is not None else 'Other')
+            for name, cont in zip(standard_names, continents)}
+
+def create_metric_maps(standard_names, indicators, start_year, end_year, window_size=3):
+    data = wb.data.DataFrame(list(indicators), standard_names, time=range(2000, end_year.year + 1), labels=False)
+    data.dropna(axis=1, inplace=True) 
+    
+    if len(data.columns) <= window_size * 2:
+         raise (f"Warning: Not enough data points ({len(data.columns)} years) for a window size of {window_size} + 1 required for derivatives. Skipping derivative calculation.")
+
+    yoy_change = data.diff(axis=1)
+    first_div = yoy_change.rolling(window=window_size, axis=1).mean()
+
+    yoy_change_first_div = first_div.diff(axis=1)
+    second_div = yoy_change_first_div.rolling(window=window_size, axis=1).mean()
+
+    latest_year_col = data.columns[-1]
+    latest_first_div_col = first_div.columns[-1]
+    latest_second_div_col = second_div.columns[-1]
+
+    derivatives = pd.DataFrame(data[latest_year_col])
+    derivatives.rename(columns={latest_year_col: 'raw_value'}, inplace=True)
+    derivatives['1st_div'] = first_div[latest_first_div_col] / derivatives['raw_value']
+    derivatives['2nd_div'] = second_div[latest_second_div_col] / derivatives['raw_value']
+    
+    metric_df_reshaped = derivatives.unstack(level='series')
+    if isinstance(metric_df_reshaped.columns, pd.MultiIndex):
+         metric_df_final = metric_df_reshaped.swaplevel(0, 1, axis=1)
+         metric_df_final.sort_index(axis=1, level=0, inplace=True)
+    else:
+         metric_df_final = metric_df_reshaped
+
+    return metric_df_final
+
+def construct_long_short_factor_returns(full_meta_df, returns_df, long_symbols, short_symbols, factor_column=None):
+    long_df = full_meta_df[full_meta_df['conId'].isin(long_symbols)].set_index('conId')
+    long_weights = long_df['profile_cap_usd'].reindex(returns_df.columns).fillna(0)
+    if long_weights.mean() == 0:
+        print(f'Long {factor_column}')
+        print(long_df.index)
+        print()
+    if factor_column:
+        factor_weights = (full_meta_df[factor_column].max() - long_df[factor_column]) / (full_meta_df[factor_column].max() - full_meta_df[factor_column].min())
+        factor_weights = factor_weights.reindex(returns_df.columns).fillna(0)
+        if factor_weights.sum() != 0:
+            long_weights *= factor_weights
+
+    long_weights /= long_weights.sum()
+    long_returns = returns_df.dot(long_weights)
+    
+    short_df = full_meta_df[full_meta_df['conId'].isin(short_symbols)].set_index('conId')
+    short_weights = short_df['profile_cap_usd'].reindex(returns_df.columns).fillna(0)
+    if short_weights.mean() == 0:
+        print(f'Short {factor_column}')
+        print(short_df.index)
+        print()
+    if factor_column:
+        factor_weights = (short_df[factor_column] - full_meta_df[factor_column].min()) / (full_meta_df[factor_column].max() - full_meta_df[factor_column].min())
+        factor_weights = factor_weights.reindex(returns_df.columns).fillna(0)
+        if factor_weights.sum() != 0:
+            short_weights *= factor_weights
+
+    short_weights /= short_weights.sum()
+    short_returns = returns_df.dot(short_weights)
+    
+    factor_returns = long_returns - short_returns
+    return factor_returns
+
+def construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, scaling_factor=0.5):
+    factors = {}
+    # Market risk premium
+    factors['factor_market_premium'] = (portfolio_dfs['equity']['pct_change'] - risk_free_df['daily_nominal_rate'])
+
+    # SMB_ETF
+    small_symbols = filtered_df[filtered_df['marketcap_small'] == 1]['conId'].tolist()
+    large_symbols = filtered_df[filtered_df['marketcap_large'] == 1]['conId'].tolist()
+
+    intersection = set(small_symbols) & set(large_symbols)
+    small_symbols = [s for s in small_symbols if s not in intersection]
+    large_symbols = [s for s in large_symbols if s not in intersection]
+    smb_etf = construct_long_short_factor_returns(filtered_df, pct_changes, small_symbols, large_symbols)
+    factors['factor_smb'] = smb_etf
+
+    # HML_ETF
+    value_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('value')]
+    growth_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('growth')]
+    value_symbols = filtered_df[filtered_df[value_cols].ne(0).any(axis=1)]['conId'].tolist()
+    growth_symbols = filtered_df[filtered_df[growth_cols].ne(0).any(axis=1)]['conId'].tolist()
+
+    intersection = set(value_symbols) & set(growth_symbols)
+    value_symbols = [s for s in value_symbols if s not in intersection]
+    growth_symbols = [s for s in growth_symbols if s not in intersection]
+    hml_etf = construct_long_short_factor_returns(filtered_df, pct_changes, value_symbols, growth_symbols)
+    factors['factor_hml'] = hml_etf
+
+    # Metadata
+    excluded = ['style_', 'marketcap_', 'countries_', 'fundamental']
+    numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
+    for col in numerical_cols:
+        if not any(col.startswith(prefix) for prefix in excluded) and col in filtered_df.columns:
+            try:
+                std = filtered_df[col].std()
+                mean = filtered_df[col].mean()
+
+                upper_boundary = min(filtered_df[col].max(), mean + (scaling_factor * std))
+                lower_boundary = max(filtered_df[col].min(), mean - (scaling_factor * std))
+
+                low_factor_symbols = filtered_df[filtered_df[col] <= lower_boundary]['conId'].tolist()
+                high_factor_symbols = filtered_df[filtered_df[col] >= upper_boundary]['conId'].tolist()
+                if col.endswith('variety'):
+                    var_etf = construct_long_short_factor_returns(filtered_df, pct_changes, low_factor_symbols, high_factor_symbols, factor_column=col)
+                else:
+                    var_etf = construct_long_short_factor_returns(filtered_df, pct_changes, high_factor_symbols, low_factor_symbols, factor_column=col)
+                var_etf = construct_long_short_factor_returns(filtered_df, pct_changes, high_factor_symbols, low_factor_symbols, factor_column=col)
+                factors[col] = var_etf
+
+            except Exception as e:
+                print(col)
+                print(e)
+                raise
+
+    return pd.DataFrame(factors)
+
+def prescreen_factors(factors_df, correlation_threshold=0.99, drop_map=None):
+    if factors_df is None or factors_df.empty or factors_df.shape[1] == 0:
+        raise ValueError("factors_df must be a non-empty DataFrame with at least one column.")
+    temp_factors_df = factors_df.copy()
+
+    corr_matrix = temp_factors_df.corr().abs()
+    corr_pairs = corr_matrix.where(np.triu(np.ones_like(corr_matrix, dtype=bool), k=1)).stack()
+    corr_pairs = corr_pairs.sort_values(ascending=False)
+
+    if not drop_map:
+        drop_map = {}
+    col_order = list(temp_factors_df.columns)
+    for (col1, col2), corr_val in corr_pairs.items():
+        if corr_val < correlation_threshold:
+            break
+
+        already_dropped = {c for drops in drop_map.values() for c in drops}
+        if col1 in already_dropped or col2 in already_dropped:
+            continue
+
+        if col_order.index(col1) < col_order.index(col2):
+            keeper, to_drop = col1, col2
+        else:
+            keeper, to_drop = col2, col1
+
+        drop_map.setdefault(keeper, []).append(to_drop)
+
+    cols_to_drop = set(col for drops in drop_map.values() for col in drops)
+    temp_factors_df = temp_factors_df.drop(columns=cols_to_drop)
+    return temp_factors_df, drop_map
+
+def merge_drop_map(drop_map):
+    cols_to_drop = set(col for drops in drop_map.values() for col in drops)
+    final_drop_map = {}
+    for keeper, direct_drops in drop_map.items():
+        if keeper not in cols_to_drop:
+            cols_to_check = list(direct_drops) 
+            all_related_drops = set(direct_drops)
+            while cols_to_check:
+                col = cols_to_check.pop(0)
+                if col in drop_map:
+                    new_drops = [d for d in drop_map[col] if d not in all_related_drops]
+                    cols_to_check.extend(new_drops)
+                    all_related_drops.update(new_drops)
+            
+            final_drop_map[keeper] = sorted(list(all_related_drops))
+    
+    return final_drop_map
+
+def run_regressions(distilled_factors):
+    results = []
+    for symbol in pct_changes.columns:
+        etf_excess = pct_changes[symbol] - risk_free_df['daily_nominal_rate']
+        data = pd.concat([etf_excess.rename('etf_excess'), distilled_factors], axis=1).dropna()
+
+        Y = data['etf_excess']
+        X = sm.add_constant(data.iloc[:, 1:])
+        model = sm.OLS(Y, X).fit()
+        result = {
+            'conId': symbol,
+            'nobs': model.nobs,
+            'r_squared': model.rsquared,
+            'r_squared_adj': model.rsquared_adj,
+            'f_statistic': model.fvalue,
+            'f_pvalue': model.f_pvalue,
+            'aic': model.aic,
+            'bic': model.bic,
+            'condition_number': model.condition_number,
+            'alpha': model.params['const'],
+            'alpha_pval': model.pvalues['const'],
+            'alpha_tval': model.tvalues['const'],
+            'alpha_bse': model.bse['const'],
+        }
+        for factor in distilled_factors.columns:
+            result[f'beta_{factor}'] = model.params[factor]
+            result[f'pval_beta_{factor}'] = model.pvalues[factor]
+            result[f'tval_beta_{factor}'] = model.tvalues[factor]
+            result[f'bse_beta_{factor}'] = model.bse[factor]
+        results.append(result)
+
+    results_df = pd.DataFrame(results)
+    return results_df
+
+def calculate_vif(df):
+    vif_data = pd.DataFrame()
+    vif_data["feature"] = df.columns
+    vif_data["VIF"] = [variance_inflation_factor(df.values, i) for i in range(df.shape[1])]
+    return vif_data.sort_values(by='VIF', ascending=False)
+
+def run_elastic_net(factors_df,
+                    pct_changes,
+                    risk_free_df,
+                    training_cutoff,
+                    alphas=np.logspace(-4, 1, 50),
+                    l1_ratio=[.1, .5, .9],
+                    cv=5,
+                    tol=5e-4,
+                    random_state=42):
+
+    data = data = (
+        factors_df.copy()
+        .join(pct_changes, how='inner')
+        .join(risk_free_df[['daily_nominal_rate']], how='inner')
+        .fillna(0)
+    )
+
+    train = data[data.index < training_cutoff]
+    test = data[data.index >= training_cutoff]
+
+    X_train = train[factors_df.columns].values
+    X_test = test[factors_df.columns].values
+    
+    metrics = []
+    for etf in tqdm(pct_changes.columns, total=len(pct_changes.columns), desc="Elastic Net Regression"):
+        Y_train = train[etf].values - train['daily_nominal_rate'].values
+        Y_test = test[etf].values - test['daily_nominal_rate'].values
+
+        pipeline = Pipeline([
+            ('scaler', StandardScaler()),
+            ('enet', ElasticNetCV(alphas=alphas,
+                                l1_ratio=l1_ratio,
+                                cv=cv,
+                                random_state=random_state,
+                                max_iter=499999,
+                                tol=tol,
+                                fit_intercept=True,
+                                n_jobs=-1)),
+        ])
+
+        try:
+            pipeline.fit(X_train, Y_train)
+        except ValueError as e:
+            print(f"Skipping {etf} due to error: {e}")
+            continue
+
+        # Unscale coefficients and intercept
+        enet = pipeline.named_steps['enet']
+        scaler = pipeline.named_steps['scaler']
+        betas_train = enet.coef_ / scaler.scale_
+        intercept = enet.intercept_ - np.dot(betas_train, scaler.mean_)
+
+        # out-of-sample stats
+        er_test = pipeline.predict(X_test)
+
+        # in-sample stats
+        er_train = pipeline.predict(X_train)
+
+        row = {
+            'conId': etf,
+            'jensens_alpha': intercept,
+            'enet_alpha': enet.alpha_,
+            'l1_ratio': enet.l1_ratio_,
+            'n_iter': enet.n_iter_,
+            'dual_gap': enet.dual_gap_,
+            'n_nonzero': np.sum(np.abs(betas_train) > 1e-6),
+            'cv_mse_best': np.min(enet.mse_path_.mean(axis=2)),
+            'cv_mse_average': np.mean(enet.mse_path_.mean(axis=2)),
+            'cv_mse_worst': np.max(enet.mse_path_.mean(axis=2)),
+            'mse_test' : mean_squared_error(Y_test, er_test),
+            'mse_train' : mean_squared_error(Y_train, er_train),
+            'r2_test' : r2_score(Y_test, er_test),
+            'r2_train' : r2_score(Y_train, er_train),
+        }
+
+        # Map back coefficients to factor names
+        for coef, fname in zip(betas_train, factors_df.columns):
+            row[f'{fname}_beta'] = coef
+
+        metrics.append(row)
+    
+    results_df = pd.DataFrame(metrics).set_index('conId')
+    return results_df
+
+def optimize_scalar(series):
+    def obj(s):
+        if s <= 0:
+            return np.inf
+        return skew(np.log1p(s * series))**2
+
+    result = minimize_scalar(obj, bounds=(1e-5, 1e20), method='bounded')
+    print(result.x)
+    return result.x
+
 
 kind = 'trades'
 root = 'data/daily-trades/'
 data_path = root + 'series/'
 verified_path = root + 'verified_files.csv'
 price_col = 'average'
-
-# Verify files
 fund_df = load('data/fundamentals.csv')
 
 try:
@@ -90,32 +498,7 @@ except FileNotFoundError:
 
 
 # Merge historical series with fundamentals
-def ensure_series_types(df, price_col):
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values('date').reset_index(drop=True)
-    for col in ['volume', price_col]:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    return df
 
-def validate_raw_prices(df, price_col):
-    invalid_price_mask = df[price_col] <= 0
-    inconsistent_mask = pd.Series(False, index=df.index)
-    if 'low' in df.columns and 'high' in df.columns:
-        inconsistent_mask = (df['low'] > df['high'])
-    local_error_mask = invalid_price_mask | inconsistent_mask
-    df = df[~local_error_mask].copy()
-    return df
-
-def handle_stale_periods(df, price_col, max_stale_days=5):
-    stale_groups = (df[price_col].diff() != 0).cumsum()
-    if stale_groups.empty:
-        return df
-    period_lengths = df.groupby(stale_groups)[price_col].transform('size')
-    long_stale_mask = period_lengths > max_stale_days
-    is_intermediate_stale_row = (stale_groups.duplicated(keep='first') & stale_groups.duplicated(keep='last'))
-    rows_to_drop_mask = long_stale_mask & is_intermediate_stale_row
-    df = df[~rows_to_drop_mask].copy()
-    return df
 
 # Load historical series
 latest = (datetime.now() - timedelta(days=365 * 6))
@@ -150,54 +533,7 @@ copied['df'] = copied['df'].apply(lambda x: x.copy())
 
 
 # Detect pct_change outliers
-def detect_and_nullify_global_outliers(meta_df, price_col, z_threshold=120.0, window=5):
-    all_pct_changes = pd.concat(
-        [row['df']['pct_change'] for _, row in meta_df.iterrows()],
-        ignore_index=True
-    ).dropna()
-    all_pct_changes = all_pct_changes[~np.isinf(all_pct_changes) & (all_pct_changes != 0)]
 
-    global_median_return = all_pct_changes.median()
-    global_mad = (all_pct_changes - global_median_return).abs().median()
-
-    for idx, row in meta_df.iterrows():
-        df = row['df']
-        df = df.reset_index(drop=True)
-        if df['pct_change'].isnull().all():
-            continue
-        cols_to_null = [price_col, 'volume', 'high', 'low', 'pct_change']
-        cols_to_null = [c for c in cols_to_null if c in df.columns]
-
-        absolute_modified_z = (df['pct_change'] - global_median_return).abs() / global_mad
-        outlier_mask = absolute_modified_z > z_threshold
-
-        if outlier_mask.any():
-
-            candidate_indices = df.index[outlier_mask]
-            for df_idx in candidate_indices:
-                price_to_check_idx = df_idx - 1
-                price_to_check = df.loc[price_to_check_idx, price_col]
-                local_window_start = max(0, price_to_check_idx - window)
-                local_window = df.loc[local_window_start : price_to_check_idx - 1, price_col].dropna()
-                local_mean = local_window.mean()
-                local_std = local_window.std()
-                if local_std != 0: 
-                    price_z_score = abs(price_to_check - local_mean) / local_std
-                    if price_z_score > z_threshold / 10:
-                        df.loc[price_to_check_idx, cols_to_null] = np.nan
-
-                price_to_check = df.loc[df_idx, price_col]
-                local_window_end = min(df_idx + window, df.index[outlier_mask].max())
-                local_window = df.loc[df_idx + 1: local_window_end, price_col].dropna()
-                local_mean = local_window.mean()
-                local_std = local_window.std()
-                if local_std != 0:
-                    price_z_score = abs(price_to_check - local_mean) / local_std
-                    if price_z_score > z_threshold / 10:
-                        df.loc[df_idx, cols_to_null] = np.nan
-
-            df['pct_change'] = df[price_col].pct_change(fill_method=None)
-            meta_df.at[idx, 'df'] = df
 
 detect_and_nullify_global_outliers(meta, price_col=price_col, z_threshold=50, window=5)
 
@@ -317,8 +653,7 @@ filtered = filtered.drop(columns=uninformative_cols)
 filtered = filtered.dropna(axis=1, how='all')
 
 # Add rate of change fundamentals
-def calculate_slope(value1, value2, time1, time2):
-    return (value1 - value2) / (time1 - time2)
+
 
 rate_fundamentals = [('EPSGrowth-1yr', 'EPS_growth_3yr', 'EPS_growth_5yr'),
                      ('ReturnonAssets1Yr', 'ReturnonAssets3Yr'),
@@ -347,21 +682,7 @@ numerical_cols = [col for col in filtered.columns if filtered[col].dtype in [np.
 
 
 # Return stats and split training and tests sets
-def get_return_stats(df, training_cutoff, momentum_cutoffs, risk_free_df):
-    training_df = df[df.index < training_cutoff]
-    training_rf = risk_free_df[risk_free_df.index < training_cutoff]
 
-    excess_returns = training_df['pct_change'] - training_rf['daily_nominal_rate']
-    sharpe = excess_returns.mean() / excess_returns.std()
-
-    momentum_3mo = training_df[training_df.index >= momentum_cutoffs['3mo']]['pct_change'].mean()
-    momentum_6mo = training_df[training_df.index >= momentum_cutoffs['6mo']]['pct_change'].mean()
-    momentum_1y  = training_df[training_df.index >= momentum_cutoffs['1y']]['pct_change'].mean()
-
-    return pd.Series(
-        [momentum_3mo, momentum_6mo, momentum_1y, sharpe],
-        index=['momentum_3mo', 'momentum_6mo', 'momentum_1y', 'stats_sharpe']
-    )
 
 training_cutoff = latest - pd.Timedelta(days=365)
 momentum_cutoffs = {
@@ -477,86 +798,6 @@ for col in country_cols:
 filtered_df.rename(columns=rename_map, inplace=True)
 
 
-# Discrete GDP and pop functions
-import wbgapi as wb
-
-def create_continent_map(standard_names):
-    continents = cc.convert(names=standard_names, to='continent', not_found=None)
-    return {name: (cont if cont is not None else 'Other')
-            for name, cont in zip(standard_names, continents)}
-
-def create_metric_maps(standard_names, indicators, start_year, end_year, window_size=3):
-    data = wb.data.DataFrame(list(indicators), standard_names, time=range(2000, end_year.year + 1), labels=False)
-    data.dropna(axis=1, inplace=True) 
-    
-    if len(data.columns) <= window_size * 2:
-         raise (f"Warning: Not enough data points ({len(data.columns)} years) for a window size of {window_size} + 1 required for derivatives. Skipping derivative calculation.")
-
-    yoy_change = data.diff(axis=1)
-    first_div = yoy_change.rolling(window=window_size, axis=1).mean()
-
-    yoy_change_first_div = first_div.diff(axis=1)
-    second_div = yoy_change_first_div.rolling(window=window_size, axis=1).mean()
-
-    latest_year_col = data.columns[-1]
-    latest_first_div_col = first_div.columns[-1]
-    latest_second_div_col = second_div.columns[-1]
-
-    derivatives = pd.DataFrame(data[latest_year_col])
-    derivatives.rename(columns={latest_year_col: 'raw_value'}, inplace=True)
-    derivatives['1st_div'] = first_div[latest_first_div_col] / derivatives['raw_value']
-    derivatives['2nd_div'] = second_div[latest_second_div_col] / derivatives['raw_value']
-    
-    metric_df_reshaped = derivatives.unstack(level='series')
-    if isinstance(metric_df_reshaped.columns, pd.MultiIndex):
-         metric_df_final = metric_df_reshaped.swaplevel(0, 1, axis=1)
-         metric_df_final.sort_index(axis=1, level=0, inplace=True)
-    else:
-         metric_df_final = metric_df_reshaped
-
-    return metric_df_final
-
-
-# Discrete GDP and pop functions
-import wbgapi as wb
-
-def create_continent_map(standard_names):
-    continents = cc.convert(names=standard_names, to='continent', not_found=None)
-    return {name: (cont if cont is not None else 'Other')
-            for name, cont in zip(standard_names, continents)}
-
-def create_metric_maps(standard_names, indicators, start_year, end_year, window_size=3):
-    data = wb.data.DataFrame(list(indicators), standard_names, time=range(2000, end_year.year + 1), labels=False)
-    data.dropna(axis=1, inplace=True) 
-    
-    if len(data.columns) <= window_size * 2:
-         raise (f"Warning: Not enough data points ({len(data.columns)} years) for a window size of {window_size} + 1 required for derivatives. Skipping derivative calculation.")
-
-    yoy_change = data.diff(axis=1)
-    first_div = yoy_change.rolling(window=window_size, axis=1).mean()
-
-    yoy_change_first_div = first_div.diff(axis=1)
-    second_div = yoy_change_first_div.rolling(window=window_size, axis=1).mean()
-
-    latest_year_col = data.columns[-1]
-    latest_first_div_col = first_div.columns[-1]
-    latest_second_div_col = second_div.columns[-1]
-
-    derivatives = pd.DataFrame(data[latest_year_col])
-    derivatives.rename(columns={latest_year_col: 'raw_value'}, inplace=True)
-    derivatives['1st_div'] = first_div[latest_first_div_col] / derivatives['raw_value']
-    derivatives['2nd_div'] = second_div[latest_second_div_col] / derivatives['raw_value']
-    
-    metric_df_reshaped = derivatives.unstack(level='series')
-    if isinstance(metric_df_reshaped.columns, pd.MultiIndex):
-         metric_df_final = metric_df_reshaped.swaplevel(0, 1, axis=1)
-         metric_df_final.sort_index(axis=1, level=0, inplace=True)
-    else:
-         metric_df_final = metric_df_reshaped
-
-    return metric_df_final
-
-
 # Create new country columns
 indicator_name_map = {
     'NY.GDP.PCAP.CD': 'gdp_pcap',
@@ -608,8 +849,6 @@ numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype i
 
 
 # Fundamentals reduced to factor columns
-from sklearn.preprocessing import MinMaxScaler
-
 fundamental_columns = [col for col in filtered_df.columns if col.startswith('fundamentals')]
 
 value_columns_inverted = [
@@ -685,215 +924,6 @@ new_column_order = non_numerical + numerical_cols
 filtered_df = filtered_df[new_column_order]
 
 
-def construct_long_short_factor_returns(full_meta_df, returns_df, long_symbols, short_symbols, factor_column=None):
-    long_df = full_meta_df[full_meta_df['conId'].isin(long_symbols)].set_index('conId')
-    long_weights = long_df['profile_cap_usd'].reindex(returns_df.columns).fillna(0)
-    if long_weights.mean() == 0:
-        print(f'Long {factor_column}')
-        print(long_df.index)
-        print()
-    if factor_column:
-        factor_weights = (full_meta_df[factor_column].max() - long_df[factor_column]) / (full_meta_df[factor_column].max() - full_meta_df[factor_column].min())
-        factor_weights = factor_weights.reindex(returns_df.columns).fillna(0)
-        if factor_weights.sum() != 0:
-            long_weights *= factor_weights
-
-    long_weights /= long_weights.sum()
-    long_returns = returns_df.dot(long_weights)
-    
-    short_df = full_meta_df[full_meta_df['conId'].isin(short_symbols)].set_index('conId')
-    short_weights = short_df['profile_cap_usd'].reindex(returns_df.columns).fillna(0)
-    if short_weights.mean() == 0:
-        print(f'Short {factor_column}')
-        print(short_df.index)
-        print()
-    if factor_column:
-        factor_weights = (short_df[factor_column] - full_meta_df[factor_column].min()) / (full_meta_df[factor_column].max() - full_meta_df[factor_column].min())
-        factor_weights = factor_weights.reindex(returns_df.columns).fillna(0)
-        if factor_weights.sum() != 0:
-            short_weights *= factor_weights
-
-    short_weights /= short_weights.sum()
-    short_returns = returns_df.dot(short_weights)
-    
-    factor_returns = long_returns - short_returns
-    return factor_returns
-
-
-def construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, scaling_factor=0.5, diffs=None):
-    differences = []
-    long = []
-    short = []
-    factors = {}
-    # Market risk premium
-    factors['factor_market_premium'] = (portfolio_dfs['equity']['pct_change'] - risk_free_df['daily_nominal_rate'])
-
-    # SMB_ETF
-    small_symbols = filtered_df[filtered_df['marketcap_small'] == 1]['conId'].tolist()
-    large_symbols = filtered_df[filtered_df['marketcap_large'] == 1]['conId'].tolist()
-
-    intersection = set(small_symbols) & set(large_symbols)
-    small_symbols = [s for s in small_symbols if s not in intersection]
-    large_symbols = [s for s in large_symbols if s not in intersection]
-    smb_etf = construct_long_short_factor_returns(filtered_df, pct_changes, small_symbols, large_symbols)
-    factors['factor_smb'] = smb_etf
-
-    long.append(len(small_symbols))
-    short.append(len(large_symbols))
-    differences.append(np.abs(len(small_symbols) - len(large_symbols)))
-
-    # HML_ETF
-    value_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('value')]
-    growth_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('growth')]
-    value_symbols = filtered_df[filtered_df[value_cols].ne(0).any(axis=1)]['conId'].tolist()
-    growth_symbols = filtered_df[filtered_df[growth_cols].ne(0).any(axis=1)]['conId'].tolist()
-
-    intersection = set(value_symbols) & set(growth_symbols)
-    value_symbols = [s for s in value_symbols if s not in intersection]
-    growth_symbols = [s for s in growth_symbols if s not in intersection]
-    hml_etf = construct_long_short_factor_returns(filtered_df, pct_changes, value_symbols, growth_symbols)
-    factors['factor_hml'] = hml_etf
-
-    long.append(len(value_symbols))
-    short.append(len(growth_symbols))
-    differences.append(np.abs(len(value_symbols) - len(growth_symbols)))
-
-    # Metadata
-    excluded = ['style_', 'marketcap_', 'countries_', 'fundamental']
-    numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
-    for col in numerical_cols:
-        if not any(col.startswith(prefix) for prefix in excluded) and col in filtered_df.columns:
-            try:
-                std = filtered_df[col].std()
-                mean = filtered_df[col].mean()
-
-                upper_boundary = min(filtered_df[col].max(), mean + (scaling_factor * std))
-                lower_boundary = max(filtered_df[col].min(), mean - (scaling_factor * std))
-
-                low_factor_symbols = filtered_df[filtered_df[col] <= lower_boundary]['conId'].tolist()
-                high_factor_symbols = filtered_df[filtered_df[col] >= upper_boundary]['conId'].tolist()
-                if col.endswith('variety'):
-                    var_etf = construct_long_short_factor_returns(filtered_df, pct_changes, low_factor_symbols, high_factor_symbols, factor_column=col)
-                else:
-                    var_etf = construct_long_short_factor_returns(filtered_df, pct_changes, high_factor_symbols, low_factor_symbols, factor_column=col)
-                var_etf = construct_long_short_factor_returns(filtered_df, pct_changes, high_factor_symbols, low_factor_symbols, factor_column=col)
-                factors[col] = var_etf
-
-                long.append(len(low_factor_symbols))
-                short.append(len(high_factor_symbols))
-                differences.append(np.abs(len(low_factor_symbols) - len(high_factor_symbols)))
-            except Exception as e:
-                print(col)
-                print(e)
-                raise
-        
-    if diffs:
-        diffs = {'long': long,
-                 'short': short,
-                 'diffs': differences}
-
-        return pd.DataFrame(factors), pd.DataFrame(diffs)
-    return pd.DataFrame(factors)
-
-
-def prescreen_factors(factors_df, correlation_threshold=0.99, drop_map=None):
-    if factors_df is None or factors_df.empty or factors_df.shape[1] == 0:
-        raise ValueError("factors_df must be a non-empty DataFrame with at least one column.")
-    temp_factors_df = factors_df.copy()
-
-    corr_matrix = temp_factors_df.corr().abs()
-    corr_pairs = corr_matrix.where(np.triu(np.ones_like(corr_matrix, dtype=bool), k=1)).stack()
-    corr_pairs = corr_pairs.sort_values(ascending=False)
-
-    if not drop_map:
-        drop_map = {}
-    col_order = list(temp_factors_df.columns)
-    for (col1, col2), corr_val in corr_pairs.items():
-        if corr_val < correlation_threshold:
-            break
-
-        already_dropped = {c for drops in drop_map.values() for c in drops}
-        if col1 in already_dropped or col2 in already_dropped:
-            continue
-
-        if col_order.index(col1) < col_order.index(col2):
-            keeper, to_drop = col1, col2
-        else:
-            keeper, to_drop = col2, col1
-
-        drop_map.setdefault(keeper, []).append(to_drop)
-
-    cols_to_drop = set(col for drops in drop_map.values() for col in drops)
-    temp_factors_df = temp_factors_df.drop(columns=cols_to_drop)
-    return temp_factors_df, drop_map
-
-def merge_drop_map(drop_map):
-    cols_to_drop = set(col for drops in drop_map.values() for col in drops)
-    final_drop_map = {}
-    for keeper, direct_drops in drop_map.items():
-        if keeper not in cols_to_drop:
-            cols_to_check = list(direct_drops) 
-            all_related_drops = set(direct_drops)
-            while cols_to_check:
-                col = cols_to_check.pop(0)
-                if col in drop_map:
-                    new_drops = [d for d in drop_map[col] if d not in all_related_drops]
-                    cols_to_check.extend(new_drops)
-                    all_related_drops.update(new_drops)
-            
-            final_drop_map[keeper] = sorted(list(all_related_drops))
-    
-    return final_drop_map
-
-# OLS Regression function
-import statsmodels.api as sm
-
-def run_regressions(distilled_factors):
-    results = []
-    for symbol in pct_changes.columns:
-        etf_excess = pct_changes[symbol] - risk_free_df['daily_nominal_rate']
-        data = pd.concat([etf_excess.rename('etf_excess'), distilled_factors], axis=1).dropna()
-
-        Y = data['etf_excess']
-        X = sm.add_constant(data.iloc[:, 1:])
-        model = sm.OLS(Y, X).fit()
-        result = {
-            'conId': symbol,
-            'nobs': model.nobs,
-            'r_squared': model.rsquared,
-            'r_squared_adj': model.rsquared_adj,
-            'f_statistic': model.fvalue,
-            'f_pvalue': model.f_pvalue,
-            'aic': model.aic,
-            'bic': model.bic,
-            'condition_number': model.condition_number,
-            'alpha': model.params['const'],
-            'alpha_pval': model.pvalues['const'],
-            'alpha_tval': model.tvalues['const'],
-            'alpha_bse': model.bse['const'],
-        }
-        for factor in distilled_factors.columns:
-            result[f'beta_{factor}'] = model.params[factor]
-            result[f'pval_beta_{factor}'] = model.pvalues[factor]
-            result[f'tval_beta_{factor}'] = model.tvalues[factor]
-            result[f'bse_beta_{factor}'] = model.bse[factor]
-        results.append(result)
-
-    results_df = pd.DataFrame(results)
-    return results_df
-    # del X, Y, model, data, etf_excess, result, results
-
-
-    # Construct factors
-from statsmodels.stats.outliers_influence import variance_inflation_factor
-from IPython.display import Markdown
-
-def calculate_vif(df):
-    vif_data = pd.DataFrame()
-    vif_data["feature"] = df.columns
-    vif_data["VIF"] = [variance_inflation_factor(df.values, i) for i in range(df.shape[1])]
-    return vif_data.sort_values(by='VIF', ascending=False)
-
 factors_df, diffs = construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, scaling_factor=0.6, diffs=True)
 
 # Custom drop
@@ -921,95 +951,6 @@ drop_map = merge_drop_map(drop_map)
 
 
 # ElasticNet regression
-from sklearn.pipeline import Pipeline
-from sklearn.linear_model import ElasticNetCV
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, r2_score
-
-def run_elastic_net(factors_df,
-                    pct_changes,
-                    risk_free_df,
-                    training_cutoff,
-                    alphas=np.logspace(-4, 1, 50),
-                    l1_ratio=[.1, .5, .9],
-                    cv=5,
-                    tol=5e-4,
-                    random_state=42):
-
-    data = data = (
-        factors_df.copy()
-        .join(pct_changes, how='inner')
-        .join(risk_free_df[['daily_nominal_rate']], how='inner')
-        .fillna(0)
-    )
-
-    train = data[data.index < training_cutoff]
-    test = data[data.index >= training_cutoff]
-
-    X_train = train[factors_df.columns].values
-    X_test = test[factors_df.columns].values
-    
-    metrics = []
-    for etf in tqdm(pct_changes.columns, total=len(pct_changes.columns), desc="Elastic Net Regression"):
-        Y_train = train[etf].values - train['daily_nominal_rate'].values
-        Y_test = test[etf].values - test['daily_nominal_rate'].values
-
-        pipeline = Pipeline([
-            ('scaler', StandardScaler()),
-            ('enet', ElasticNetCV(alphas=alphas,
-                                l1_ratio=l1_ratio,
-                                cv=cv,
-                                random_state=random_state,
-                                max_iter=499999,
-                                tol=tol,
-                                fit_intercept=True,
-                                n_jobs=-1)),
-        ])
-
-        try:
-            pipeline.fit(X_train, Y_train)
-        except ValueError as e:
-            print(f"Skipping {etf} due to error: {e}")
-            continue
-
-        # Unscale coefficients and intercept
-        enet = pipeline.named_steps['enet']
-        scaler = pipeline.named_steps['scaler']
-        betas_train = enet.coef_ / scaler.scale_
-        intercept = enet.intercept_ - np.dot(betas_train, scaler.mean_)
-
-        # out-of-sample stats
-        er_test = pipeline.predict(X_test)
-
-        # in-sample stats
-        er_train = pipeline.predict(X_train)
-
-        row = {
-            'conId': etf,
-            'jensens_alpha': intercept,
-            'enet_alpha': enet.alpha_,
-            'l1_ratio': enet.l1_ratio_,
-            'n_iter': enet.n_iter_,
-            'dual_gap': enet.dual_gap_,
-            'n_nonzero': np.sum(np.abs(betas_train) > 1e-6),
-            'cv_mse_best': np.min(enet.mse_path_.mean(axis=2)),
-            'cv_mse_average': np.mean(enet.mse_path_.mean(axis=2)),
-            'cv_mse_worst': np.max(enet.mse_path_.mean(axis=2)),
-            'mse_test' : mean_squared_error(Y_test, er_test),
-            'mse_train' : mean_squared_error(Y_train, er_train),
-            'r2_test' : r2_score(Y_test, er_test),
-            'r2_train' : r2_score(Y_train, er_train),
-        }
-
-        # Map back coefficients to factor names
-        for coef, fname in zip(betas_train, factors_df.columns):
-            row[f'{fname}_beta'] = coef
-
-        metrics.append(row)
-    
-    results_df = pd.DataFrame(metrics).set_index('conId')
-    return results_df
-
 results_df = run_elastic_net(
     factors_df=distilled_factors,
     pct_changes=pct_changes,
@@ -1022,18 +963,7 @@ results_df = run_elastic_net(
 )
 
 # Factor beta post-screening score 
-from scipy.stats import skew
-from scipy.optimize import minimize_scalar
 
-def optimize_scalar(series):
-    def obj(s):
-        if s <= 0:
-            return np.inf
-        return skew(np.log1p(s * series))**2
-
-    result = minimize_scalar(obj, bounds=(1e-5, 1e20), method='bounded')
-    print(result.x)
-    return result.x
 
 beta_cols = [col for col in results_df if col.endswith('beta')]
 screening_df = pd.DataFrame(index=results_df.index)
