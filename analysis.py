@@ -24,11 +24,40 @@ import statsmodels.api as sm
 
 import gc
 
-print('Libraries imported')
-
 # pd.set_option('display.max_colwidth', None)
 # pd.set_option('display.max_columns', None)
 
+
+def fetch_world_bank_data(all_country_codes, start_date, end_date, indicators):
+    valid_country_codes = {code for code in all_country_codes if code is not None}
+    try:
+        wb_economies = {e['id'] for e in wb.economy.list()}
+    except Exception as e:
+        raise Exception(f"FATAL: Failed to fetch economy list from World Bank API: {e}")
+
+    final_economies = sorted([code for code in valid_country_codes if code in wb_economies])
+    unrecognized = valid_country_codes - set(final_economies)
+    if unrecognized:
+        print(f"Info: The following economies were not recognized by the World Bank API and will be skipped: {unrecognized}")
+    if not final_economies:
+        raise Exception("Error: No valid economies found to query the World Bank API.")
+
+    all_data = []
+    chunk_size = 40
+    for i in range(0, len(final_economies), chunk_size):
+        chunk = final_economies[i:i + chunk_size]
+        try:
+            data_chunk = wb.data.DataFrame(list(indicators), chunk, time=range(start_date.year - 5, end_date.year + 1), labels=False)
+            all_data.append(data_chunk)
+        except wb.APIError as e:
+            print(f"API Error fetching data for chunk {i//chunk_size + 1}: {e}")
+        except Exception as e:
+            print(f"An unexpected error occurred fetching data for chunk {i//chunk_size + 1}: {e}")
+
+    if not all_data:
+        raise Exception("Error: Failed to retrieve any data from the World Bank.")
+
+    return pd.concat(all_data)
 
 def evaluate_literal(val):
     try:
@@ -192,14 +221,22 @@ def create_continent_map(standard_names):
     return {name: (cont if cont is not None else 'Other')
             for name, cont in zip(standard_names, continents)}
 
-def create_metric_maps(standard_names, indicators, start_year, end_year, window_size=3):
-    data = wb.data.DataFrame(list(indicators), standard_names, time=range(2000, end_year.year + 1), labels=False)
-    data.dropna(axis=1, inplace=True) 
+def calculate_country_stats(wb_data_full, standard_names, end_year, window_size=3):
+    countries_in_window = [name for name in standard_names if name in wb_data_full.index.get_level_values('economy')]
+    if not countries_in_window:
+        return pd.DataFrame()
+    
+    data = wb_data_full.loc[countries_in_window].dropna(axis=1)
+    available_years = [int(col.replace('YR', '')) for col in data.columns]
+
+    cols_to_keep = [col for col, year in zip(data.columns, available_years) if year <= end_year.year]
+    data = data[cols_to_keep].copy()
+    data.dropna(axis=1, inplace=True)
 
     yoy_change = data.diff(axis=1)
     first_div = yoy_change.T.rolling(window=window_size).mean().T
-    yoy_change_first_div = first_div.diff(axis=1)
 
+    yoy_change_first_div = first_div.diff(axis=1)
     second_div = yoy_change_first_div.T.rolling(window=window_size).mean().T
 
     latest_year_col = data.columns[-1]
@@ -218,6 +255,7 @@ def create_metric_maps(standard_names, indicators, start_year, end_year, window_
     else:
          metric_df_final = metric_df_reshaped
 
+    print(metric_df_final)
     return metric_df_final
 
 def construct_long_short_factor_returns(full_meta_df, returns_df, long_symbols, short_symbols, factor_column=None):
@@ -269,20 +307,20 @@ def construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, sca
     smb_etf = construct_long_short_factor_returns(filtered_df, pct_changes, small_symbols, large_symbols)
     factors['factor_smb'] = smb_etf
 
-    # HML_ETF
-    value_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('value')]
-    growth_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('growth')]
-    value_symbols = filtered_df[filtered_df[value_cols].ne(0).any(axis=1)]['conId'].tolist()
-    growth_symbols = filtered_df[filtered_df[growth_cols].ne(0).any(axis=1)]['conId'].tolist()
+    # # HML_ETF
+    # value_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('value')]
+    # growth_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('growth')]
+    # value_symbols = filtered_df[filtered_df[value_cols].ne(0).any(axis=1)]['conId'].tolist()
+    # growth_symbols = filtered_df[filtered_df[growth_cols].ne(0).any(axis=1)]['conId'].tolist()
 
-    intersection = set(value_symbols) & set(growth_symbols)
-    value_symbols = [s for s in value_symbols if s not in intersection]
-    growth_symbols = [s for s in growth_symbols if s not in intersection]
-    hml_etf = construct_long_short_factor_returns(filtered_df, pct_changes, value_symbols, growth_symbols)
-    factors['factor_hml'] = hml_etf
+    # intersection = set(value_symbols) & set(growth_symbols)
+    # value_symbols = [s for s in value_symbols if s not in intersection]
+    # growth_symbols = [s for s in growth_symbols if s not in intersection]
+    # hml_etf = construct_long_short_factor_returns(filtered_df, pct_changes, value_symbols, growth_symbols)
+    # factors['factor_hml'] = hml_etf
 
     # Metadata
-    excluded = ['style_', 'marketcap_', 'countries_', 'fundamental']
+    excluded = ['style_', 'marketcap_', 'countries_', 'fundamentals_, momentum_']
     numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
     for col in numerical_cols:
         if not any(col.startswith(prefix) for prefix in excluded) and col in filtered_df.columns:
@@ -561,406 +599,400 @@ risk_free_df_full = risk_free_df_full.reindex(business_days, copy=False)
 risk_free_df_full = pd.DataFrame(risk_free_df_full)
 risk_free_df_full['daily_nominal_rate'] = risk_free_df_full['nominal_rate'] / 252
 
+# Get country stats
+indicator_name_map = {
+    'NY.GDP.PCAP.CD': 'gdp_pcap',
+    'SP.POP.TOTL': 'population',
+}
+cc = coco.CountryConverter()
 
+all_country_cols = [col for col in fund_df.columns if col.startswith('countries') and not col.endswith('variety')]
+all_possible_standard_names = set()
+for col in all_country_cols:
+    raw_name = col.replace('countries_', '').replace(' ', '')
+    standard_name = cc.convert(names=raw_name, to='ISO3', not_found=None)
+    if standard_name:
+        all_possible_standard_names.add(standard_name)
+
+world_bank_data_full = fetch_world_bank_data(all_possible_standard_names, first_date, last_date, indicator_name_map.keys())
 
 # Walkforward loops
 walk_forward_df = pd.DataFrame()
-walk_forward_year_range = 9
-walk_forward_year_window = 3
+walk_forward_year_range = input('Number of years to check? (eg. 10)')
+walk_forward_year_range = int(re.search(r'\d+', walk_forward_year_range).group())
+# walk_forward_year_window = 3
 first_date = max(first_date, (last_date - timedelta(days=365 * walk_forward_year_range)))
 
-
-
-last_window = False
-oldest = first_date
-while not last_window:
-    latest = oldest + timedelta(days=365 * walk_forward_year_window)
-    print(f'\nRUNNING {oldest.year} - {latest.year}\n')
-    if latest >= last_date:
-        latest = last_date
-        last_window = True
-        if latest - oldest < timedelta(days=365 * 2):   
-            break
-    
-    meta = copied.copy()
-    meta['df'] = copied['df'].apply(lambda x: x.copy())
-
-    detect_and_nullify_global_outliers(meta, price_col=price_col, z_threshold=50, window=5)
-    business_days = pd.date_range(start=oldest, end=latest, freq='B')
-
-    for idx, row in tqdm(meta.iterrows(), total=len(meta), desc='Calculating gap stats'):
-        df = row['df']
-        merged = pd.DataFrame({'date': business_days}).merge(df, on='date', how='left')
-        present = merged[price_col].notna()
-        present_idx = np.flatnonzero(present)
-        gaps = []
-        length = len(merged)
-        if present_idx.size > 0:
-            if present_idx[0] > 0:
-                gaps.append(present_idx[0])
-            if present_idx.size > 1:
-                internal_gaps = np.diff(present_idx) - 1
-                gaps.extend(gap for gap in internal_gaps if gap > 0)
-            if present_idx[-1] < length - 1:
-                gaps.append(length - 1 - present_idx[-1])
-        else:
-            gaps = [length]
-        gaps = np.array(gaps, dtype=int)
-        gaps = gaps[gaps > 0]
-        max_gap = float(gaps.max()) if gaps.size > 0 else 0.0
-        std_gap = float(gaps.std()) if gaps.size > 0 else 0.0
-        missing = length - present.sum()
-        pct_missing = missing / length
-        meta.at[idx, 'df'] = merged
-        meta.at[idx, 'max_gap'] = max_gap
-        meta.at[idx, 'missing'] = missing
-        meta.at[idx, 'pct_missing'] = pct_missing
-    meta['max_gap_log'] = np.log1p(meta['max_gap'])
-
-    print('Removing series with large day gaps')
-    ## static 3y window mean stats
-    max_gap_log = 3.05
-    max_pct_missing = 0.3
-    condition = ((meta['max_gap_log'] < max_gap_log) & \
-                (meta['pct_missing'] < max_pct_missing))
-    filtered = meta[condition].copy()
-    print(f'{len(filtered)} ETFs included')
-    print(f'{len(meta) - len(filtered)} dropped')
-    del meta
-
-    for idx, row in tqdm(filtered.iterrows(), total=len(filtered), desc=f"Interpolating"):
-        df = row['df']
-        df[price_col] = df[price_col].interpolate(method='akima', limit_direction='both')
-        if df[price_col].isna().any():
-            df[price_col] = df[price_col].ffill()
-            df[price_col] = df[price_col].bfill()
-        df['pct_change'] = df[price_col].pct_change()
-        filtered.at[idx, 'df'] = df.set_index('date')
-
-    filtered = pd.merge(filtered, fund_df, on=['symbol', 'currency'], how='inner').drop(['max_gap', 'missing', 'pct_missing', 'max_gap_log'], axis=1)
-    numerical_cols = [col for col in filtered.columns if filtered[col].dtype in [np.int64, np.float64] and col not in ['conId']]
-    pct_changes = pd.concat(
-            [row['df']['pct_change'].rename(row['conId']) 
-            for _, row in filtered.iterrows()], axis=1
-        )
-    # filtered = filtered.drop(columns=['df'])
-    gc.collect()
-
-    # Define window risk-free-rate series
-    risk_free_df = risk_free_df_full.loc[business_days]
-
-    # Remove uninformative cols for market portfolios 
-    uninformative_cols = [col for col in numerical_cols if filtered[col].nunique(dropna=True) <= 1]
-    filtered = filtered.drop(columns=uninformative_cols)
-    filtered = filtered.dropna(axis=1, how='all')
-
-    # Add rate of change fundamentals
-    rate_fundamentals = [('EPSGrowth-1yr', 'EPS_growth_3yr', 'EPS_growth_5yr'),
-                        ('ReturnonAssets1Yr', 'ReturnonAssets3Yr'),
-                        ('ReturnonCapital', 'ReturnonCapital3Yr'),
-                        ('ReturnonEquity1Yr', 'ReturnonEquity3Yr'),
-                        ('ReturnonInvestment1Yr', 'ReturnonInvestment3Yr')]
-
-    for cols in rate_fundamentals:
-        base_name = cols[0].replace('-1yr', '').replace('1Yr', '')
-        slope_col = f'fundamentals_{base_name}_slope'
+for walk_forward_year_window in range(3, 5):
+    last_window = False
+    oldest = first_date
+    while not last_window:
+        latest = oldest + timedelta(days=365 * walk_forward_year_window)
+        print(f'\n\nRUNNING {oldest.year} - {latest.year}\n')
+        if latest >= last_date:
+            latest = last_date
+            last_window = True
+            if latest - oldest < timedelta(days=365 * 2):   
+                break
         
-        if len(cols) == 3:
-            col_1yr, col_3yr, col_5yr = cols
-            filtered[slope_col] = calculate_slope(filtered[f'fundamentals_{col_1yr}'], filtered[f'fundamentals_{col_5yr}'], 1, 5)
+        meta = copied.copy()
+        meta['df'] = copied['df'].apply(lambda x: x.copy())
 
-            slope_1yr_3yr = calculate_slope(filtered[f'fundamentals_{col_1yr}'], filtered[f'fundamentals_{col_3yr}'], 1, 3)
-            slope_3yr_5yr = calculate_slope(filtered[f'fundamentals_{col_3yr}'], filtered[f'fundamentals_{col_5yr}'], 3, 5)
-            filtered[f'fundamentals_{base_name}_second_deriv'] = calculate_slope(slope_1yr_3yr, slope_3yr_5yr, 1, 3)
+        detect_and_nullify_global_outliers(meta, price_col=price_col, z_threshold=50, window=5)
+        business_days = pd.date_range(start=oldest, end=latest, freq='B')
 
-        elif len(cols) == 2:
-            col_1yr, col_3yr = cols
-            filtered[slope_col] = calculate_slope(filtered[f'fundamentals_{col_1yr}'], filtered[f'fundamentals_{col_3yr}'], 1, 3)
-
-    ## Add new cols to numericals
-    numerical_cols = [col for col in filtered.columns if filtered[col].dtype in [np.int64, np.float64] and col not in ['conId']]
-
-    # Return stats and split training and tests sets
-    training_cutoff = latest - pd.Timedelta(days=365)
-    momentum_cutoffs = {
-        '1y':  training_cutoff - pd.Timedelta(days=365),
-        '6mo': training_cutoff - pd.Timedelta(days=365 // 2),
-        '3mo': training_cutoff - pd.Timedelta(days=365 // 4),
-    }
-    filtered[['momentum_3mo', 'momentum_6mo', 'momentum_1y', 'stats_sharpe']] = filtered['df'].apply(lambda df: get_return_stats(df, training_cutoff, momentum_cutoffs, risk_free_df))
-
-    print('Creating asset type portfolios')
-    holding_cols = [col for col in filtered.columns if col.startswith('holding_') and col != 'holding_types_variety'] + ['total']
-    portfolio_dfs = {}
-
-    for holding_col in holding_cols:
-        name = holding_col.split('_')[-1]
-        if holding_col == 'total':
-            weight = filtered['profile_cap_usd']
-        else:
-            weight = (filtered['profile_cap_usd'] * filtered[holding_col])
-    
-        total_market_cap = (weight).sum()
-        filtered['weight'] = weight / total_market_cap
-        
-        weights = filtered.set_index('conId')['weight']
-        portfolio_return = pct_changes.dot(weights)
-        initial_price = 1
-        portfolio_price = initial_price * (1 + portfolio_return.fillna(0)).cumprod()
-
-        portfolio_df = pd.DataFrame({
-            'date': portfolio_price.index,
-            price_col: portfolio_price.values,
-            'pct_change': portfolio_return.values
-        }).set_index('date')
-
-        portfolio_dfs[name] = portfolio_df
-
-    filtered.drop('weight', axis=1, inplace=True)
-
-    # Avoid dummy trap
-    empty_subcategories = {
-    'holding_types': ['other'],
-    'countries': ['Unidentified'], 
-    'currencies': ['<NoCurrency>'],
-    'industries': ['NonClassifiedEquity', 'NotClassified-NonEquity'],
-    'top10': ['OtherAssets', 'AccountsPayable','AccountsReceivable','AccountsReceivable&Pay','AdministrationFees','CustodyFees','ManagementFees','OtherAssetsandLiabilities','OtherAssetslessLiabilities', 'OtherFees','OtherLiabilities','Tax','Tax--ManagementFees'],
-    'debtors': ['OTHER'],
-    'maturity': ['%MaturityOther'],
-    'debt_type': ['%QualityNotAvailable', '%QualityNotRated'],
-    'manual': ['asset_other']
-    }
-
-    dummy_trap_cols = []
-    for k, lst in empty_subcategories.items():
-        for i in lst:
-            if k == 'manual':
-                dummy_trap_cols.append(i)
+        for idx, row in meta.iterrows():
+            df = row['df']
+            merged = pd.DataFrame({'date': business_days}).merge(df, on='date', how='left')
+            present = merged[price_col].notna()
+            present_idx = np.flatnonzero(present)
+            gaps = []
+            length = len(merged)
+            if present_idx.size > 0:
+                if present_idx[0] > 0:
+                    gaps.append(present_idx[0])
+                if present_idx.size > 1:
+                    internal_gaps = np.diff(present_idx) - 1
+                    gaps.extend(gap for gap in internal_gaps if gap > 0)
+                if present_idx[-1] < length - 1:
+                    gaps.append(length - 1 - present_idx[-1])
             else:
-                dummy_trap_cols.append(f'{k}_{i}')
+                gaps = [length]
+            gaps = np.array(gaps, dtype=int)
+            gaps = gaps[gaps > 0]
+            max_gap = float(gaps.max()) if gaps.size > 0 else 0.0
+            std_gap = float(gaps.std()) if gaps.size > 0 else 0.0
+            missing = length - present.sum()
+            pct_missing = missing / length
+            meta.at[idx, 'df'] = merged
+            meta.at[idx, 'max_gap'] = max_gap
+            meta.at[idx, 'missing'] = missing
+            meta.at[idx, 'pct_missing'] = pct_missing
+        meta['max_gap_log'] = np.log1p(meta['max_gap'])
+
+        ## static 3y window mean stats
+        max_gap_log = 3.05
+        max_pct_missing = 0.3
+        condition = ((meta['max_gap_log'] < max_gap_log) & \
+                    (meta['pct_missing'] < max_pct_missing))
+        filtered = meta[condition].copy()
+        print(f'{len(filtered)} ETFs included')
+        print(f'{len(meta) - len(filtered)} dropped')
+        del meta
+
+        for idx, row in filtered.iterrows():
+            df = row['df']
+            df[price_col] = df[price_col].interpolate(method='akima', limit_direction='both')
+            if df[price_col].isna().any():
+                df[price_col] = df[price_col].ffill()
+                df[price_col] = df[price_col].bfill()
+            df['pct_change'] = df[price_col].pct_change()
+            filtered.at[idx, 'df'] = df.set_index('date')
+
+        filtered = pd.merge(filtered, fund_df, on=['symbol', 'currency'], how='inner').drop(['max_gap', 'missing', 'pct_missing', 'max_gap_log'], axis=1)
+        numerical_cols = [col for col in filtered.columns if filtered[col].dtype in [np.int64, np.float64] and col not in ['conId']]
+        pct_changes = pd.concat(
+                [row['df']['pct_change'].rename(row['conId']) 
+                for _, row in filtered.iterrows()], axis=1
+            )
+        # filtered = filtered.drop(columns=['df'])
+        gc.collect()
+
+        # Define window risk-free-rate series
+        risk_free_df = risk_free_df_full.loc[business_days]
+
+        # Remove uninformative cols for market portfolios 
+        uninformative_cols = [col for col in numerical_cols if filtered[col].nunique(dropna=True) <= 1]
+        filtered = filtered.drop(columns=uninformative_cols)
+        filtered = filtered.dropna(axis=1, how='all')
+
+        # Add rate of change fundamentals
+        rate_fundamentals = [('EPSGrowth-1yr', 'EPS_growth_3yr', 'EPS_growth_5yr'),
+                            ('ReturnonAssets1Yr', 'ReturnonAssets3Yr'),
+                            ('ReturnonCapital', 'ReturnonCapital3Yr'),
+                            ('ReturnonEquity1Yr', 'ReturnonEquity3Yr'),
+                            ('ReturnonInvestment1Yr', 'ReturnonInvestment3Yr')]
+
+        for cols in rate_fundamentals:
+            base_name = cols[0].replace('-1yr', '').replace('1Yr', '')
+            slope_col = f'fundamentals_{base_name}_slope'
+            
+            if len(cols) == 3:
+                col_1yr, col_3yr, col_5yr = cols
+                filtered[slope_col] = calculate_slope(filtered[f'fundamentals_{col_1yr}'], filtered[f'fundamentals_{col_5yr}'], 1, 5)
+
+                slope_1yr_3yr = calculate_slope(filtered[f'fundamentals_{col_1yr}'], filtered[f'fundamentals_{col_3yr}'], 1, 3)
+                slope_3yr_5yr = calculate_slope(filtered[f'fundamentals_{col_3yr}'], filtered[f'fundamentals_{col_5yr}'], 3, 5)
+                filtered[f'fundamentals_{base_name}_second_deriv'] = calculate_slope(slope_1yr_3yr, slope_3yr_5yr, 1, 3)
+
+            elif len(cols) == 2:
+                col_1yr, col_3yr = cols
+                filtered[slope_col] = calculate_slope(filtered[f'fundamentals_{col_1yr}'], filtered[f'fundamentals_{col_3yr}'], 1, 3)
+
+        ## Add new cols to numericals
+        numerical_cols = [col for col in filtered.columns if filtered[col].dtype in [np.int64, np.float64] and col not in ['conId']]
+
+        # Return stats and split training and tests sets
+        training_cutoff = latest - pd.Timedelta(days=365)
+        momentum_cutoffs = {
+            '1y':  training_cutoff - pd.Timedelta(days=365),
+            '6mo': training_cutoff - pd.Timedelta(days=365 // 2),
+            '3mo': training_cutoff - pd.Timedelta(days=365 // 4),
+        }
+        filtered[['momentum_3mo', 'momentum_6mo', 'momentum_1y', 'stats_sharpe']] = filtered['df'].apply(lambda df: get_return_stats(df, training_cutoff, momentum_cutoffs, risk_free_df))
+
+        holding_cols = [col for col in filtered.columns if col.startswith('holding_') and col != 'holding_types_variety'] + ['total']
+        portfolio_dfs = {}
+
+        for holding_col in holding_cols:
+            name = holding_col.split('_')[-1]
+            if holding_col == 'total':
+                weight = filtered['profile_cap_usd']
+            else:
+                weight = (filtered['profile_cap_usd'] * filtered[holding_col])
         
-    filtered = filtered.drop(columns=dummy_trap_cols, axis=1, errors='ignore')
-    numerical_cols = [col for col in filtered.columns if filtered[col].dtype in [np.int64, np.float64] and col not in ['conId']]
+            total_market_cap = (weight).sum()
+            filtered['weight'] = weight / total_market_cap
+            
+            weights = filtered.set_index('conId')['weight']
+            portfolio_return = pct_changes.dot(weights)
+            initial_price = 1
+            portfolio_price = initial_price * (1 + portfolio_return.fillna(0)).cumprod()
 
-    # Select asset types to work on
-    asset_conditions = {
-        'equity': (filtered['asset_equity'] == 1),
-        'cash': (filtered['asset_cash'] == 1),
-        'bond': (filtered['asset_bond'] == 1),
-        'other': (filtered['asset_equity'] == 0) & (filtered['asset_cash'] == 0) & (filtered['asset_bond'] == 0),
-    }
+            portfolio_df = pd.DataFrame({
+                'date': portfolio_price.index,
+                price_col: portfolio_price.values,
+                'pct_change': portfolio_return.values
+            }).set_index('date')
 
-    print('Dropping bond ETFs')
-    exclude_assets = ['bond']
-    asset_classes = list(asset_conditions.keys())
+            portfolio_dfs[name] = portfolio_df
 
-    include_assets = [asset for asset in asset_classes if asset not in exclude_assets]
-    combined_condition = pd.Series(False, index=filtered.index)
-    for asset in include_assets:
-        combined_condition |= asset_conditions[asset]
+        filtered.drop('weight', axis=1, inplace=True)
 
-    filtered_df = filtered[combined_condition]
-    numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
+        # Avoid dummy trap
+        empty_subcategories = {
+        'holding_types': ['other'],
+        'countries': ['Unidentified'], 
+        'currencies': ['<NoCurrency>'],
+        'industries': ['NonClassifiedEquity', 'NotClassified-NonEquity'],
+        'top10': ['OtherAssets', 'AccountsPayable','AccountsReceivable','AccountsReceivable&Pay','AdministrationFees','CustodyFees','ManagementFees','OtherAssetsandLiabilities','OtherAssetslessLiabilities', 'OtherFees','OtherLiabilities','Tax','Tax--ManagementFees'],
+        'debtors': ['OTHER'],
+        'maturity': ['%MaturityOther'],
+        'debt_type': ['%QualityNotAvailable', '%QualityNotRated'],
+        'manual': ['asset_other']
+        }
 
-    single_value_columns = [col for col in filtered_df.columns if col in numerical_cols and filtered_df[col].nunique() == 1]
-    asset_cols = [col for col in filtered_df if col.startswith('asset')]
-    filtered_df = filtered_df.drop(columns=single_value_columns + asset_cols)
-    numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
+        dummy_trap_cols = []
+        for k, lst in empty_subcategories.items():
+            for i in lst:
+                if k == 'manual':
+                    dummy_trap_cols.append(i)
+                else:
+                    dummy_trap_cols.append(f'{k}_{i}')
+            
+        filtered = filtered.drop(columns=dummy_trap_cols, axis=1, errors='ignore')
+        numerical_cols = [col for col in filtered.columns if filtered[col].dtype in [np.int64, np.float64] and col not in ['conId']]
 
-    pct_changes = pct_changes[filtered_df['conId']]
-    del filtered
-    gc.collect()
+        # Select asset types to work on
+        asset_conditions = {
+            'equity': (filtered['asset_equity'] == 1),
+            'cash': (filtered['asset_cash'] == 1),
+            'bond': (filtered['asset_bond'] == 1),
+            'other': (filtered['asset_equity'] == 0) & (filtered['asset_cash'] == 0) & (filtered['asset_bond'] == 0),
+        }
 
-    print('Processing country columns')
-    cc = coco.CountryConverter()
-    country_cols = [col for col in filtered_df.columns if col.startswith('countries') and not col.endswith('variety')]
+        exclude_assets = ['bond']
+        asset_classes = list(asset_conditions.keys())
 
-    standard_names = set()
-    rename_map = {}
-    for col in country_cols:
-        if col == 'countries_Unidentified':
-            continue
+        include_assets = [asset for asset in asset_classes if asset not in exclude_assets]
+        combined_condition = pd.Series(False, index=filtered.index)
+        for asset in include_assets:
+            combined_condition |= asset_conditions[asset]
 
-        raw_name = col.replace('countries_', '')
-        raw_name = ''.join(raw_name.split(' '))
-        raw_name = ''.join([' ' + char if char.isupper() and i > 0 else char for i, char in enumerate(raw_name)]).strip()
+        filtered_df = filtered[combined_condition]
+        numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
 
-        standard_name = cc.convert(names=raw_name, to='ISO3', not_found=None)
-        standard_names.add(standard_name)
-        if standard_name:
-            rename_map[col] = f'countries_{standard_name}'
-        else:
-            print(f"Could not standardize: '{raw_name}' (from column '{col}')")
+        single_value_columns = [col for col in filtered_df.columns if col in numerical_cols and filtered_df[col].nunique() == 1]
+        asset_cols = [col for col in filtered_df if col.startswith('asset')]
+        filtered_df = filtered_df.drop(columns=single_value_columns + asset_cols)
+        numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
 
-    filtered_df.rename(columns=rename_map, inplace=True)
+        pct_changes = pct_changes[filtered_df['conId']]
+        del filtered
+        gc.collect()
 
-    # Create new country columns
-    indicator_name_map = {
-        'NY.GDP.PCAP.CD': 'gdp_pcap',
-        'SP.POP.TOTL': 'population',
-    }
+        cc = coco.CountryConverter()
+        country_cols = [col for col in filtered_df.columns if col.startswith('countries') and not col.endswith('variety')]
 
-    continent_map = create_continent_map(standard_names)
-    metric_df = create_metric_maps(standard_names, indicator_name_map.keys(), oldest, latest)
+        standard_names = set()
+        rename_map = {}
+        for col in country_cols:
+            if col == 'countries_Unidentified':
+                continue
 
-    metric_suffixes = {
-        'raw_value': '_value',
-        '1st_div': '_growth',
-        '2nd_div': '_acceleration'
-    }
-    continents = list(continent_map.values())
+            raw_name = col.replace('countries_', '')
+            raw_name = ''.join(raw_name.split(' '))
+            raw_name = ''.join([' ' + char if char.isupper() and i > 0 else char for i, char in enumerate(raw_name)]).strip()
 
-    for cont in continents:
-        filtered_df[f'continent_{cont}'] = 0.0
-    for ind_code, ind_name in indicator_name_map.items():
-        if ind_code in metric_df.columns.get_level_values(0):
-            for metric_col, suffix in metric_suffixes.items():
-                new_col_name = f'{ind_name}{suffix}'
-                filtered_df[new_col_name] = 0.0
+            standard_name = cc.convert(names=raw_name, to='ISO3', not_found=None)
+            standard_names.add(standard_name)
+            if standard_name:
+                rename_map[col] = f'countries_{standard_name}'
+            else:
+                print(f"Could not standardize: '{raw_name}' (from column '{col}')")
 
-    for std_name in standard_names:
-        country_weight_col = f'countries_{std_name}'
-        if country_weight_col not in filtered_df.columns:
-            continue
-        if std_name in continent_map:
-            continent = continent_map[std_name]
-            filtered_df[f'continent_{continent}'] += filtered_df[country_weight_col]        
+        filtered_df.rename(columns=rename_map, inplace=True)
 
-        if std_name in metric_df.index:
-            for ind_code, ind_name in indicator_name_map.items():
-                if ind_code in metric_df.columns.get_level_values(0):
-                    for metric_col, suffix in metric_suffixes.items():
-                        value = metric_df.loc[std_name, (ind_code, metric_col)]
-                        target_col = f'{ind_name}{suffix}'
-                        filtered_df[target_col] += filtered_df[country_weight_col] * value
+        # Create new country columns
+        # continent_map = create_continent_map(standard_names)
 
-    # Drop single unique value columns
-    numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
-    single_value_columns = [col for col in numerical_cols if filtered_df[col].nunique() == 1]
-    filtered_df = filtered_df.drop(columns=single_value_columns, errors='ignore')
-    numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
+        metric_df = calculate_country_stats(world_bank_data_full, standard_names, latest, window_size=3)
 
-    print('Processing fundamental columns')
-    fundamental_columns = [col for col in filtered_df.columns if col.startswith('fundamentals')]
+        metric_suffixes = {
+            'raw_value': '_value',
+            '1st_div': '_growth',
+            '2nd_div': '_acceleration'
+        }
+        # continents = list(continent_map.values())
+        # for cont in continents:
+        #     filtered_df[f'continent_{cont}'] = 0.0
+        for ind_code, ind_name in indicator_name_map.items():
+            if ind_code in metric_df.columns.get_level_values(0):
+                for metric_col, suffix in metric_suffixes.items():
+                    new_col_name = f'{ind_name}{suffix}'
+                    filtered_df[new_col_name] = 0.0
 
-    value_columns_inverted = [
-        'fundamentals_Price/Book',
-        'fundamentals_Price/Cash',
-        'fundamentals_Price/Earnings',
-        'fundamentals_Price/Sales',
-    ]
-    investment_columns = [
-        'fundamentals_EPSGrowth-1yr',
-        'fundamentals_EPS_growth_3yr',
-        'fundamentals_EPS_growth_5yr',
-        'fundamentals_EPSGrowth_slope',
-        'fundamentals_EPSGrowth_second_deriv',
-        'fundamentals_ReturnonAssets_slope',
-        'fundamentals_ReturnonCapital_slope',
-        'fundamentals_ReturnonEquity_slope',
-        'fundamentals_ReturnonInvestment_slope',
-    ]
-    leverage_columns_inverted = [
-        'fundamentals_LTDebt/Shareholders',
-        'fundamentals_TotalDebt/TotalCapital',
-        'fundamentals_TotalDebt/TotalEquity',
-        'fundamentals_TotalAssets/TotalEquity',
-    ]
-    profitability_columns = [
-        'fundamentals_ReturnonAssets1Yr',
-        'fundamentals_ReturnonAssets3Yr',
-        'fundamentals_ReturnonCapital',
-        'fundamentals_ReturnonCapital3Yr',
-        'fundamentals_ReturnonEquity1Yr',
-        'fundamentals_ReturnonEquity3Yr',
-        'fundamentals_ReturnonInvestment1Yr',
-        'fundamentals_ReturnonInvestment3Yr',
-        'fundamentals_SalestoTotalAssets',
-        'fundamentals_EBITtoInterest',
-    ]
-    momentum_columns = [
-        'momentum_3mo',
-        'momentum_6mo',
-        'momentum_1y',
-        'fundamentals_RelativeStrength'
-    ]
-    columns_to_scale = value_columns_inverted + investment_columns + leverage_columns_inverted + profitability_columns + momentum_columns
+        for std_name in standard_names:
+            country_weight_col = f'countries_{std_name}'
+            if country_weight_col not in filtered_df.columns:
+                continue
+            # if std_name in continent_map:
+            #     continent = continent_map[std_name]
+            #     filtered_df[f'continent_{continent}'] += filtered_df[country_weight_col]        
 
-    if any(x in filtered_df.columns for x in columns_to_scale):
-        scaler = MinMaxScaler()
-        filtered_df[columns_to_scale] = scaler.fit_transform(filtered_df[columns_to_scale])
+            if std_name in metric_df.index:
+                for ind_code, ind_name in indicator_name_map.items():
+                    if ind_code in metric_df.columns.get_level_values(0):
+                        for metric_col, suffix in metric_suffixes.items():
+                            value = metric_df.loc[std_name, (ind_code, metric_col)]
+                            target_col = f'{ind_name}{suffix}'
+                            filtered_df[target_col] += filtered_df[country_weight_col] * value
 
-        # Value Score
-        filtered_df['factor_investment'] = filtered_df[investment_columns].sum(axis=1)
-        filtered_df['factor_value'] = (1 - filtered_df[value_columns_inverted]).sum(axis=1)
-        filtered_df['factor_leverage'] = (1 - filtered_df[leverage_columns_inverted]).sum(axis=1)
-        filtered_df['factor_profitability'] = filtered_df[profitability_columns].sum(axis=1)
-        filtered_df['factor_momentum'] = filtered_df[momentum_columns].sum(axis=1)
+        # Drop single unique value columns
+        numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
+        single_value_columns = [col for col in numerical_cols if filtered_df[col].nunique() == 1]
+        filtered_df = filtered_df.drop(columns=single_value_columns, errors='ignore')
+        numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
 
-        filtered_df = filtered_df.drop(columns=columns_to_scale, errors='ignore')
+        fundamental_columns = [col for col in filtered_df.columns if col.startswith('fundamentals')]
 
-    # Reorganize columns
-    categories = ['factor', 'holding_types', 'stats', 'momentum', 'profile', 'top10', 'population', 'msci', 'gdp', 'continent', 'countries', 'fundamentals', 'industries', 'currencies', 'debtors', 'maturity', 'debt_type', 'lipper', 'dividends', 'marketcap', 'style', 'domicile', 'asset']
+        value_columns_inverted = [
+            'fundamentals_Price/Book',
+            'fundamentals_Price/Cash',
+            'fundamentals_Price/Earnings',
+            'fundamentals_Price/Sales',
+        ]
+        leverage_columns_inverted = [
+            'fundamentals_LTDebt/Shareholders',
+            'fundamentals_TotalDebt/TotalCapital',
+            'fundamentals_TotalDebt/TotalEquity',
+            'fundamentals_TotalAssets/TotalEquity',
+        ]
+        profitability_columns = [
+            'fundamentals_ReturnonAssets1Yr',
+            'fundamentals_ReturnonAssets3Yr',
+            'fundamentals_ReturnonCapital',
+            'fundamentals_ReturnonCapital3Yr',
+            'fundamentals_ReturnonEquity1Yr',
+            'fundamentals_ReturnonEquity3Yr',
+            'fundamentals_ReturnonInvestment1Yr',
+            'fundamentals_ReturnonInvestment3Yr',
+            # 'fundamentals_SalestoTotalAssets',
+            # 'fundamentals_EBITtoInterest',
+        ]
+        momentum_columns = [
+            'momentum_3mo',
+            'momentum_6mo',
+            'momentum_1y',
+            'fundamentals_RelativeStrength'
+        ]
+        columns_to_scale = value_columns_inverted + leverage_columns_inverted + profitability_columns + momentum_columns
 
-    numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
-    non_numerical = [col for col in filtered_df.columns if col not in numerical_cols]
+        if any(x in filtered_df.columns for x in columns_to_scale):
+            scaler = MinMaxScaler()
+            filtered_df[columns_to_scale] = scaler.fit_transform(filtered_df[columns_to_scale])
 
-    for category in reversed(categories):
-        cat_cols = [col for col in numerical_cols if col.startswith(category)]
-        remaining = [col for col in numerical_cols if col not in cat_cols]
-        numerical_cols = cat_cols + remaining
+            # Value Score
+            filtered_df['factor_value'] = (1 - filtered_df[value_columns_inverted]).sum(axis=1)
+            filtered_df['factor_leverage'] = (1 - filtered_df[leverage_columns_inverted]).sum(axis=1)
+            filtered_df['factor_profitability'] = filtered_df[profitability_columns].sum(axis=1)
+            filtered_df['factor_momentum'] = filtered_df[momentum_columns].sum(axis=1)
 
-    new_column_order = non_numerical + numerical_cols
-    filtered_df = filtered_df[new_column_order]
+            filtered_df = filtered_df.drop(columns=columns_to_scale, errors='ignore')
 
-    print('Constructing factors')
-    factors_df = construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, scaling_factor=0.6)
+        # Reorganize columns
+        categories = ['factor', 'holding_types', 'stats', 'momentum', 'profile', 'top10', 'population', 'msci', 'gdp', 'continent', 'countries', 'fundamentals', 'industries', 'currencies', 'debtors', 'maturity', 'debt_type', 'lipper', 'dividends', 'marketcap', 'style', 'domicile', 'asset']
 
-    # Custom drop
-    low_absolute_beta = ['profile_cap_usd', 'holding_types_equity', 'industries_BasicMaterials']
-    frequently_lassoed = ['gdp_pcap_growth', 'gdp_pcap_acceleration', 'continent_Africa', 'population_value']
-    custom_drop = low_absolute_beta + frequently_lassoed
-    custom_drop = [c.split('_beta')[0] for c in custom_drop]
-    factors_df = factors_df.drop(columns=custom_drop, errors='ignore')
+        numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
+        non_numerical = [col for col in filtered_df.columns if col not in numerical_cols]
 
-    # Screen factors
-    distilled_factors, _ = prescreen_factors(factors_df, correlation_threshold=0.95)
-    # corr_matrix = distilled_factors.corr()
-    # vif_df = calculate_vif(distilled_factors.dropna(axis=0))
-    # highest_vif = vif_df['VIF'].iloc[0]
-    # if distilled_factors.shape[1] > 2:
-    #     to_drop = vif_df['feature'].iloc[0]
-    #     distilled_factors.drop(columns=[to_drop], inplace=True)
+        for category in reversed(categories):
+            cat_cols = [col for col in numerical_cols if col.startswith(category)]
+            remaining = [col for col in numerical_cols if col not in cat_cols]
+            numerical_cols = cat_cols + remaining
 
-    # np.fill_diagonal(corr_matrix.values, 0)
-    # keeper = corr_matrix[to_drop].sort_values(ascending=False).index[0]
-    # drop_map.setdefault(keeper, []).append(to_drop)
+        new_column_order = non_numerical + numerical_cols
+        filtered_df = filtered_df[new_column_order]
 
-    # ElasticNet regression
-    results_df = run_elastic_net(
-        factors_df=distilled_factors,
-        pct_changes=pct_changes,
-        risk_free_df=risk_free_df,
-        training_cutoff=training_cutoff,
-        alphas=np.logspace(-11, -4, 30),
-        l1_ratio=[0.01, 0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 0.95, 1],
-        cv=5,
-        tol=5e-4,
-    )
+        factors_df = construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, scaling_factor=0.6)
 
-    # Store data
-    results_df['test_date'] = oldest
-    results_df['conId'] = results_df.index
-    print('Concatenating window results')
-    walk_forward_df = pd.concat([walk_forward_df, results_df], axis=0, ignore_index=True)
+        # Custom drop
+        low_absolute_beta = ['profile_cap_usd', 'holding_types_equity', 'industries_BasicMaterials', 'continent_Oceania_beta', 'holding_types_bond_beta']#, 'factor_smb_beta']
+        frequently_lassoed = ['gdp_pcap_growth', 'gdp_pcap_acceleration', 'continent_Africa', 'population_value', 'industries_Financials_beta', 'stats_sharpe']
+        walk_forward = ['industries_Healthcare_beta', 'continent_America_beta']#, 'factor_momentum_beta', 'factor_profitability_beta']
+        custom_drop = low_absolute_beta + frequently_lassoed + walk_forward
+        custom_drop = [c.split('_beta')[0] for c in custom_drop]
+        factors_df = factors_df.drop(columns=custom_drop, errors='ignore')
 
-    oldest = latest
+        # Screen factors
+        distilled_factors, _ = prescreen_factors(factors_df, correlation_threshold=0.95)
+        # corr_matrix = distilled_factors.corr()
+        # vif_df = calculate_vif(distilled_factors.dropna(axis=0))
+        # highest_vif = vif_df['VIF'].iloc[0]
+        # if distilled_factors.shape[1] > 2:
+        #     to_drop = vif_df['feature'].iloc[0]
+        #     distilled_factors.drop(columns=[to_drop], inplace=True)
 
-    gc.collect()
+        # np.fill_diagonal(corr_matrix.values, 0)
+        # keeper = corr_matrix[to_drop].sort_values(ascending=False).index[0]
+        # drop_map.setdefault(keeper, []).append(to_drop)
+
+        # ElasticNet regression
+        results_df = run_elastic_net(
+            factors_df=distilled_factors,
+            pct_changes=pct_changes,
+            risk_free_df=risk_free_df,
+            training_cutoff=training_cutoff,
+            alphas=np.logspace(-11, -4, 30),
+            l1_ratio=[0.01, 0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 0.95, 1],
+            cv=5,
+            tol=5e-4,
+        )
+
+        # Store data
+        results_df['test_date'] = oldest
+        results_df['conId'] = results_df.index
+        results_df['count'] = len(results_df)
+        walk_forward_df = pd.concat([walk_forward_df, results_df], axis=0, ignore_index=True)
+
+        # oldest = latest
+        oldest += timedelta(days=365)
+
+        gc.collect()
 
 try:
     save_path = 'data/walk_forward_results.csv'
     walk_forward_df.to_csv(save_path, index=False)
-    print(f'Results stored successfully in {save_path}')
+    print(f'\n\nResults stored successfully in {save_path}')
 except:
-    print(f'Storing results failed')
+    print(f'\n\nStoring results failed --')
