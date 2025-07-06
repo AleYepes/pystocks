@@ -23,9 +23,45 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 import statsmodels.api as sm
 
 import gc
+import argparse
 
-# pd.set_option('display.max_colwidth', None)
-# pd.set_option('display.max_columns', None)
+
+# --- Constants for Analysis ---
+
+# Data Cleaning
+MAX_STALE_DAYS = 5
+# Default params for detect_and_nullify_global_outliers
+Z_THRESHOLD_GLOBAL_DEFAULT = 120.0
+OUTLIER_WINDOW_DEFAULT = 5
+# Params for detect_and_nullify_global_outliers in the main loop
+Z_THRESHOLD_GLOBAL_LOOP = 50
+
+# Walk-Forward Analysis
+WALK_FORWARD_WINDOW_YEARS = range(3, 5)
+TRAINING_PERIOD_DAYS = 365
+MOMENTUM_PERIODS_DAYS = {
+    '1y':  TRAINING_PERIOD_DAYS,
+    '6mo': TRAINING_PERIOD_DAYS // 2,
+    '3mo': TRAINING_PERIOD_DAYS // 4,
+}
+
+# Asset Filtering
+MAX_GAP_LOG = 3.05
+MAX_PCT_MISSING = 0.3
+
+# Factor Construction
+FACTOR_SCALING_FACTOR = 0.6
+
+# Factor Screening
+CORRELATION_THRESHOLD = 0.95
+
+# Elastic Net Hyperparameters
+ENET_ALPHAS = np.logspace(-11, -4, 30)
+ENET_L1_RATIOS = [0.01, 0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 0.95, 1]
+ENET_CV = 5
+ENET_TOL = 5e-4
+
+# --- End Constants ---   
 
 
 def fetch_world_bank_data(all_country_codes, start_date, end_date, indicators):
@@ -137,7 +173,7 @@ def validate_raw_prices(df, price_col):
     df = df[~local_error_mask].copy()
     return df
 
-def handle_stale_periods(df, price_col, max_stale_days=5):
+def handle_stale_periods(df, price_col, max_stale_days=MAX_STALE_DAYS):
     stale_groups = (df[price_col].diff() != 0).cumsum()
     if stale_groups.empty:
         return df
@@ -148,7 +184,7 @@ def handle_stale_periods(df, price_col, max_stale_days=5):
     df = df[~rows_to_drop_mask].copy()
     return df
 
-def detect_and_nullify_global_outliers(meta_df, price_col, z_threshold=120.0, window=5):
+def detect_and_nullify_global_outliers(meta_df, price_col, z_threshold=Z_THRESHOLD_GLOBAL_DEFAULT, window=OUTLIER_WINDOW_DEFAULT):
     all_pct_changes = pd.concat(
         [row['df']['pct_change'] for _, row in meta_df.iterrows()],
         ignore_index=True
@@ -231,7 +267,7 @@ def calculate_country_stats(wb_data_full, standard_names, end_year, window_size=
 
     cols_to_keep = [col for col, year in zip(data.columns, available_years) if year <= end_year.year]
     data = data[cols_to_keep].copy()
-    data.dropna(axis=1, inplace=True)
+    data.dropna(axis=1, inplace=True);
 
     yoy_change = data.diff(axis=1)
     first_div = yoy_change.T.rolling(window=window_size).mean().T
@@ -255,44 +291,37 @@ def calculate_country_stats(wb_data_full, standard_names, end_year, window_size=
     else:
          metric_df_final = metric_df_reshaped
 
-    print(metric_df_final)
     return metric_df_final
 
 def construct_long_short_factor_returns(full_meta_df, returns_df, long_symbols, short_symbols, factor_column=None):
     long_df = full_meta_df[full_meta_df['conId'].isin(long_symbols)].set_index('conId')
     long_weights = long_df['profile_cap_usd'].reindex(returns_df.columns).fillna(0)
-    if long_weights.mean() == 0:
-        print(f'Long {factor_column}')
-        print(long_df.index)
-        print()
     if factor_column:
         factor_weights = (full_meta_df[factor_column].max() - long_df[factor_column]) / (full_meta_df[factor_column].max() - full_meta_df[factor_column].min())
         factor_weights = factor_weights.reindex(returns_df.columns).fillna(0)
         if factor_weights.sum() != 0:
             long_weights *= factor_weights
 
-    long_weights /= long_weights.sum()
+    if long_weights.sum() != 0:
+        long_weights /= long_weights.sum()
     long_returns = returns_df.dot(long_weights)
     
     short_df = full_meta_df[full_meta_df['conId'].isin(short_symbols)].set_index('conId')
     short_weights = short_df['profile_cap_usd'].reindex(returns_df.columns).fillna(0)
-    if short_weights.mean() == 0:
-        print(f'Short {factor_column}')
-        print(short_df.index)
-        print()
     if factor_column:
         factor_weights = (short_df[factor_column] - full_meta_df[factor_column].min()) / (full_meta_df[factor_column].max() - full_meta_df[factor_column].min())
         factor_weights = factor_weights.reindex(returns_df.columns).fillna(0)
         if factor_weights.sum() != 0:
             short_weights *= factor_weights
 
-    short_weights /= short_weights.sum()
+    if short_weights.sum() != 0:
+        short_weights /= short_weights.sum()
     short_returns = returns_df.dot(short_weights)
     
     factor_returns = long_returns - short_returns
     return factor_returns
 
-def construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, scaling_factor=0.5):
+def construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, scaling_factor=FACTOR_SCALING_FACTOR):
     factors = {}
     # Market risk premium
     factors['factor_market_premium'] = (portfolio_dfs['equity']['pct_change'] - risk_free_df['daily_nominal_rate'])
@@ -347,7 +376,7 @@ def construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, sca
 
     return pd.DataFrame(factors)
 
-def prescreen_factors(factors_df, correlation_threshold=0.99, drop_map=None):
+def prescreen_factors(factors_df, correlation_threshold=CORRELATION_THRESHOLD, drop_map=None):
     if factors_df is None or factors_df.empty or factors_df.shape[1] == 0:
         raise ValueError("factors_df must be a non-empty DataFrame with at least one column.")
     temp_factors_df = factors_df.copy()
@@ -436,14 +465,15 @@ def calculate_vif(df):
     vif_data["VIF"] = [variance_inflation_factor(df.values, i) for i in range(df.shape[1])]
     return vif_data.sort_values(by='VIF', ascending=False)
 
-def run_elastic_net(factors_df,
+def run_elastic_net(
+                    factors_df,
                     pct_changes,
                     risk_free_df,
                     training_cutoff,
-                    alphas=np.logspace(-4, 1, 50),
-                    l1_ratio=[.1, .5, .9],
-                    cv=5,
-                    tol=5e-4,
+                    alphas=ENET_ALPHAS,
+                    l1_ratio=ENET_L1_RATIOS,
+                    cv=ENET_CV,
+                    tol=ENET_TOL,
                     random_state=42):
 
     data = data = (
@@ -528,6 +558,7 @@ verified_path = root + 'verified_files.csv'
 
 price_col = 'average'
 fund_df = load('data/fundamentals.csv')
+fund_df['funds_date'] = pd.to_datetime(fund_df['funds_date'])
 verified_df = verify_files(verified_path, data_path)
 
 # Load full historical price series
@@ -561,10 +592,8 @@ for file in tqdm(file_list, total=len(file_list), desc="Loading files"):
     except Exception as e:
         raise Exception(f"ERROR loading {file}: {e}")
 
-# Store post load copy
 meta = pd.DataFrame(meta)
-copied = meta.copy()
-copied['df'] = copied['df'].apply(lambda x: x.copy())
+detect_and_nullify_global_outliers(meta, price_col=price_col, z_threshold=Z_THRESHOLD_GLOBAL_LOOP, window=OUTLIER_WINDOW_DEFAULT)
 
 # Risk-free series calculation
 tickers = {
@@ -618,12 +647,14 @@ world_bank_data_full = fetch_world_bank_data(all_possible_standard_names, first_
 
 # Walkforward loops
 walk_forward_df = pd.DataFrame()
-walk_forward_year_range = input('Number of years to check? (eg. 10)')
-walk_forward_year_range = int(re.search(r'\d+', walk_forward_year_range).group())
-# walk_forward_year_window = 3
+parser = argparse.ArgumentParser(description='Run walk-forward analysis.')
+parser.add_argument('--years', type=int, default=10, help='Number of years to check for walk-forward analysis.')
+args = parser.parse_args()
+walk_forward_year_range = args.years
 first_date = max(first_date, (last_date - timedelta(days=365 * walk_forward_year_range)))
 
-for walk_forward_year_window in range(3, 5):
+
+for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
     last_window = False
     oldest = first_date
     while not last_window:
@@ -635,13 +666,12 @@ for walk_forward_year_window in range(3, 5):
             if latest - oldest < timedelta(days=365 * 2):   
                 break
         
-        meta = copied.copy()
-        meta['df'] = copied['df'].apply(lambda x: x.copy())
+        meta_window = meta.copy()
+        meta_window['df'] = meta['df'].apply(lambda df: df.loc[oldest:latest].copy())
 
-        detect_and_nullify_global_outliers(meta, price_col=price_col, z_threshold=50, window=5)
         business_days = pd.date_range(start=oldest, end=latest, freq='B')
 
-        for idx, row in meta.iterrows():
+        for idx, row in meta_window.iterrows():
             df = row['df']
             merged = pd.DataFrame({'date': business_days}).merge(df, on='date', how='left')
             present = merged[price_col].notna()
@@ -664,21 +694,18 @@ for walk_forward_year_window in range(3, 5):
             std_gap = float(gaps.std()) if gaps.size > 0 else 0.0
             missing = length - present.sum()
             pct_missing = missing / length
-            meta.at[idx, 'df'] = merged
-            meta.at[idx, 'max_gap'] = max_gap
-            meta.at[idx, 'missing'] = missing
-            meta.at[idx, 'pct_missing'] = pct_missing
-        meta['max_gap_log'] = np.log1p(meta['max_gap'])
+            meta_window.at[idx, 'df'] = merged
+            meta_window.at[idx, 'max_gap'] = max_gap
+            meta_window.at[idx, 'missing'] = missing
+            meta_window.at[idx, 'pct_missing'] = pct_missing
+        meta_window['max_gap_log'] = np.log1p(meta_window['max_gap'])
 
         ## static 3y window mean stats
-        max_gap_log = 3.05
-        max_pct_missing = 0.3
-        condition = ((meta['max_gap_log'] < max_gap_log) & \
-                    (meta['pct_missing'] < max_pct_missing))
-        filtered = meta[condition].copy()
+        condition = ((meta_window['max_gap_log'] < MAX_GAP_LOG) &                     (meta_window['pct_missing'] < MAX_PCT_MISSING))
+        filtered = meta_window[condition].copy()
         print(f'{len(filtered)} ETFs included')
-        print(f'{len(meta) - len(filtered)} dropped')
-        del meta
+        print(f'{len(meta_window) - len(filtered)} dropped')
+        del meta_window
 
         for idx, row in filtered.iterrows():
             df = row['df']
@@ -689,7 +716,24 @@ for walk_forward_year_window in range(3, 5):
             df['pct_change'] = df[price_col].pct_change()
             filtered.at[idx, 'df'] = df.set_index('date')
 
-        filtered = pd.merge(filtered, fund_df, on=['symbol', 'currency'], how='inner').drop(['max_gap', 'missing', 'pct_missing', 'max_gap_log'], axis=1)
+        before_df = fund_df[fund_df['funds_date'] <= latest]
+        if not before_df.empty:
+            latest_before = before_df.loc[before_df.groupby('conId')['funds_date'].idxmax()]
+        else:
+            latest_before = pd.DataFrame(columns=fund_df.columns)
+
+        after_df = fund_df[fund_df['funds_date'] > latest]
+        if not after_df.empty:
+            earliest_after = after_df.loc[after_df.groupby('conId')['funds_date'].idxmin()]
+        else:
+            earliest_after = pd.DataFrame(columns=fund_df.columns)
+
+        if not latest_before.empty and not earliest_after.empty:
+            earliest_after = earliest_after[~earliest_after['conId'].isin(latest_before['conId'])]
+
+        spliced_fund_df = pd.concat([latest_before, earliest_after])
+
+        filtered = pd.merge(filtered, spliced_fund_df, on=['symbol', 'currency'], how='inner').drop(['max_gap', 'missing', 'pct_missing', 'max_gap_log'], axis=1)
         numerical_cols = [col for col in filtered.columns if filtered[col].dtype in [np.int64, np.float64] and col not in ['conId']]
         pct_changes = pd.concat(
                 [row['df']['pct_change'].rename(row['conId']) 
@@ -733,11 +777,11 @@ for walk_forward_year_window in range(3, 5):
         numerical_cols = [col for col in filtered.columns if filtered[col].dtype in [np.int64, np.float64] and col not in ['conId']]
 
         # Return stats and split training and tests sets
-        training_cutoff = latest - pd.Timedelta(days=365)
+        training_cutoff = latest - pd.Timedelta(days=TRAINING_PERIOD_DAYS)
         momentum_cutoffs = {
-            '1y':  training_cutoff - pd.Timedelta(days=365),
-            '6mo': training_cutoff - pd.Timedelta(days=365 // 2),
-            '3mo': training_cutoff - pd.Timedelta(days=365 // 4),
+            '1y':  training_cutoff - pd.Timedelta(days=MOMENTUM_PERIODS_DAYS['1y']),
+            '6mo': training_cutoff - pd.Timedelta(days=MOMENTUM_PERIODS_DAYS['6mo']),
+            '3mo': training_cutoff - pd.Timedelta(days=MOMENTUM_PERIODS_DAYS['3mo']),
         }
         filtered[['momentum_3mo', 'momentum_6mo', 'momentum_1y', 'stats_sharpe']] = filtered['df'].apply(lambda df: get_return_stats(df, training_cutoff, momentum_cutoffs, risk_free_df))
 
@@ -830,8 +874,7 @@ for walk_forward_year_window in range(3, 5):
             if col == 'countries_Unidentified':
                 continue
 
-            raw_name = col.replace('countries_', '')
-            raw_name = ''.join(raw_name.split(' '))
+            raw_name = col.replace('countries_', '').replace(' ', '')
             raw_name = ''.join([' ' + char if char.isupper() and i > 0 else char for i, char in enumerate(raw_name)]).strip()
 
             standard_name = cc.convert(names=raw_name, to='ISO3', not_found=None)
@@ -944,7 +987,7 @@ for walk_forward_year_window in range(3, 5):
         new_column_order = non_numerical + numerical_cols
         filtered_df = filtered_df[new_column_order]
 
-        factors_df = construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, scaling_factor=0.6)
+        factors_df = construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, scaling_factor=FACTOR_SCALING_FACTOR)
 
         # Custom drop
         low_absolute_beta = ['profile_cap_usd', 'holding_types_equity', 'industries_BasicMaterials', 'continent_Oceania_beta', 'holding_types_bond_beta']#, 'factor_smb_beta']
@@ -955,7 +998,7 @@ for walk_forward_year_window in range(3, 5):
         factors_df = factors_df.drop(columns=custom_drop, errors='ignore')
 
         # Screen factors
-        distilled_factors, _ = prescreen_factors(factors_df, correlation_threshold=0.95)
+        distilled_factors, _ = prescreen_factors(factors_df, correlation_threshold=CORRELATION_THRESHOLD)
         # corr_matrix = distilled_factors.corr()
         # vif_df = calculate_vif(distilled_factors.dropna(axis=0))
         # highest_vif = vif_df['VIF'].iloc[0]
@@ -973,10 +1016,10 @@ for walk_forward_year_window in range(3, 5):
             pct_changes=pct_changes,
             risk_free_df=risk_free_df,
             training_cutoff=training_cutoff,
-            alphas=np.logspace(-11, -4, 30),
-            l1_ratio=[0.01, 0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 0.95, 1],
-            cv=5,
-            tol=5e-4,
+            alphas=ENET_ALPHAS,
+            l1_ratio=ENET_L1_RATIOS,
+            cv=ENET_CV,
+            tol=ENET_TOL,
         )
 
         # Store data
@@ -994,5 +1037,5 @@ try:
     save_path = 'data/walk_forward_results.csv'
     walk_forward_df.to_csv(save_path, index=False)
     print(f'\n\nResults stored successfully in {save_path}')
-except:
-    print(f'\n\nStoring results failed --')
+except (IOError, OSError) as e:
+    print(f'\n\nError saving results to {save_path}: {e}')
