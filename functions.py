@@ -95,14 +95,6 @@ def is_row_valid(row):
     return True
 
 def has_bad_multiplier(long_name):
-    cleaned = long_name.replace('-', '').replace('+', '')
-    for word in cleaned.split():
-        if re.fullmatch(r'\d+X', word):
-            if int(word[:-1]) > 1:
-                return True
-    return False
-
-def has_bad_multiplier(long_name):
     multiplier_pattern = re.compile(r'\d+X|X\d+')
     cleaned = long_name.replace('-', ' ').replace('+', ' ')
 
@@ -113,36 +105,6 @@ def has_bad_multiplier(long_name):
                 return True
 
     return False
-
-def get_remaining():
-    contract_details = load('data/contract_details.csv')
-    try:
-        final_df = load('data/contract_elaborated.csv')
-        final_df = final_df[final_df.apply(is_row_valid, axis=1)]
-        final_df['date_scraped'] = pd.to_datetime(final_df['date_scraped'])
-        final_df['days_since_last_scrape'] = (datetime.now() - final_df['date_scraped']).dt.days
-
-        # exclusion_condition = (final_df['exchange_bug'] == True) | (final_df['exact_search'] == True) | (~final_df['profile'].isna()) | (final_df['days_since_last_scrape'] <= 30)
-        exclusion_condition = (final_df['exchange_bug'] == True) | (((final_df['exact_search'] == True) | (~final_df['profile'].isna())) & (final_df['days_since_last_scrape'] <= 30))
-        symbols_to_exclude = final_df[exclusion_condition]['conId']
-        remaining = contract_details[~contract_details['conId'].isin(symbols_to_exclude)]
-
-        # # To debug invalid rows
-        # remaining = final_df.copy()
-        # remaining = remaining[~remaining.apply(is_row_valid, axis=1)]
-    except FileNotFoundError:
-        remaining = contract_details.copy()
-        
-    remaining = remaining[~remaining['longName'].apply(has_bad_multiplier)]
-    remaining = remaining[['symbol', 'exchange', 'primaryExchange', 'validExchanges', 'currency', 'conId', 'longName', 'stockType', 'isin']]
-    remaining = (remaining
-                 .assign(currency_is_euro=remaining['currency'] == 'EUR')
-                 .sort_values(by='currency_is_euro', ascending=False)
-                 .drop(columns='currency_is_euro')
-                 )
-    return remaining
-
-
 
 # Cleaning functions
 def clean_labels(label, col):
