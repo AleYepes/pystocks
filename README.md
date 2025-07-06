@@ -1,5 +1,5 @@
 # pystocks
-A DIY, and certainly fault-prone, library to scrape and process ETF data and to calculate factor-tilted ETF portfolios.
+A quick and dirty library to scrape and process ETF data and to calculate factor-tilted ETF portfolios. Use at your own risk.
 
 1. Contract scraper and validator
 - api_contracts.ipynb
