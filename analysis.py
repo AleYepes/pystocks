@@ -349,7 +349,7 @@ def construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, sca
     # factors['factor_hml'] = hml_etf
 
     # Metadata
-    excluded = ['style_', 'marketcap_', 'countries_', 'fundamentals_, momentum_']
+    excluded = ['style_', 'marketcap_', 'countries_', 'fundamentals_', 'momentum_']
     numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
     for col in numerical_cols:
         if not any(col.startswith(prefix) for prefix in excluded) and col in filtered_df.columns:
@@ -366,7 +366,6 @@ def construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, sca
                     var_etf = construct_long_short_factor_returns(filtered_df, pct_changes, low_factor_symbols, high_factor_symbols, factor_column=col)
                 else:
                     var_etf = construct_long_short_factor_returns(filtered_df, pct_changes, high_factor_symbols, low_factor_symbols, factor_column=col)
-                var_etf = construct_long_short_factor_returns(filtered_df, pct_changes, high_factor_symbols, low_factor_symbols, factor_column=col)
                 factors[col] = var_etf
 
             except Exception as e:
@@ -648,7 +647,7 @@ world_bank_data_full = fetch_world_bank_data(all_possible_standard_names, first_
 # Walkforward loops
 walk_forward_df = pd.DataFrame()
 parser = argparse.ArgumentParser(description='Run walk-forward analysis.')
-parser.add_argument('--years', type=int, default=10, help='Number of years to check for walk-forward analysis.')
+parser.add_argument('--years', type=int, default=5, help='Number of years to check for walk-forward analysis.')
 args = parser.parse_args()
 walk_forward_year_range = args.years
 first_date = max(first_date, (last_date - timedelta(days=365 * walk_forward_year_range)))
@@ -667,7 +666,7 @@ for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
                 break
         
         meta_window = meta.copy()
-        meta_window['df'] = meta['df'].apply(lambda df: df.loc[oldest:latest].copy())
+        meta_window['df'] = meta['df'].apply(lambda df: df.loc[df['date'].between(oldest, latest)].copy())
 
         business_days = pd.date_range(start=oldest, end=latest, freq='B')
 
