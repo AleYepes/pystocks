@@ -65,7 +65,6 @@ def is_valid_tuple(tuple, column):
         return True
     
     if column == 'profile':
-        # if value and label:
         return True
     if column == 'fundamentals':
         if value.isupper():
@@ -84,10 +83,8 @@ def is_valid_tuple(tuple, column):
 def is_row_valid(row):
     for col in row.index:
         if isinstance(row[col], list):
-            # if col == 'fundamentals':
-            #     if len(row[col]) not in [4,5,21,22,   23]: #4, 5, 21, 22 are the acceptable num of fund values, 23 is for little bugs
-            #         print(len(row[col]))
-            #         return False
+            if col == 'debtors':
+                return True
             for tuple in row[col]:
                 if not is_valid_tuple(tuple, col):
                     print(tuple)
@@ -141,7 +138,6 @@ def correct_digit(value_str):
         return value_str
 
 def clean_values(value_str, col):
-    # print(value_str)
     if col == 'profile':
         return value_str
     if isinstance(value_str, str):
