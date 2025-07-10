@@ -238,19 +238,33 @@ def calculate_slope(value1, value2, time1, time2):
 
 def get_return_stats(df, training_cutoff, momentum_cutoffs, risk_free_df):
     training_df = df[df.index < training_cutoff]
-    training_rf = risk_free_df[risk_free_df.index < training_cutoff]
+    # training_rf = risk_free_df[risk_free_df.index < training_cutoff]
 
-    excess_returns = training_df['pct_change'] - training_rf['daily_nominal_rate']
-    sharpe = excess_returns.mean() / excess_returns.std()
+    # excess_returns = training_df['pct_change'] - training_rf['daily_nominal_rate']
+    # sharpe = excess_returns.mean() / excess_returns.std() if excess_returns.std() != 0 else 0
 
     momentum_3mo = training_df[training_df.index >= momentum_cutoffs['3mo']]['pct_change'].mean()
     momentum_6mo = training_df[training_df.index >= momentum_cutoffs['6mo']]['pct_change'].mean()
     momentum_1y  = training_df[training_df.index >= momentum_cutoffs['1y']]['pct_change'].mean()
 
-    return pd.Series(
-        [momentum_3mo, momentum_6mo, momentum_1y, sharpe],
-        index=['momentum_3mo', 'momentum_6mo', 'momentum_1y', 'stats_sharpe']
-    )
+    rs_3mo = (1 + training_df[training_df.index >= momentum_cutoffs['3mo']]['pct_change']).prod() - 1
+    rs_6mo = (1 + training_df[training_df.index >= momentum_cutoffs['6mo']]['pct_change']).prod() - 1
+    rs_1y  = (1 + training_df[training_df.index >= momentum_cutoffs['1y']]['pct_change']).prod() - 1
+
+    return pd.Series([momentum_3mo, 
+                      momentum_6mo, 
+                      momentum_1y, 
+                      rs_3mo, 
+                      rs_6mo, 
+                      rs_1y,], 
+                    #   sharpe], 
+              index=['momentum_3mo', 
+                     'momentum_6mo', 
+                     'momentum_1y', 
+                     'rs_3mo', 
+                     'rs_6mo', 
+                     'rs_1y', ])
+                    #  'stats_sharpe'])
 
 def create_continent_map(standard_names):
     continents = cc.convert(names=standard_names, to='continent', not_found=None)
@@ -336,20 +350,20 @@ def construct_factors(filtered_df, pct_changes, portfolio_dfs, risk_free_df, sca
     smb_etf = construct_long_short_factor_returns(filtered_df, pct_changes, small_symbols, large_symbols)
     factors['factor_smb'] = smb_etf
 
-    # # HML_ETF
-    # value_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('value')]
-    # growth_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('growth')]
-    # value_symbols = filtered_df[filtered_df[value_cols].ne(0).any(axis=1)]['conId'].tolist()
-    # growth_symbols = filtered_df[filtered_df[growth_cols].ne(0).any(axis=1)]['conId'].tolist()
+    # HML_ETF
+    value_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('value')]
+    growth_cols = [col for col in filtered_df.columns if col.startswith('style_') and col.endswith('growth')]
+    value_symbols = filtered_df[filtered_df[value_cols].ne(0).any(axis=1)]['conId'].tolist()
+    growth_symbols = filtered_df[filtered_df[growth_cols].ne(0).any(axis=1)]['conId'].tolist()
 
-    # intersection = set(value_symbols) & set(growth_symbols)
-    # value_symbols = [s for s in value_symbols if s not in intersection]
-    # growth_symbols = [s for s in growth_symbols if s not in intersection]
-    # hml_etf = construct_long_short_factor_returns(filtered_df, pct_changes, value_symbols, growth_symbols)
-    # factors['factor_hml'] = hml_etf
+    intersection = set(value_symbols) & set(growth_symbols)
+    value_symbols = [s for s in value_symbols if s not in intersection]
+    growth_symbols = [s for s in growth_symbols if s not in intersection]
+    hml_etf = construct_long_short_factor_returns(filtered_df, pct_changes, value_symbols, growth_symbols)
+    factors['factor_hml'] = hml_etf
 
     # Metadata
-    excluded = ['style_', 'marketcap_', 'countries_', 'fundamentals_', 'momentum_']
+    excluded = ['style_', 'marketcap_', 'countries_', 'fundamentals_', 'momentum_', 'rs_']
     numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
     for col in numerical_cols:
         if not any(col.startswith(prefix) for prefix in excluded) and col in filtered_df.columns:
@@ -667,7 +681,6 @@ for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
         
         meta_window = meta.copy()
         meta_window['df'] = meta['df'].apply(lambda df: df.loc[df['date'].between(oldest, latest)].copy())
-
         business_days = pd.date_range(start=oldest, end=latest, freq='B')
 
         for idx, row in meta_window.iterrows():
@@ -700,7 +713,7 @@ for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
         meta_window['max_gap_log'] = np.log1p(meta_window['max_gap'])
 
         ## static 3y window mean stats
-        condition = ((meta_window['max_gap_log'] < MAX_GAP_LOG) &                     (meta_window['pct_missing'] < MAX_PCT_MISSING))
+        condition = ((meta_window['max_gap_log'] < MAX_GAP_LOG) & (meta_window['pct_missing'] < MAX_PCT_MISSING))
         filtered = meta_window[condition].copy()
         print(f'{len(filtered)} ETFs included')
         print(f'{len(meta_window) - len(filtered)} dropped')
@@ -715,22 +728,23 @@ for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
             df['pct_change'] = df[price_col].pct_change()
             filtered.at[idx, 'df'] = df.set_index('date')
 
-        before_df = fund_df[fund_df['funds_date'] <= latest]
-        if not before_df.empty:
-            latest_before = before_df.loc[before_df.groupby('conId')['funds_date'].idxmax()]
+        training_cutoff = latest - pd.Timedelta(days=TRAINING_PERIOD_DAYS)
+
+        before_training_end = fund_df[fund_df['funds_date'] <= training_cutoff]
+        if not before_training_end.empty:
+            before_training_end = before_training_end.loc[before_training_end.groupby('conId')['funds_date'].idxmax()]
         else:
-            latest_before = pd.DataFrame(columns=fund_df.columns)
+            before_training_end = pd.DataFrame(columns=fund_df.columns)
 
-        after_df = fund_df[fund_df['funds_date'] > latest]
-        if not after_df.empty:
-            earliest_after = after_df.loc[after_df.groupby('conId')['funds_date'].idxmin()]
+        after_training_end = fund_df[fund_df['funds_date'] > training_cutoff]
+        if not after_training_end.empty:
+            after_training_end = after_training_end.loc[after_training_end.groupby('conId')['funds_date'].idxmin()]
         else:
-            earliest_after = pd.DataFrame(columns=fund_df.columns)
+            after_training_end = pd.DataFrame(columns=fund_df.columns)
 
-        if not latest_before.empty and not earliest_after.empty:
-            earliest_after = earliest_after[~earliest_after['conId'].isin(latest_before['conId'])]
-
-        spliced_fund_df = pd.concat([latest_before, earliest_after])
+        if not before_training_end.empty and not after_training_end.empty:
+            after_training_end = after_training_end[~after_training_end['conId'].isin(before_training_end['conId'])]
+        spliced_fund_df = pd.concat([before_training_end, after_training_end])
 
         filtered = pd.merge(filtered, spliced_fund_df, on=['symbol', 'currency'], how='inner').drop(['max_gap', 'missing', 'pct_missing', 'max_gap_log'], axis=1)
         numerical_cols = [col for col in filtered.columns if filtered[col].dtype in [np.int64, np.float64] and col not in ['conId']]
@@ -738,11 +752,7 @@ for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
                 [row['df']['pct_change'].rename(row['conId']) 
                 for _, row in filtered.iterrows()], axis=1
             )
-        # filtered = filtered.drop(columns=['df'])
         gc.collect()
-
-        # Define window risk-free-rate series
-        risk_free_df = risk_free_df_full.loc[business_days]
 
         # Remove uninformative cols for market portfolios 
         uninformative_cols = [col for col in numerical_cols if filtered[col].nunique(dropna=True) <= 1]
@@ -759,30 +769,26 @@ for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
         for cols in rate_fundamentals:
             base_name = cols[0].replace('-1yr', '').replace('1Yr', '')
             slope_col = f'fundamentals_{base_name}_slope'
-            
             if len(cols) == 3:
                 col_1yr, col_3yr, col_5yr = cols
                 filtered[slope_col] = calculate_slope(filtered[f'fundamentals_{col_1yr}'], filtered[f'fundamentals_{col_5yr}'], 1, 5)
-
                 slope_1yr_3yr = calculate_slope(filtered[f'fundamentals_{col_1yr}'], filtered[f'fundamentals_{col_3yr}'], 1, 3)
                 slope_3yr_5yr = calculate_slope(filtered[f'fundamentals_{col_3yr}'], filtered[f'fundamentals_{col_5yr}'], 3, 5)
                 filtered[f'fundamentals_{base_name}_second_deriv'] = calculate_slope(slope_1yr_3yr, slope_3yr_5yr, 1, 3)
-
             elif len(cols) == 2:
                 col_1yr, col_3yr = cols
                 filtered[slope_col] = calculate_slope(filtered[f'fundamentals_{col_1yr}'], filtered[f'fundamentals_{col_3yr}'], 1, 3)
-
-        ## Add new cols to numericals
         numerical_cols = [col for col in filtered.columns if filtered[col].dtype in [np.int64, np.float64] and col not in ['conId']]
 
         # Return stats and split training and tests sets
-        training_cutoff = latest - pd.Timedelta(days=TRAINING_PERIOD_DAYS)
         momentum_cutoffs = {
             '1y':  training_cutoff - pd.Timedelta(days=MOMENTUM_PERIODS_DAYS['1y']),
             '6mo': training_cutoff - pd.Timedelta(days=MOMENTUM_PERIODS_DAYS['6mo']),
             '3mo': training_cutoff - pd.Timedelta(days=MOMENTUM_PERIODS_DAYS['3mo']),
         }
-        filtered[['momentum_3mo', 'momentum_6mo', 'momentum_1y', 'stats_sharpe']] = filtered['df'].apply(lambda df: get_return_stats(df, training_cutoff, momentum_cutoffs, risk_free_df))
+        risk_free_df = risk_free_df_full.loc[business_days]
+        return_stat_cols = ['momentum_3mo', 'momentum_6mo', 'momentum_1y', 'rs_3mo', 'rs_6mo', 'rs_1y']#, 'stats_sharpe']
+        filtered[return_stat_cols] = filtered['df'].apply(lambda df: get_return_stats(df, training_cutoff, momentum_cutoffs, risk_free_df))
 
         holding_cols = [col for col in filtered.columns if col.startswith('holding_') and col != 'holding_types_variety'] + ['total']
         portfolio_dfs = {}
@@ -844,7 +850,7 @@ for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
             'other': (filtered['asset_equity'] == 0) & (filtered['asset_cash'] == 0) & (filtered['asset_bond'] == 0),
         }
 
-        exclude_assets = ['bond']
+        exclude_assets = ['bond', 'cash']
         asset_classes = list(asset_conditions.keys())
 
         include_assets = [asset for asset in asset_classes if asset not in exclude_assets]
@@ -866,7 +872,6 @@ for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
 
         cc = coco.CountryConverter()
         country_cols = [col for col in filtered_df.columns if col.startswith('countries') and not col.endswith('variety')]
-
         standard_names = set()
         rename_map = {}
         for col in country_cols:
@@ -882,22 +887,14 @@ for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
                 rename_map[col] = f'countries_{standard_name}'
             else:
                 print(f"Could not standardize: '{raw_name}' (from column '{col}')")
-
         filtered_df.rename(columns=rename_map, inplace=True)
 
-        # Create new country columns
-        # continent_map = create_continent_map(standard_names)
-
         metric_df = calculate_country_stats(world_bank_data_full, standard_names, latest, window_size=3)
-
         metric_suffixes = {
             'raw_value': '_value',
             '1st_div': '_growth',
             '2nd_div': '_acceleration'
         }
-        # continents = list(continent_map.values())
-        # for cont in continents:
-        #     filtered_df[f'continent_{cont}'] = 0.0
         for ind_code, ind_name in indicator_name_map.items():
             if ind_code in metric_df.columns.get_level_values(0):
                 for metric_col, suffix in metric_suffixes.items():
@@ -907,10 +904,7 @@ for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
         for std_name in standard_names:
             country_weight_col = f'countries_{std_name}'
             if country_weight_col not in filtered_df.columns:
-                continue
-            # if std_name in continent_map:
-            #     continent = continent_map[std_name]
-            #     filtered_df[f'continent_{continent}'] += filtered_df[country_weight_col]        
+                continue   
 
             if std_name in metric_df.index:
                 for ind_code, ind_name in indicator_name_map.items():
@@ -949,40 +943,27 @@ for walk_forward_year_window in WALK_FORWARD_WINDOW_YEARS:
             'fundamentals_ReturnonEquity3Yr',
             'fundamentals_ReturnonInvestment1Yr',
             'fundamentals_ReturnonInvestment3Yr',
-            # 'fundamentals_SalestoTotalAssets',
-            # 'fundamentals_EBITtoInterest',
         ]
-        momentum_columns = [
-            'momentum_3mo',
-            'momentum_6mo',
-            'momentum_1y',
-            'fundamentals_RelativeStrength'
-        ]
-        columns_to_scale = value_columns_inverted + leverage_columns_inverted + profitability_columns + momentum_columns
-
+        columns_to_scale = value_columns_inverted + leverage_columns_inverted + profitability_columns + return_stat_cols
         if any(x in filtered_df.columns for x in columns_to_scale):
             scaler = MinMaxScaler()
             filtered_df[columns_to_scale] = scaler.fit_transform(filtered_df[columns_to_scale])
 
-            # Value Score
             filtered_df['factor_value'] = (1 - filtered_df[value_columns_inverted]).sum(axis=1)
             filtered_df['factor_leverage'] = (1 - filtered_df[leverage_columns_inverted]).sum(axis=1)
             filtered_df['factor_profitability'] = filtered_df[profitability_columns].sum(axis=1)
-            filtered_df['factor_momentum'] = filtered_df[momentum_columns].sum(axis=1)
+            filtered_df['factor_momentum_relative_strength'] = filtered_df[return_stat_cols].sum(axis=1)
 
             filtered_df = filtered_df.drop(columns=columns_to_scale, errors='ignore')
 
         # Reorganize columns
         categories = ['factor', 'holding_types', 'stats', 'momentum', 'profile', 'top10', 'population', 'msci', 'gdp', 'continent', 'countries', 'fundamentals', 'industries', 'currencies', 'debtors', 'maturity', 'debt_type', 'lipper', 'dividends', 'marketcap', 'style', 'domicile', 'asset']
-
         numerical_cols = [col for col in filtered_df.columns if filtered_df[col].dtype in [np.int64, np.float64] and col not in ['conId']]
         non_numerical = [col for col in filtered_df.columns if col not in numerical_cols]
-
         for category in reversed(categories):
             cat_cols = [col for col in numerical_cols if col.startswith(category)]
             remaining = [col for col in numerical_cols if col not in cat_cols]
             numerical_cols = cat_cols + remaining
-
         new_column_order = non_numerical + numerical_cols
         filtered_df = filtered_df[new_column_order]
 
