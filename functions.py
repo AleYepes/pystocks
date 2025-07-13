@@ -23,10 +23,10 @@ def save(df):
     final_df = df[df.apply(is_row_valid, axis=1)]
     final_df = clean_df(final_df)
 
-    file_path = 'data/contract_elaborated.csv'
+    file_path = f'data/fundamentals/contract_scraped_{datetime.now().strftime("%y-%m")}.csv'
     temp_file_path = file_path + '.tmp'
     try:
-        temp_df = load('data/contract_elaborated.csv')
+        temp_df = load(file_path)
         temp_df = clean_df(temp_df)
         final_df = pd.concat([final_df, temp_df]).drop_duplicates(subset=['conId', 'funds_date'])
     except FileNotFoundError:
@@ -59,7 +59,7 @@ def is_valid_tuple(tuple, column):
         # if label != None: # Comment out for more rigid filter
         return False
     if value is None:
-        # return True # Comment out for more rigid filter
+        return True # Comment out for more rigid filter
         return False 
     if is_numerical(value):
         return True
