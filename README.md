@@ -1,5 +1,5 @@
 # pystocks
-A quick and dirty library to scrape and process ETF data and to calculate factor-tilted ETF portfolios. Use at your own risk.
+A series of scripts to scrape and process ETF data, and to calculate factor-tilted ETF portfolios. Use at your own risk.
 
 1. Contract scraper and validator
 - api_contracts.ipynb
@@ -15,19 +15,22 @@ A quick and dirty library to scrape and process ETF data and to calculate factor
 - analysis.ipynb
 
 # Requirements
-Use Python 3.12.8
+1. Install Trader Workstation (IBKR) https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/#find-the-api
+- This will be the source for all fundamental data and historical price series
+
+2. Use Python 3.12.8
 ```
 pip install -r requirements.txt
 ```
 
-## Install nbstripout to Remove Unnecessary Jupyter Metadata
+## Supplementary install for notebooks + git
+1. Install nbstripout to Remove Unnecessary Jupyter Metadata
 ```
 pip install nbstripout
 nbstripout --install
 ```
 
-
-## 2. Use nbdime for Better Diffs and Merging
+2. Use nbdime for Better Diffs and Merging
 ```
 pip install nbdime
 nbdime config-git --enable
