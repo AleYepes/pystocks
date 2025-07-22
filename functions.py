@@ -25,9 +25,9 @@ def sort_by_eur_exchanges(final_df, drop=False):
                 )
     
     if drop:
-        return final_df[final_df['primaryExchange'].isin(eur_exchanges)]
+        return final_df[final_df['primaryExchange'].isin(eur_exchanges)], eur_exchanges
     else:
-        return final_df
+        return final_df, eur_exchanges
 
 def evaluate_literal(val):
     try:
