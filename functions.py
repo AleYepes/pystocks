@@ -5,6 +5,30 @@ import pandas as pd
 import os
 from datetime import datetime
 
+def sort_by_eur_exchanges(final_df, drop=False):
+    currency_trade_volume_order = ["EUR", "USD", "JPY", "GBP", "CNY", "AUD", "CAD", "CHF", "SGD", "HKD", "SEK", "NOK", "MXN", "INR", "RUB", "PLN", "TWD", "ZAR", "DKK", "ILS", "MYR", "SAR", "HUF"]
+    final_df['currency_ordered'] = pd.Categorical(final_df['currency'], categories=currency_trade_volume_order, ordered=True)
+
+    manual_eur_exchanges = {'AEB', 'AEQLIT', 'APEXEN', 'AQEUDE', 'AQEUEN', 'AQEUES', 'AQXECH', 'AQXEUK', 'BATECH', 'BATEDE', 'BATEEN', 'BATEES', 'BATEUK', 'BATS', 'BM', 'BUX', 'BVME.ETF', 'CBOE', 'CHIXCH', 'CHIXDE', 'CHIXEN', 'CHIXES', 'CHIXUK', 'CPH', 'DXEDE', 'DXEEN', 'DXEES', 'EBS', 'ENEXT.BE', 'EUIBSI', 'FWB', 'FWB2', 'GETTEX', 'GETTEX2', 'IBEOS', 'IBIS', 'IBIS2', 'LJSE', 'LSE', 'LSEETF', 'MEXI', 'PEARL', 'PSX', 'SBF', 'SFB', 'SMART', 'SWB', 'SWB2', 'TADAWUL', 'TASE', 'TGATE', 'TGHEDE', 'TGHEEN', 'TRQXCH', 'TRQXDE', 'TRQXEN', 'TRQXUK', 'TRWBCH', 'TRWBDE', 'TRWBEN', 'TRWBIT', 'TRWBSE', 'TRWBUK', 'TRWBUKETF', 'VSE', 'WSE'}
+    
+    ucits_df = final_df[final_df['longName'].str.contains("UCITS", na=False)]
+    valid_exchanges = set(ucits_df['validExchanges'].str.split(',').explode().unique())
+    exchanges = set(ucits_df['exchange'].unique())
+    prims = set(ucits_df['primaryExchange'].unique())
+    eur_exchanges = valid_exchanges | exchanges | prims | manual_eur_exchanges
+
+    final_df = (final_df
+                .assign(exchange_is_european=final_df['exchange'].isin(eur_exchanges))
+                .assign(primary_is_european=final_df['primaryExchange'].isin(eur_exchanges))
+                .sort_values(by=['exchange_is_european', 'primary_is_european', 'currency_ordered', 'symbol'], ascending=[False, False, True, True])
+                .drop(columns=['exchange_is_european', 'primary_is_european', 'currency_ordered'])
+                )
+    
+    if drop:
+        return final_df[final_df['primaryExchange'].isin(eur_exchanges)]
+    else:
+        return final_df
+
 def evaluate_literal(val):
     try:
         return ast.literal_eval(val)
@@ -15,8 +39,6 @@ def load(path):
     df = pd.read_csv(path)
     for col in df.columns:
         df[col] = df[col].apply(evaluate_literal)
-        # if col == 'date_scraped':
-        #     df[col] = pd.to_datetime(df[col])#.dt.date
     return df
 
 def save(df):
