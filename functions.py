@@ -5,11 +5,14 @@ import pandas as pd
 import os
 from datetime import datetime
 
-def sort_by_eur_exchanges(final_df, drop=False):
+def sort_by_eur_exchanges(input_df, drop=False):
     currency_trade_volume_order = ["EUR", "USD", "JPY", "GBP", "CNY", "AUD", "CAD", "CHF", "SGD", "HKD", "SEK", "NOK", "MXN", "INR", "RUB", "PLN", "TWD", "ZAR", "DKK", "ILS", "MYR", "SAR", "HUF"]
+    final_df = input_df.copy()
     final_df['currency_ordered'] = pd.Categorical(final_df['currency'], categories=currency_trade_volume_order, ordered=True)
 
-    manual_eur_exchanges = {'AEB', 'AEQLIT', 'APEXEN', 'AQEUDE', 'AQEUEN', 'AQEUES', 'AQXECH', 'AQXEUK', 'BATECH', 'BATEDE', 'BATEEN', 'BATEES', 'BATEUK', 'BATS', 'BM', 'BUX', 'BVME.ETF', 'CBOE', 'CHIXCH', 'CHIXDE', 'CHIXEN', 'CHIXES', 'CHIXUK', 'CPH', 'DXEDE', 'DXEEN', 'DXEES', 'EBS', 'ENEXT.BE', 'EUIBSI', 'FWB', 'FWB2', 'GETTEX', 'GETTEX2', 'IBEOS', 'IBIS', 'IBIS2', 'LJSE', 'LSE', 'LSEETF', 'MEXI', 'PEARL', 'PSX', 'SBF', 'SFB', 'SMART', 'SWB', 'SWB2', 'TADAWUL', 'TASE', 'TGATE', 'TGHEDE', 'TGHEEN', 'TRQXCH', 'TRQXDE', 'TRQXEN', 'TRQXUK', 'TRWBCH', 'TRWBDE', 'TRWBEN', 'TRWBIT', 'TRWBSE', 'TRWBUK', 'TRWBUKETF', 'VSE', 'WSE'}
+    # manual_eur_exchanges = {'AEB', 'AEQLIT', 'APEXEN', 'AQEUDE', 'AQEUEN', 'AQEUES', 'AQXECH', 'AQXEUK', 'BATECH', 'BATEDE', 'BATEEN', 'BATEES', 'BATEUK', 'BATS', 'BM', 'BUX', 'BVME.ETF', 'CBOE', 'CHIXCH', 'CHIXDE', 'CHIXEN', 'CHIXES', 'CHIXUK', 'CPH', 'DXEDE', 'DXEEN', 'DXEES', 'EBS', 'ENEXT.BE', 'EUIBSI', 'FWB', 'FWB2', 'GETTEX', 'GETTEX2', 'IBEOS', 'IBIS', 'IBIS2', 'LJSE', 'LSE', 'LSEETF', 'MEXI', 'PEARL', 'PSX', 'SBF', 'SFB', 'SMART', 'SWB', 'SWB2', 'TADAWUL', 'TASE', 'TGATE', 'TGHEDE', 'TGHEEN', 'TRQXCH', 'TRQXDE', 'TRQXEN', 'TRQXUK', 'TRWBCH', 'TRWBDE', 'TRWBEN', 'TRWBIT', 'TRWBSE', 'TRWBUK', 'TRWBUKETF', 'VSE', 'WSE'}
+
+    manual_eur_exchanges = {'AEB', 'APEXEN', 'AQEUDE', 'AQEUEN', 'AQEUES', 'AQXECH', 'AQXEUK', 'BATECH', 'BATEDE', 'BATEEN', 'BATEES', 'BATEUK', 'BM', 'BVME.ETF', 'CHIXCH', 'CHIXDE', 'CHIXEN', 'CHIXES', 'CHIXUK', 'DXEDE', 'DXEEN', 'DXEES', 'EBS', 'ENEXT.BE', 'EUIBSI', 'FWB', 'FWB2', 'GETTEX', 'GETTEX2', 'IBIS', 'IBIS2', 'LSE', 'LSEETF', 'MEXI', 'SBF', 'SEHK', 'SFB', 'SMART', 'SWB', 'SWB2', 'TGATE', 'TGHEDE', 'TGHEEN', 'TRQXCH', 'TRQXDE', 'TRQXEN', 'TRQXUK', 'TRWBCH', 'TRWBDE', 'TRWBEN', 'TRWBIT', 'TRWBSE', 'TRWBUK', 'TRWBUKETF', 'VSE'}
     
     ucits_df = final_df[final_df['longName'].str.contains("UCITS", na=False)]
     valid_exchanges = set(ucits_df['validExchanges'].str.split(',').explode().unique())
