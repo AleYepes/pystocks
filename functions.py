@@ -44,11 +44,11 @@ def load(path):
         df[col] = df[col].apply(evaluate_literal)
     return df
 
-def save(df):
+def save(df, root='data/raw/'):
     final_df = df[df.apply(is_row_valid, axis=1)]
     final_df = clean_df(final_df)
 
-    file_path = f'data/fundamentals/contract_scraped_{datetime.now().strftime("%y-%m")}.csv'
+    file_path = f'{root}contract_scraped_{datetime.now().strftime("%y-%m")}.csv'
     temp_file_path = file_path + '.tmp'
     try:
         temp_df = load(file_path)
@@ -135,7 +135,6 @@ def clean_labels(label, col):
             if label.endswith('-Discontinuedeff09/19/2020'):
                 return label.split('-')[0]
         return label
-    
     elif col == 'holding_types':
         if isinstance(label, str):
             if label.startswith('■'):
@@ -152,6 +151,11 @@ def clean_labels(label, col):
         if isinstance(label, str):
             if label == 'LTDebt/ShareholdersEquity':
                 return 'LTDebt/Shareholders'
+        return label
+    elif col == 'holding_types':
+        if isinstance(label, str):
+            if label == 'IEquity':
+                return 'Equity'
         return label
     return label
     
