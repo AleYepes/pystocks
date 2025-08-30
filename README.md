@@ -1,18 +1,5 @@
 # pystocks
-A series of scripts to scrape and process ETF data, and to calculate factor-tilted ETF portfolios. Use at your own risk.
-
-1. Contract scraper and validator
-- api_contracts.ipynb
-
-2. Fundamental data crawler for IBKR's Trader Workstation
-- ibkr_ocr.ipynb
-
-3. Historical price-series downloader and updater using IBKR's API
-- api_series.ipynb
-
-4. Factor return-series regression analyzes and MPT weights optimization
-- data_prep.ipynb
-- analysis.ipynb
+A series of scripts to scrape IBKR workstation data and calculate factor-tilted ETF portfolios. Use at your own risk.
 
 # Requirements
 1. Install Trader Workstation (IBKR) https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/#find-the-api
