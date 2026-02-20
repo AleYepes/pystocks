@@ -1,0 +1,89 @@
+import asyncio
+from playwright.async_api import async_playwright
+import pandas as pd
+from .config import IB_PRODUCTS_PATH
+import httpx
+from tqdm import tqdm
+import os
+
+async def fetch_api_direct(client, page_number, page_size=500, retries=5):
+    url = "https://www.interactivebrokers.ie/webrest/search/products-by-filters"
+    payload = {
+        "domain": "ie",
+        "newProduct": "all",
+        "pageNumber": page_number,
+        "pageSize": page_size,
+        "productCountry": [],
+        "productSymbol": "",
+        "productType": ["ETF"],
+        "sortDirection": "asc",
+        "sortField": "symbol"
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    
+    for attempt in range(retries):
+        try:
+            response = await client.post(url, json=payload, headers=headers, timeout=20)
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 429:
+                await asyncio.sleep(5 * (attempt + 1))
+            else:
+                await asyncio.sleep(1 * (attempt + 1))
+        except (httpx.RequestError, asyncio.TimeoutError):
+            await asyncio.sleep(2 * (attempt + 1))
+            
+    return None
+
+async def scrape_ibkr_products():
+    all_products = []
+    page_size = 100
+    
+    async with httpx.AsyncClient() as client:
+        first_page = await fetch_api_direct(client, 1)
+        
+        if first_page and "products" in first_page and first_page["products"]:
+            print("Direct API access successful.")
+            all_products.extend(first_page["products"])
+            page_number = 2
+            
+            pbar = tqdm(desc="Fetching products", unit=" page")
+            pbar.update(1)
+            
+            while True:
+                data = await fetch_api_direct(client, page_number)
+                if not data or "products" not in data or not data["products"]:
+                    break
+                
+                batch = data["products"]
+                all_products.extend(batch)
+                pbar.update(1)
+                
+                if len(batch) < page_size:
+                    break
+                
+                page_number += 1
+                await asyncio.sleep(0.05)
+            pbar.close()
+        else:
+            print("Direct API access failed")
+            return
+
+    df = pd.DataFrame(all_products).drop_duplicates()
+    if IB_PRODUCTS_PATH.exists():
+        try:
+            existing_df = pd.read_csv(IB_PRODUCTS_PATH)
+            if not existing_df.empty:
+                df = pd.concat([existing_df, df]).drop_duplicates()
+                print("Updating existing product list.")
+        except Exception:
+            pass
+    
+    df.to_csv(IB_PRODUCTS_PATH, index=False)
+    print(f"Saved {len(df)} products to {IB_PRODUCTS_PATH}")
+
+if __name__ == "__main__":
+    asyncio.run(scrape_ibkr_products())
