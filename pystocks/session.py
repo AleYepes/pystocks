@@ -26,19 +26,9 @@ class IBKRSession:
             page = await context.new_page()
             await page.goto(self.portal_url)
 
-            print("IBKR PORTAL LOGIN REQUIRED")
-            print("Please perform the following in the browser window:")
-            print("1. Log in with your credentials.")
-            print("2. Complete any 2FA (Mobile app confirmation).")
-            print("3. Wait for the Portal dashboard to load.")
-
-            # Wait for a known element that only appears after login
-            # or wait for the URL to stabilize on the dashboard
             try:
-                # Increased timeout to allow for slow 2FA
                 await page.wait_for_url("**/portal/*", timeout=120000)
-                # Wait for the portfolio/summary widget to be visible
-                await page.wait_for_selector(".account-summary", timeout=60000)
+                await page.wait_for_selector(".dashboard-root", timeout=60000)
                 
                 # Save the storage state (cookies, local storage)
                 await context.storage_state(path=self.state_path)
