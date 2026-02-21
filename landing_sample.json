@@ -1,0 +1,418 @@
+{
+  "top10": {
+    "meta": {
+      "name": "Holdings",
+      "name_tag": "holdings"
+    },
+    "data": {
+      "allocation": [
+        {
+          "name": "Equity",
+          "formatted_weight": "99.91%",
+          "weight": 99.9088,
+          "rank": 1,
+          "vs": 107.19870416666667
+        },
+        {
+          "name": "Cash",
+          "formatted_weight": "0.05%",
+          "weight": 0.0516,
+          "rank": 2,
+          "vs": 0.28529583333333336
+        },
+        {
+          "name": "Other",
+          "formatted_weight": "0.04%",
+          "weight": 0.0396,
+          "rank": 3,
+          "vs": 0.45558125000000005
+        }
+      ],
+      "top10": [
+        {
+          "name": "NVIDIA CORPORATION",
+          "ticker": "NVDA",
+          "rank": 1,
+          "assets_pct": "7.83%",
+          "conids": [
+            4815747,
+            13104788,
+            84223567,
+            835397161,
+            837454790
+          ]
+        },
+        {
+          "name": "APPLE INC.",
+          "ticker": "AAPL",
+          "rank": 2,
+          "assets_pct": "6.47%",
+          "conids": [
+            265598,
+            13013300,
+            38708077,
+            242506861,
+            273982664
+          ]
+        },
+        {
+          "name": "MICROSOFT CORPORATION",
+          "ticker": "MSFT",
+          "rank": 3,
+          "assets_pct": "5.39%",
+          "conids": [
+            272093,
+            8988746,
+            11462841,
+            12178239,
+            38708990,
+            415569505
+          ]
+        }
+      ]
+    }
+  },
+  "ownership": {
+    "title": "Ownership",
+    "titleTag": "Ownership",
+    "content": {
+      "summary": [
+        {
+          "name": "Strat. Entit.",
+          "value": 0.11987757776865679,
+          "name_tag": "Strat__Entit_",
+          "formatted_value": "0.12%"
+        },
+        {
+          "name": "Institutions",
+          "value": 55.537675143893516,
+          "name_tag": "Institutions",
+          "formatted_value": "55.54%"
+        },
+        {
+          "name": "Others",
+          "value": 44.34244727833782,
+          "name_tag": "Others",
+          "formatted_value": "44.34%"
+        }
+      ],
+      "top": {
+        "title": "TOP 3",
+        "data": [
+          {
+            "name": "JPMorgan Private Bank (United States)",
+            "value": 35566853.0,
+            "formatted_value": "3.45%"
+          },
+          {
+            "name": "Goldman Sachs & Company, Inc.",
+            "value": 27038338.0,
+            "formatted_value": "2.62%"
+          },
+          {
+            "name": "BofA Global Research (US)",
+            "value": 26277167.0,
+            "formatted_value": "2.55%"
+          }
+        ]
+      }
+    }
+  },
+  "cumulative_performace": {
+    "meta": {
+      "name": "Cumulative Performance",
+      "name_tag": "cumulative_performance",
+      "symbol": "Returns",
+      "vs": "vs Peers"
+    },
+    "data": [
+      {
+        "name": "Year to Date",
+        "name_tag": "year_to_date",
+        "value_fmt": "1.44%",
+        "value": 1.4415018,
+        "vs_value": 0.6597634136334477
+      },
+      {
+        "name": "1 Year",
+        "name_tag": "1_year",
+        "value_fmt": "16.23%",
+        "value": 16.2267401,
+        "vs_value": 0.7605013827007879
+      },
+      {
+        "name": "3 Years",
+        "name_tag": "3_years",
+        "value_fmt": "77.05%",
+        "value": 77.0481969,
+        "vs_value": 0.7213390953143127
+      },
+      {
+        "name": "5 Years",
+        "name_tag": "5_years",
+        "value_fmt": "100.09%",
+        "value": 100.0923927,
+        "vs_value": 0.7954616774061646
+      },
+      {
+        "name": "Since Inception",
+        "name_tag": "since_inception",
+        "value_fmt": "2775.22%",
+        "value": 2775.2161233,
+        "vs_value": 0.7158012175942001
+      },
+      {
+        "name": "1 Year",
+        "name_tag": "1_year",
+        "value_fmt": "16.23%",
+        "value": 16.226740100000004,
+        "vs_value": 0.7605013827008245,
+        "annualized": true
+      },
+      {
+        "name": "3 Years",
+        "name_tag": "3_years",
+        "value_fmt": "20.98%",
+        "value": 20.975428587574196,
+        "vs_value": 0.7227125106270685,
+        "annualized": true
+      },
+      {
+        "name": "5 Years",
+        "name_tag": "5_years",
+        "value_fmt": "14.88%",
+        "value": 14.880446673345027,
+        "vs_value": 0.797553924189116,
+        "annualized": true
+      },
+      {
+        "name": "Since Inception",
+        "name_tag": "since_inception",
+        "value_fmt": "10.71%",
+        "value": 10.713896623071207,
+        "annualized": true
+      }
+    ]
+  },
+  "risk_statistics": {
+    "meta": {
+      "name": "Risk & Statistics",
+      "name_tag": "risk_statistics",
+      "symbol": "SPY"
+    },
+    "data": [
+      {
+        "name": "Standard Deviation",
+        "name_tag": "standard_deviation",
+        "value_fmt": "10.88",
+        "value": 10.8787201,
+        "vs_value": -1.0
+      },
+      {
+        "name": "Sharpe Ratio",
+        "name_tag": "sharpe_ratio",
+        "value_fmt": "0.296347",
+        "value": 0.2963465,
+        "vs_value": 0.9838822733597858
+      },
+      {
+        "name": "Alpha",
+        "name_tag": "alpha",
+        "value_fmt": "-0.007669",
+        "value": -0.0076686,
+        "vs_value": 0.6253113226741126
+      },
+      {
+        "name": "Beta",
+        "name_tag": "beta",
+        "value_fmt": "0.998812",
+        "value": 0.9988123,
+        "vs_value": 0.4355590608847526
+      },
+      {
+        "name": "R2",
+        "name_tag": "r2",
+        "value_fmt": "0.999999",
+        "value": 0.9999992,
+        "vs_value": 0.996732026143696
+      }
+    ]
+  },
+  "dividends": {
+    "title": "Dividends",
+    "titleTag": "Dividends",
+    "content": {
+      "yield_ttm": 0.010637457935604912,
+      "formatted_yield_ttm": "1.06%",
+      "payout_ratio": -499.98812025325196,
+      "formatted_payout_ratio": "-499.99%",
+      "dividend_data": {
+        "annual_dividend_ttm": 7.281127,
+        "formatted_annual_dividend_ttm": "$7.28"
+      },
+      "last_dividend_date": {
+        "d": 19,
+        "m": "DECEMBER",
+        "y": 2025,
+        "t": "2025-12-19"
+      },
+      "last_dividend_amount": 1.993368,
+      "dividend_currency": "$",
+      "last_payed_dividend_date": {
+        "d": 19,
+        "m": "DEC",
+        "y": 2025,
+        "t": "2025-12-19"
+      },
+      "last_payed_dividend_amount": 1.993368,
+      "last_payed_dividend_currency": "USD"
+    }
+  },
+  "overall_ratings": {
+    "meta": {
+      "name": "Overall Ratings",
+      "name_tag": "overall_ratings"
+    },
+    "data": [
+      {
+        "name": "Total Return",
+        "name_tag": "total_return",
+        "rating": {
+          "name": "114 funds",
+          "value": 5
+        }
+      },
+      {
+        "name": "Consistent Return",
+        "name_tag": "consistent_return",
+        "rating": {
+          "name": "114 funds",
+          "value": 5
+        }
+      },
+      {
+        "name": "Preservation",
+        "name_tag": "preservation",
+        "rating": {
+          "name": "11976 funds",
+          "value": 5
+        }
+      },
+      {
+        "name": "Tax Efficiency",
+        "name_tag": "tax_efficiency",
+        "rating": {
+          "name": "114 funds",
+          "value": 5
+        }
+      },
+      {
+        "name": "Expense",
+        "name_tag": "expense",
+        "rating": {
+          "name": "40 funds",
+          "value": 5
+        }
+      }
+    ]
+  },
+  "mf_esg": {
+    "meta": {
+      "name": "ESG Ratings",
+      "name_tag": "esg_ratings"
+    },
+    "data": {
+      "title": "ESG",
+      "titleTag": "ESG",
+      "content": [
+        {
+          "name": "ESG Score",
+          "value": 7,
+          "isCombined": false
+        },
+        {
+          "name": "Environmental",
+          "value": 7,
+          "isCombined": false
+        },
+        {
+          "name": "Social",
+          "value": 7,
+          "isCombined": false
+        },
+        {
+          "name": "Governance",
+          "value": 7,
+          "isCombined": false
+        },
+        {
+          "name": "ESG Controversies Score",
+          "value": 1,
+          "isCombined": false
+        },
+        {
+          "name": "ESG Combined Score",
+          "value": 4,
+          "isCombined": true
+        }
+      ],
+      "asOfDate": "As of Feb 14, 2026.",
+      "coverage": 100,
+      "ibkr_esg_wp": "https://download2.interactivebrokers.com/mtws/assets/esg/IBKR_ESG_Scores.pdf",
+      "wb_esg_wp": "https://download.clientam.com/mtws/assets/esg/ESG_Scores.pdf"
+    }
+  },
+  "mf_key_ratios": {
+    "meta": {
+      "name": "Key Ratios",
+      "name_tag": "key_ratios",
+      "symbol": "SPY",
+      "vs": "vs Peers",
+      "vs_tag": "vs_peers"
+    },
+    "data": [
+      {
+        "name": "Price/Sales",
+        "name_tag": "price_sales",
+        "value_fmt": "8.93%",
+        "value": 8.9349889982,
+        "vs_value": -0.32392537617714984
+      },
+      {
+        "name": "Price to Book",
+        "name_tag": "price_to_book",
+        "value_fmt": "11.47%",
+        "value": 11.4668085808,
+        "vs_value": -0.7093237525983376
+      },
+      {
+        "name": "Price to Earnings",
+        "name_tag": "price_to_earnings",
+        "value_fmt": "33.57%",
+        "value": 33.5730340924,
+        "vs_value": -0.7394229517386252
+      }
+    ]
+  },
+  "objective": {
+    "meta": {
+      "name": "Fund Objective",
+      "name_tag": "fund_objective"
+    },
+    "data": "The Fund seeks to provide investment results that correspond generally to the price and yield performance of the S&P 500 Index (the Index). The Funds Portfolio consists of substantially all of the component common stocks that comprise the Index, which are weighted in accordance with the terms of the Trust Agreement."
+  },
+  "key_profile": {
+    "meta": {
+      "name": "Key Profile",
+      "name_tag": "key_profile"
+    },
+    "data": {
+      "total_expense_ratio": "0.0945",
+      "total_net_assets": "$708.92B (2026/01/30)",
+      "domicile": "USA",
+      "market_geo_focus": "U.S.",
+      "market_cap_focus": "Large-cap",
+      "fund_category": "Open-End Funds"
+    }
+  }
+}

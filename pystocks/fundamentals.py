@@ -1,121 +1,146 @@
 import asyncio
-import httpx
-import pandas as pd
-from datetime import datetime
-from .config import CONTRACTS_DB_PATH, RAW_DIR
-from .utils import load_csv, save_fundamentals
-from tqdm.auto import tqdm
 import json
+import logging
+from datetime import datetime
+import pandas as pd
+from tqdm.asyncio import tqdm
 
-class IBKRPortalClient:
-    def __init__(self, cookies=None, base_url="https://www.interactivebrokers.ie"):
-        self.base_url = base_url
-        self.cookies = cookies or {}
-        self.client = httpx.AsyncClient(base_url=base_url, cookies=self.cookies, timeout=30.0)
+from .config import DATA_DIR, IB_PRODUCTS_PATH, FUNDAMENTALS_DIR, SQLITE_DB_PATH
+from .session import IBKRSession
+from .database import init_db, log_scrape, sync_instruments_from_csv, get_connection
 
-    async def fetch_json(self, endpoint):
-        response = await self.client.get(f"/tws.proxy/fundamentals/{endpoint}")
-        if response.status_code == 200:
-            return response.json()
-        else:
-            # print(f"Error fetching {endpoint}: {response.status_code}")
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+class FundamentalScraper:
+    """Scrapes fundamental data from IBKR Portal API."""
+    
+    def __init__(self, session=None):
+        self.session = session or IBKRSession()
+        self.base_url = "https://www.interactivebrokers.ie"
+        self.fundamentals_dir = FUNDAMENTALS_DIR
+        self.fundamentals_dir.mkdir(parents=True, exist_ok=True)
+        init_db()
+        
+    async def fetch_endpoint(self, client, endpoint, conid):
+        """Fetches data from a specific endpoint and logs it."""
+        url = f"/tws.proxy/fundamentals/{endpoint}"
+        try:
+            response = await client.get(url)
+            log_scrape(conid, endpoint, response.status_code)
+            
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code in [401, 403]:
+                logger.error(f"Session expired or unauthorized: {response.status_code}")
+                return "__AUTH_ERROR__"
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching {url}: {e}")
+            log_scrape(conid, endpoint, 0, str(e))
             return None
 
-    async def get_etf_data(self, con_id):
-        """
-        Fetches all relevant fundamental data for an ETF and returns it in the legacy format.
-        """
-        results = {
-            'conId': con_id,
-            'date_scraped': datetime.now().strftime('%Y-%m-%d'),
-        }
+    async def scrape_conid(self, client, conid):
+        """Scrapes all fundamental data for a given conid."""
+        # Widgets to fetch via landing
+        widgets = "objective,mstar,lipper_ratings,mf_key_ratios,risk_and_statistics,holdings,performance_and_peers,keyProfile,ownership,dividends,tear_sheet,news,fund_mstar,mf_esg,social_sentiment,securities_lending,sv,short_sale,ukuser"
         
-        # Parallel fetch
+        # We fetch:
+        # 1. landing: general overview, ratings, performance, etc.
+        # 2. mf_profile_and_fees: reports, expenses details, profile metadata
+        # 3. mf_holdings: full industry and country breakdowns
         tasks = [
-            self.fetch_json(f"mf_profile/{con_id}"),
-            self.fetch_json(f"mf_holdings/{con_id}"),
-            self.fetch_json(f"mf_ratios/{con_id}"),
-            self.fetch_json(f"mf_allocation/{con_id}")
+            self.fetch_endpoint(client, f"landing/{conid}?widgets={widgets}", conid),
+            self.fetch_endpoint(client, f"mf_profile_and_fees/{conid}?sustainability=UK&lang=en", conid),
+            self.fetch_endpoint(client, f"mf_holdings/{conid}", conid)
         ]
         
-        profile_json, holdings_json, ratios_json, allocation_json = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
         
-        if not profile_json and not holdings_json:
+        if "__AUTH_ERROR__" in results:
+            return "__AUTH_ERROR__"
+            
+        landing_data, profile_data, holdings_data = results
+        
+        if not any([landing_data, profile_data, holdings_data]):
             return None
-
-        # --- Mapping Logic (Legacy Format) ---
+            
+        combined_data = {
+            "conid": conid,
+            "scraped_at": datetime.now().isoformat(),
+            "landing": landing_data,
+            "profile_and_fees": profile_data,
+            "holdings": holdings_data
+        }
         
-        # 1. Profile
-        if profile_json:
-            # Example mapping based on common IBKR JSON structure
-            # You might need to adjust these keys after discovery
-            profile_list = []
-            if 'domicile' in profile_json: profile_list.append(('Domicile', profile_json['domicile']))
-            if 'geoFocus' in profile_json: profile_list.append(('MarketGeoFocus', profile_json['geoFocus']))
-            if 'netAssets' in profile_json: 
-                val = profile_json['netAssets']
-                date = profile_json.get('netAssetsDate', '')
-                profile_list.append(('TotalNetAssets', f"{val}asof{date}"))
-            results['profile'] = str(profile_list)
-            results['funds_date'] = profile_json.get('netAssetsDate', None)
+        return combined_data
 
-        # 2. Ratios / Fundamentals
-        if ratios_json:
-            fund_list = []
-            # Map bond or equity ratios
-            for key, val in ratios_json.items():
-                fund_list.append((key, val))
-            results['fundamentals'] = fund_list
+    def save_data(self, conid, data):
+        """Saves scraped data to a JSON file."""
+        conid_dir = self.fundamentals_dir / str(conid)
+        conid_dir.mkdir(exist_ok=True)
+        
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        file_path = conid_dir / f"{date_str}.json"
+        
+        with open(file_path, "w") as f:
+            json.dump(data, f, indent=2)
 
-        # 3. Holdings (Top 10)
-        if holdings_json and 'top10' in holdings_json:
-            top10_list = []
-            for h in holdings_json['top10']:
-                top10_list.append((h.get('name', 'Unknown'), h.get('weight', 0)))
-            results['top10'] = top10_list
-            results['holding_date'] = holdings_json.get('date', None)
+def get_scraped_conids():
+    """Returns a list of conids that were already successfully scraped today."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT conid FROM instruments WHERE last_scraped_fundamentals = ?", (today,))
+        return [row[0] for row in cursor.fetchall()]
 
-        # 4. Allocation (Countries, Industries, Currencies)
-        if allocation_json:
-            if 'countries' in allocation_json:
-                results['countries'] = [(c['name'], c['weight']) for c in allocation_json['countries']]
-            if 'industries' in allocation_json:
-                results['industries'] = [(i['name'], i['weight']) for i in allocation_json['industries']]
-            if 'currencies' in allocation_json:
-                results['currencies'] = [(c['name'], c['weight']) for c in allocation_json['currencies']]
-
-        return results
-
-async def run_fundamentals_update(limit=100):
-    if not CONTRACTS_DB_PATH.exists():
-        print("Contract details not found. Run discovery first.")
+async def main(limit=None, start_index=0, force=False):
+    scraper = FundamentalScraper()
+    
+    if not IB_PRODUCTS_PATH.exists():
+        logger.error(f"Products file not found: {IB_PRODUCTS_PATH}")
         return
 
-    db_df = load_csv(CONTRACTS_DB_PATH)
-    # We need cookies from a logged-in session. 
-    # For now, we'll prompt the user or use a discovery script to get them.
-    print("This script requires valid IBKR session cookies.")
-    # Implementation of cookie extraction via Playwright would go here.
+    sync_instruments_from_csv(IB_PRODUCTS_PATH)
     
-    # Placeholder for client
-    client = IBKRPortalClient() 
+    scraped_today = [] if force else get_scraped_conids()
+    logger.info(f"Skipping {len(scraped_today)} instruments already scraped today.")
+
+    df = pd.read_csv(IB_PRODUCTS_PATH)
+    # Ensure conid is treated as string for consistency
+    df['conid'] = df['conid'].astype(str)
     
-    scraped_data = []
-    for _, row in tqdm(db_df.iterrows(), total=min(len(db_df), limit), desc="Scraping fundamentals"):
-        con_id = row['conId']
-        data = await client.get_etf_data(con_id)
-        if data:
-            # Merge with contract details
-            row_dict = row.to_dict()
-            full_data = {**row_dict, **data}
-            scraped_data.append(full_data)
-            
-        if len(scraped_data) >= 10: # Batch save
-            save_fundamentals(pd.DataFrame(scraped_data))
-            scraped_data = []
-            
-    if scraped_data:
-        save_fundamentals(pd.DataFrame(scraped_data))
+    # Filter for unique conids not already scraped today
+    all_conids = df['conid'].unique()
+    conids_to_scrape = [c for c in all_conids if c not in scraped_today]
+    
+    if limit:
+        conids_to_scrape = conids_to_scrape[start_index:start_index + limit]
+    else:
+        conids_to_scrape = conids_to_scrape[start_index:]
+
+    logger.info(f"Starting scrape for {len(conids_to_scrape)} instruments.")
+    
+    try:
+        async with scraper.session.get_client() as client:
+            pbar = tqdm(conids_to_scrape, desc="Scraping fundamentals")
+            for conid in pbar:
+                data = await scraper.scrape_conid(client, conid)
+                
+                if data == "__AUTH_ERROR__":
+                    logger.error("Stopping due to authentication error.")
+                    break
+                    
+                if data:
+                    scraper.save_data(conid, data)
+                
+                # Small delay to be polite
+                await asyncio.sleep(0.1)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(run_fundamentals_update())
+    import fire
+    fire.Fire(main)

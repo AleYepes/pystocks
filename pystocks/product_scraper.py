@@ -4,7 +4,6 @@ import pandas as pd
 from .config import IB_PRODUCTS_PATH
 import httpx
 from tqdm import tqdm
-import os
 
 async def fetch_api_direct(client, page_number, page_size=500, retries=5):
     url = "https://www.interactivebrokers.ie/webrest/search/products-by-filters"
