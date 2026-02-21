@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 from tqdm.asyncio import tqdm
 
@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 class FundamentalScraper:
     """Scrapes fundamental data from IBKR Portal API."""
     PERIODS_DESC = ["10Y", "5Y", "3Y", "1Y", "6M"]
+    # Hardcoded strategy informed by research_correlations sample (n=500).
+    FETCH_LOW_YIELD_ENDPOINTS = False
     
     def __init__(self, session=None):
         self.session = session or IBKRSession()
@@ -47,17 +49,69 @@ class FundamentalScraper:
             return None
 
     def _has_payload_data(self, data, kind):
+        """Heuristic check for actual content in response."""
         if not isinstance(data, dict):
             return False
+        # Normalize internal endpoint names used by scrape_conid.
+        kind_alias = {
+            "profile_and_fees": "profile",
+            "lipper_ratings": "lipper",
+            "dividends": "divs",
+            "morningstar": "mstar",
+            "ownership": "owner",
+            "sentiment": "sentiment",
+            "sentiment_search": "sma_search",
+        }
+        kind = kind_alias.get(kind, kind)
+
         checks = {
-            "perf": ["cumulative", "annualized", "risk", "statistic"],
+            "profile": ["fund_and_profile", "objective"],
+            "holdings": ["allocation_self", "top_10", "industry"],
+            "ratios": ["ratios", "zscore"],
+            "lipper": ["universes"],
+            "esg": ["content"],
+            "divs": ["history"], # 'industry_average' is often just peer data, we want 'history'
+            "mstar": ["summary", "commentary"],
+            "perf": ["cumulative", "annualized"],
             "risk": ["risk", "statistic", "performance"],
+            "owner": ["trade_log", "owners_types"],
+            "sentiment": ["smean", "sscore", "sbuzz"],
+            "sma_search": ["sentiment"],
         }
         for key in checks.get(kind, []):
-            value = data.get(key)
-            if isinstance(value, (list, dict)) and len(value) > 0:
+            if self._has_any_value(data.get(key)):
                 return True
         return False
+
+    def _has_any_value(self, value):
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (list, dict, tuple, set)):
+            return len(value) > 0
+        return True
+
+    def _landing_has_section_data(self, landing, section):
+        node = landing.get(section)
+        if not isinstance(node, dict):
+            return False
+        
+        # Special case for dividends: marker 1 means no data
+        if section == "dividends":
+            content = node.get("content", {})
+            if content.get("no_div_data_marker") == 1:
+                return False
+                
+        return self._has_any_value(node.get("data")) or self._has_any_value(node.get("content"))
+
+    def _build_sma_search_endpoint(self, conid):
+        # 1Y rolling window for historical sentiment bars.
+        to_dt = datetime.now(timezone.utc)
+        from_dt = datetime.fromtimestamp(to_dt.timestamp() - 365 * 24 * 3600, timezone.utc)
+        from_str = from_dt.strftime("%Y-%m-%d %H:%M")
+        to_str = to_dt.strftime("%Y-%m-%d %H:%M")
+        return f"sma/request?type=search&conid={conid}&from={from_str}&to={to_str}&bar_size=1D&tz=-60"
 
     async def fetch_with_period_fallback(self, client, conid, kind):
         """
@@ -78,81 +132,114 @@ class FundamentalScraper:
         return None, None
 
     async def scrape_conid(self, client, conid):
-        """Scrapes all fundamental data for a given conid."""
-        # Widgets to fetch via landing
+        """Scrapes fundamental data using a research-backed probabilistic strategy."""
         widgets = "objective,mstar,lipper_ratings,mf_key_ratios,risk_and_statistics,holdings,performance_and_peers,keyProfile,ownership,dividends,tear_sheet,news,fund_mstar,mf_esg,social_sentiment,securities_lending,sv,short_sale,ukuser"
-        
-        # We fetch:
-        # 1. landing: general overview, ratings, performance, etc.
-        # 2. mf_profile_and_fees: reports, expenses details, profile metadata
-        # 3. mf_holdings: full industry and country breakdowns
-        # 4. mf_ratios_fundamentals: key valuation and growth ratios
-        # 5. mf_lip_ratings: detailed Lipper ratings
-        # 6. impact/esg: Refinitiv ESG scores
-        # 7. dividends: Payout history
-        # 8. mstar/fund/detail: Morningstar pillars and analyst ratings
-        # 9. mf_performance: detailed returns with period fallback (10Y->...->6M)
-        # 10. mf_risks_stats: risk metrics with period fallback (10Y->...->6M)
-        # 11. ownership: Institutional and insider history
-        # 12. sma/request: Social media sentiment snapshot
-        fixed_tasks = [
-            self.fetch_endpoint(client, f"landing/{conid}?widgets={widgets}", conid),
-            self.fetch_endpoint(client, f"mf_profile_and_fees/{conid}?sustainability=UK&lang=en", conid),
-            self.fetch_endpoint(client, f"mf_holdings/{conid}", conid),
-            self.fetch_endpoint(client, f"mf_ratios_fundamentals/{conid}", conid),
-            self.fetch_endpoint(client, f"mf_lip_ratings/{conid}", conid),
-            self.fetch_endpoint(client, f"impact/esg/{conid}", conid),
-            self.fetch_endpoint(client, f"dividends/{conid}", conid),
-            self.fetch_endpoint(client, f"mstar/fund/detail?conid={conid}", conid),
-            self.fetch_endpoint(client, f"ownership/{conid}", conid),
-            self.fetch_endpoint(client, f"sma/request?type=tick&conid={conid}", conid)
-        ]
-        
-        period_tasks = [
-            self.fetch_with_period_fallback(client, conid, "perf"),
-            self.fetch_with_period_fallback(client, conid, "risk"),
-        ]
 
-        fixed_results, period_results = await asyncio.gather(
-            asyncio.gather(*fixed_tasks),
-            asyncio.gather(*period_tasks),
-        )
-        
-        if "__AUTH_ERROR__" in fixed_results:
+        # 1) Fetch landing first as the primary completeness probe.
+        landing_data = await self.fetch_endpoint(client, f"landing/{conid}?widgets={widgets}", conid)
+        if landing_data == "__AUTH_ERROR__":
             return "__AUTH_ERROR__"
-        if any(result[0] == "__AUTH_ERROR__" for result in period_results):
-            return "__AUTH_ERROR__"
-
-        perf_data, perf_period = period_results[0]
-        risk_data, risk_period = period_results[1]
-            
-        (landing_data, profile_data, holdings_data, ratios_data, lip_data, 
-         esg_data, div_data, mstar_data, owner_data, sma_data) = fixed_results
-        
-        if not any([landing_data, profile_data, holdings_data, ratios_data, 
-                    lip_data, esg_data, div_data, mstar_data, perf_data, 
-                    risk_data, owner_data, sma_data]):
+        if not isinstance(landing_data, dict):
             return None
-            
+
+        # 2) Feature Extraction (probabilistic predictors)
+        has_objective = self._landing_has_section_data(landing_data, "objective")
+        has_top10 = self._landing_has_section_data(landing_data, "top10")
+        has_ratios = self._landing_has_section_data(landing_data, "mf_key_ratios")
+        has_overall_ratings = self._landing_has_section_data(landing_data, "overall_ratings")
+        has_mstar = self._landing_has_section_data(landing_data, "mstar")
+        has_perf = self._landing_has_section_data(landing_data, "cumulative_performace")
+        has_risk = self._landing_has_section_data(landing_data, "risk_statistics")
+        has_dividends = self._landing_has_section_data(landing_data, "dividends")
+        has_ownership = self._landing_has_section_data(landing_data, "ownership")
+
+        # 3) Determine targeted tasks
+        # Always high-yield baseline
+        fixed_task_items = [
+            ("profile_and_fees", self.fetch_endpoint(client, f"mf_profile_and_fees/{conid}?sustainability=UK&lang=en", conid))
+        ]
+
+        # Holdings is effectively always present in sample (100% yield), so keep it unconditional.
+        fixed_task_items.append(("holdings", self.fetch_endpoint(client, f"mf_holdings/{conid}", conid)))
+
+        # Ratios is high-yield when top10/objective is present.
+        if has_top10 or has_objective:
+            fixed_task_items.append(("ratios", self.fetch_endpoint(client, f"mf_ratios_fundamentals/{conid}", conid)))
+
+        # Lipper Ratings (1.0 Lift from overall_ratings)
+        if has_overall_ratings:
+            fixed_task_items.append(("lipper_ratings", self.fetch_endpoint(client, f"mf_lip_ratings/{conid}", conid)))
+
+        # Dividends
+        if has_dividends:
+            fixed_task_items.append(("dividends", self.fetch_endpoint(client, f"dividends/{conid}", conid)))
+
+        # Morningstar: unconditional (high yield with low precision penalty).
+        fixed_task_items.append(("morningstar", self.fetch_endpoint(client, f"mstar/fund/detail?conid={conid}", conid)))
+
+        # Sentiment: use search endpoint (higher yield than tick), gated by overall ratings.
+        if has_overall_ratings:
+            fixed_task_items.append(("sentiment_search", self.fetch_endpoint(client, self._build_sma_search_endpoint(conid), conid)))
+
+        # Rare, mostly low-yield endpoints are opt-in.
+        if self.FETCH_LOW_YIELD_ENDPOINTS and has_ownership:
+            fixed_task_items.append(("ownership", self.fetch_endpoint(client, f"ownership/{conid}", conid)))
+            fixed_task_items.append(("sentiment", self.fetch_endpoint(client, f"sma/request?type=tick&conid={conid}", conid)))
+        if self.FETCH_LOW_YIELD_ENDPOINTS:
+            fixed_task_items.append(("esg", self.fetch_endpoint(client, f"impact/esg/{conid}", conid)))
+
+        # Performance & Risk fallback tasks
+        period_task_items = []
+        if has_perf or has_objective:
+            period_task_items.append(("performance", self.fetch_with_period_fallback(client, conid, "perf")))
+        if has_risk or has_objective:
+            period_task_items.append(("risk_stats", self.fetch_with_period_fallback(client, conid, "risk")))
+
+        # 4) Execute determined tasks
+        fixed_results = {}
+        if fixed_task_items:
+            names, tasks = zip(*fixed_task_items)
+            values = await asyncio.gather(*tasks)
+            fixed_results = dict(zip(names, values))
+
+        period_results = {}
+        if period_task_items:
+            names, tasks = zip(*period_task_items)
+            values = await asyncio.gather(*tasks)
+            period_results = dict(zip(names, values))
+
+        if "__AUTH_ERROR__" in fixed_results.values() or any(r[0] == "__AUTH_ERROR__" for r in period_results.values()):
+            return "__AUTH_ERROR__"
+
+        # 5) Composition
         combined_data = {
             "conid": conid,
             "scraped_at": datetime.now().isoformat(),
             "landing": landing_data,
-            "profile_and_fees": profile_data,
-            "holdings": holdings_data,
-            "ratios": ratios_data,
-            "lipper_ratings": lip_data,
-            "esg": esg_data,
-            "dividends": div_data,
-            "morningstar": mstar_data,
-            "performance": perf_data,
-            "performance_period": perf_period,
-            "risk_stats": risk_data,
-            "risk_stats_period": risk_period,
-            "ownership": owner_data,
-            "sentiment": sma_data
+            "probe": {
+                "has_objective": has_objective,
+                "has_top10": has_top10,
+                "has_ratios": has_ratios,
+                "has_overall_ratings": has_overall_ratings,
+                "has_mstar": has_mstar,
+                "has_perf": has_perf,
+                "has_risk": has_risk,
+                "has_dividends": has_dividends,
+                "has_ownership": has_ownership,
+                "fetch_low_yield_endpoints": self.FETCH_LOW_YIELD_ENDPOINTS,
+            }
         }
         
+        # Merge results, only if they have actual payload data
+        for name, data in fixed_results.items():
+            if self._has_payload_data(data, name) or name == "profile_and_fees":
+                combined_data[name] = data
+        
+        for name, (data, period) in period_results.items():
+            if data:
+                combined_data[name] = data
+                combined_data[f"{name}_period"] = period
+                
         return combined_data
 
     def save_data(self, conid, data):
