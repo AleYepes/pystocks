@@ -1,54 +1,44 @@
-# Discovered API Resources Map: Tiered Taxonomy
+# Discovered API Resources Map (Operational)
 
-This document maps IBKR Portal API endpoints to their functional roles in the quantitative pipeline and their operational handling requirements.
+This map reflects current empirical behavior in the ETF universe and the default fetch strategy in `pystocks/fundamentals.py`.
 
-## Tier 1: Daily Factor Snapshots
-**Handling**: Fetch daily. Store as JSON snapshots.
-**Operational Cost**: Low (~10-50KB per instrument).
-**Analysis Value**: Provides "Cross-Sectional" features for the current trading day.
+## Tier A: Default Daily Snapshot (High Value / High Yield)
 
-| Functional Group | Endpoint | Key Quantitative Features |
+| Endpoint | Default | Purpose |
 | --- | --- | --- |
-| **Valuation** | `mf_ratios_fundamentals` | P/E, P/S, P/B, Dividend Yield, Z-Scores. |
-| **Composition** | `mf_holdings` | Sector (Industry) weights, Country exposure, Currency exposure. |
-| **Profile** | `mf_profile_and_fees` | Expense Ratio (TER), Management Fees, Domicile (Tax factor). |
-| **ESG** | `impact/esg` | Refinitiv ESG scores, Carbon Risk, Social/Governance pillars. |
-| **Identity** | `landing` | Benchmark mapping, Fund Objective, Asset Class. |
+| `landing` | Yes | Primary teaser probe and baseline metadata |
+| `mf_profile_and_fees` | Yes | Fund profile, objective, fees, reports |
+| `mf_holdings` | Yes | Sector/country/currency allocations |
+| `dividends` | Yes | Income history or no-dividend summary |
+| `mstar/fund/detail` | Yes | Medalist/pillar ratings and commentary |
+| `mf_ratios_fundamentals` | Conditional | Valuation/growth ratios and z-scores |
+| `mf_lip_ratings` | Conditional | Lipper analyst-style ratings |
+| `mf_performance` | Conditional + fallback | Returns metrics across available horizon |
+| `mf_risks_stats` | Conditional + fallback | Risk/statistics metrics across available horizon |
+| `sma/request?type=search` | Conditional | Historical sentiment bars (1Y window) |
 
-## Tier 2: Periodic Historical Metrics
-**Handling**: Fetch monthly/quarterly. Store as compressed time-series.
-**Operational Cost**: Medium (~100-500KB per instrument).
-**Analysis Value**: Provides "Longitudinal" features (Momentum, Stability, Trends).
+## Tier B: Optional / Targeted (Low Yield in Current Universe)
 
-| Functional Group | Endpoint | Key Quantitative Features |
+| Endpoint | Default | Typical Issue |
 | --- | --- | --- |
-| **Momentum** | `mf_performance` | 1Y/3Y/5Y Cumulative & Annualized returns vs. Benchmark. |
-| **Risk** | `mf_risks_stats` | Sharpe Ratio, Std Dev (Volatility), VaR, Max Drawdown. |
-| **Analyst Sent.** | `mf_lip_ratings` | Lipper ratings (Total Return, Consistency, Preservation). |
-| **Analyst Sent.** | `mstar/fund/detail`| Morningstar Medalist rating, Pillar scores (People, Process). |
-| **Income** | `dividends` | Historical dividend growth rates, payout frequency. |
-| **Flows** | `ownership` | Institutional vs. Insider ownership trends, Trade logs. |
+| `impact/esg` | No | Frequent 400, near-zero useful payload |
+| `ownership` | No | Frequent 404 |
+| `sma/request?type=tick` | No | Frequent 404, low useful payload |
+| `sma/request?type=high_low` | No | Low-to-moderate yield, not essential for baseline |
 
-## Tier 3: High-Resolution Market Data
-**Handling**: Fetch on-demand/One-time. Store as partitioned Parquet.
-**Operational Cost**: High (1MB+ per instrument).
-**Analysis Value**: Provides raw inputs for alpha generation and model training.
+## Fallback Strategy
 
-| Functional Group | Endpoint | Usage Strategy |
-| --- | --- | --- |
-| **Price/Volume** | `chart?period=MAX` | Primary input for all price-based regression factors. |
-| **Market Dynamics**| `lending` | Short interest proxy (Utilization, Lender Depth). |
-| **Cost-of-Trade** | `studyLine?source=FeeRate`| Borrow fee history (Cost of shorting/Carry factor). |
-| **Social Sent.** | `sma/request` | Sentiment buzz/volume (High-frequency alpha signal). |
+For `mf_performance` and `mf_risks_stats`, periods are tried in descending order:
 
----
+`10Y -> 5Y -> 3Y -> 1Y -> 6M`
 
-## Analysis Workflow: Mapping Features to Models
+First useful payload is kept; selected period is saved.
 
-| Factor Category | Source Tier | Pipeline Implementation |
-| --- | --- | --- |
-| **Value** | Tier 1 | PIT join of `mf_ratios_fundamentals` to Training Window. |
-| **Quality** | Tier 1 & 2 | Combine `zscores` with Lipper `Consistency` ratings. |
-| **Momentum** | Tier 2 & 3 | Extract periodic returns from `mf_performance` or `chart`. |
-| **Sentiment** | Tier 2 & 3 | Join `sma/request` scores with Morningstar analyst pillars. |
-| **Risk-Adjusted** | Tier 2 | Use `Sharpe` and `VaR` from `mf_risks_stats` for portfolio optimization. |
+## Policy Source of Truth
+
+Current policy was calibrated from `research_correlations.py` outputs:
+
+- `research_yields.csv`
+- `research_correlations_summary.csv`
+
+Most recent large run used `sample_size=500`.
