@@ -13,7 +13,7 @@ async def discover_endpoints(con_id="207825419"):
     print("Please log in to IBKR when the browser opens and navigate to an ETF fundamentals page.")
     
     async with async_playwright() as p:
-        browser = await async_playwright().start()
+        browser = await p.chromium.launch(headless=False)
         # Using a persistent context to keep login session if needed
         context = await browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
         
