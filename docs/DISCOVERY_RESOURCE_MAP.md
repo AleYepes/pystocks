@@ -38,7 +38,31 @@ First useful payload is kept; selected period is saved.
 
 Current policy was calibrated from `research_correlations.py` outputs:
 
-- `research_yields.csv`
-- `research_correlations_summary.csv`
+- `data/research/research_yields.csv`
+- `data/research/research_correlations_summary.csv`
 
 Most recent large run used `sample_size=500`.
+
+## Discovery Reconciliation (Feb 21, 2026)
+
+Manual discovery logs (`166` JSON captures, ~`4.6 MB`) were reviewed against:
+
+- `pystocks/fundamentals.py`
+- `docs/3.IBKR_PORTAL_API.md`
+- `docs/5.ibkr_json_examples.md`
+
+### Accounted and Already Covered
+
+- Core fundamentals endpoints (`landing`, `mf_profile_and_fees`, `mf_holdings`, `mf_ratios_fundamentals`, `mf_lip_ratings`, `dividends`, `mf_performance`, `mf_risks_stats`).
+- Morningstar endpoint (`mstar/fund/detail` via captured `detail?conid=...` shape).
+- Sentiment endpoints (`sma/request` variants: `search`, `tick`, `high_low`).
+- Optional low-yield endpoints (`impact/esg`, `ownership`) already classified as opt-in/off-by-default.
+
+### Accounted but Excluded from Daily Fundamentals Snapshot
+
+- UI/session plumbing: `handshake`, `cp`, `categories`, `labels`, `layouts_templates`, `list`, `metadata`, `authAdd`.
+- Account/position UX: `position`, `canTradeRecurringInvestment`, `recurringInvestment`, quote lookup (`?field_names=...`), `assetClasses`, `companies`.
+- Lending/short-sale specialized data: `lending`, `widget`, `studyLine`, `lastLine`.
+- Large chart series payloads (`{conid}?chart_period=MAX/3M`) not required for current fundamentals factor pipeline.
+
+No additional endpoint family from discovery was promoted into default daily fundamentals fetch policy in this pass.

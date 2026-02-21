@@ -242,7 +242,7 @@ class FundamentalScraper:
                 
         return combined_data
 
-    def save_data(self, conid, data):
+    def save_data(self, conid, data, pretty=False):
         """Saves scraped data to a JSON file."""
         conid_dir = self.fundamentals_dir / str(conid)
         conid_dir.mkdir(exist_ok=True)
@@ -251,7 +251,10 @@ class FundamentalScraper:
         file_path = conid_dir / f"{date_str}.json"
         
         with open(file_path, "w") as f:
-            json.dump(data, f, indent=2)
+            if pretty:
+                json.dump(data, f, indent=2)
+            else:
+                json.dump(data, f, separators=(",", ":"))
 
 def get_scraped_conids():
     """Returns a list of conids that were already successfully scraped today."""
@@ -261,7 +264,7 @@ def get_scraped_conids():
         cursor.execute("SELECT conid FROM instruments WHERE last_scraped_fundamentals = ?", (today,))
         return [row[0] for row in cursor.fetchall()]
 
-async def main(limit=None, start_index=0, force=False):
+async def main(limit=None, start_index=0, force=False, pretty_json=False):
     scraper = FundamentalScraper()
     
     if not IB_PRODUCTS_PATH.exists():
@@ -299,7 +302,7 @@ async def main(limit=None, start_index=0, force=False):
                     break
                     
                 if data:
-                    scraper.save_data(conid, data)
+                    scraper.save_data(conid, data, pretty=pretty_json)
                 
                 # Small delay to be polite
                 await asyncio.sleep(0.1)

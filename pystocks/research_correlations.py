@@ -5,6 +5,7 @@ import pandas as pd
 from tqdm.asyncio import tqdm
 from .session import IBKRSession
 from .database import get_connection
+from .config import RESEARCH_YIELDS_PATH, RESEARCH_CORR_SUMMARY_PATH
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -278,8 +279,8 @@ async def main(sample_size=50, sleep_s=0.25, random_sample=True):
 
     # Raw output per conid
     df = pd.DataFrame(rows)
-    df.to_csv("research_yields.csv", index=False)
-    logger.info("Saved raw results to research_yields.csv")
+    df.to_csv(RESEARCH_YIELDS_PATH, index=False)
+    logger.info(f"Saved raw results to {RESEARCH_YIELDS_PATH}")
 
     # Correlation-style summary: P(endpoint_has_data | landing_section_has_data)
     feature_cols = [c for c in df.columns if c.startswith("landing_")]
@@ -300,8 +301,8 @@ async def main(sample_size=50, sleep_s=0.25, random_sample=True):
         return
 
     summary_df = pd.DataFrame(corr_rows).sort_values(["target", "lift"], ascending=[True, False])
-    summary_df.to_csv("research_correlations_summary.csv", index=False)
-    logger.info("Saved summary to research_correlations_summary.csv")
+    summary_df.to_csv(RESEARCH_CORR_SUMMARY_PATH, index=False)
+    logger.info(f"Saved summary to {RESEARCH_CORR_SUMMARY_PATH}")
 
     print("--- Endpoint Yield Rates ---")
     for target in target_cols:
