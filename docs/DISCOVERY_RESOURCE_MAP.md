@@ -9,7 +9,7 @@ This map reflects current empirical behavior in the ETF universe and the default
 | `landing` | Yes | Primary teaser probe and baseline metadata |
 | `mf_profile_and_fees` | Yes | Fund profile, objective, fees, reports |
 | `mf_holdings` | Yes | Sector/country/currency allocations |
-| `dividends` | Yes | Income history or no-dividend summary |
+| `dividends` | Conditional | Income history or no-dividend summary |
 | `mstar/fund/detail` | Yes | Medalist/pillar ratings and commentary |
 | `mf_ratios_fundamentals` | Conditional | Valuation/growth ratios and z-scores |
 | `mf_lip_ratings` | Conditional | Lipper analyst-style ratings |
@@ -49,7 +49,7 @@ Manual discovery logs (`166` JSON captures, ~`4.6 MB`) were reviewed against:
 
 - `pystocks/fundamentals.py`
 - `docs/3.IBKR_PORTAL_API.md`
-- `docs/5.ibkr_json_examples.md`
+- `docs/ibkr_json_examples.md`
 
 ### Accounted and Already Covered
 
