@@ -11,3 +11,10 @@ scikit-learn
 fuzzywuzzy
 python-Levenshtein
 networkx
+duckdb
+pyarrow
+polars
+zstandard
+duckdb
+pyarrow
+polars

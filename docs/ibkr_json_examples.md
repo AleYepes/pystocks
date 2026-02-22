@@ -1,4 +1,4 @@
-exampl page URL for SPY (conId 756733):
+example page URL for SPY (conId 756733):
 
 https://www.interactivebrokers.ie/portal/?loginType=1&action=ACCT_MGMT_MAIN&clt=0&RL=1&locale=en_US#/quote/756733/fundamentals/landing?u=false&wb=0&exchange=ARCA&SESSIONID=6997f108.0000021f&impact_settings=true&supportsLeaf=true&widgets=objective,mstar,lipper_ratings,mf_key_ratios,risk_and_statistics,holdings,performance_and_peers,keyProfile,ownership,dividends,tear_sheet,news,fund_mstar,mf_esg,social_sentiment,securities_lending,sv,short_sale,ukuser
 

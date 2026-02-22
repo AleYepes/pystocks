@@ -1,13 +1,17 @@
 import asyncio
 import json
 import logging
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import parse_qs
 import pandas as pd
 from tqdm.asyncio import tqdm
 
-from .config import DATA_DIR, IB_PRODUCTS_PATH, FUNDAMENTALS_DIR, SQLITE_DB_PATH
+from .config import IB_PRODUCTS_PATH, FUNDAMENTALS_DIR, RESEARCH_DIR
 from .session import IBKRSession
 from .database import init_db, log_scrape, sync_instruments_from_csv, get_connection
+from .fundamentals_store import FundamentalsStore
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -18,13 +22,78 @@ class FundamentalScraper:
     PERIODS_DESC = ["10Y", "5Y", "3Y", "1Y", "6M"]
     # Hardcoded strategy informed by research_correlations sample (n=500).
     FETCH_LOW_YIELD_ENDPOINTS = False
+    RESULT_ENDPOINT_FAMILIES = {
+        "profile_and_fees": "mf_profile_and_fees",
+        "holdings": "mf_holdings",
+        "ratios": "mf_ratios_fundamentals",
+        "lipper_ratings": "mf_lip_ratings",
+        "dividends": "dividends",
+        "morningstar": "mstar/fund/detail",
+        "sentiment_search": "sma/request?type=search",
+        "ownership": "ownership",
+        "sentiment": "sma/request?type=tick",
+        "esg": "impact/esg",
+        "performance": "mf_performance",
+        "risk_stats": "mf_risks_stats",
+    }
     
     def __init__(self, session=None):
         self.session = session or IBKRSession()
         self.base_url = "https://www.interactivebrokers.ie"
         self.fundamentals_dir = FUNDAMENTALS_DIR
         self.fundamentals_dir.mkdir(parents=True, exist_ok=True)
+        self.research_dir = RESEARCH_DIR
+        self.research_dir.mkdir(parents=True, exist_ok=True)
+        self.store = FundamentalsStore()
+        self.telemetry = {
+            "run_started_at": datetime.now(timezone.utc).isoformat(),
+            "endpoint_calls": Counter(),
+            "endpoint_useful_payloads": Counter(),
+            "status_codes": defaultdict(Counter),
+        }
         init_db()
+
+    def _endpoint_family(self, endpoint):
+        endpoint = endpoint.lstrip("/")
+        if endpoint.startswith("fundamentals/"):
+            endpoint = endpoint[len("fundamentals/"):]
+
+        if endpoint.startswith("landing/"):
+            return "landing"
+        if endpoint.startswith("mf_profile_and_fees/"):
+            return "mf_profile_and_fees"
+        if endpoint.startswith("mf_holdings/"):
+            return "mf_holdings"
+        if endpoint.startswith("mf_ratios_fundamentals/"):
+            return "mf_ratios_fundamentals"
+        if endpoint.startswith("mf_lip_ratings/"):
+            return "mf_lip_ratings"
+        if endpoint.startswith("dividends/"):
+            return "dividends"
+        if endpoint.startswith("mstar/fund/detail"):
+            return "mstar/fund/detail"
+        if endpoint.startswith("mf_performance/"):
+            return "mf_performance"
+        if endpoint.startswith("mf_risks_stats/"):
+            return "mf_risks_stats"
+        if endpoint.startswith("ownership/"):
+            return "ownership"
+        if endpoint.startswith("impact/esg/"):
+            return "impact/esg"
+        if endpoint.startswith("sma/request?"):
+            query = endpoint.split("?", 1)[1] if "?" in endpoint else ""
+            req_type = parse_qs(query).get("type", ["unknown"])[0]
+            return f"sma/request?type={req_type}"
+        return endpoint.split("?")[0]
+
+    def _record_endpoint_status(self, endpoint, status_code):
+        family = self._endpoint_family(endpoint)
+        self.telemetry["endpoint_calls"][family] += 1
+        self.telemetry["status_codes"][family][str(status_code)] += 1
+
+    def _record_useful_payload(self, endpoint):
+        family = self._endpoint_family(endpoint)
+        self.telemetry["endpoint_useful_payloads"][family] += 1
         
     async def fetch_endpoint(self, client, endpoint, conid):
         """Fetches data from a specific endpoint and logs it."""
@@ -35,6 +104,7 @@ class FundamentalScraper:
         try:
             response = await client.get(url)
             log_scrape(conid, endpoint, response.status_code)
+            self._record_endpoint_status(endpoint, response.status_code)
             
             if response.status_code == 200:
                 return response.json()
@@ -46,6 +116,7 @@ class FundamentalScraper:
         except Exception as e:
             logger.error(f"Error fetching {url}: {e}")
             log_scrape(conid, endpoint, 0, str(e))
+            self._record_endpoint_status(endpoint, 0)
             return None
 
     def _has_payload_data(self, data, kind):
@@ -141,6 +212,8 @@ class FundamentalScraper:
             return "__AUTH_ERROR__"
         if not isinstance(landing_data, dict):
             return None
+        if self._has_any_value(landing_data):
+            self._record_useful_payload("landing")
 
         # 2) Feature Extraction (probabilistic predictors)
         has_objective = self._landing_has_section_data(landing_data, "objective")
@@ -232,13 +305,17 @@ class FundamentalScraper:
         
         # Merge results, only if they have actual payload data
         for name, data in fixed_results.items():
-            if self._has_payload_data(data, name) or name == "profile_and_fees":
+            has_payload = self._has_payload_data(data, name)
+            include_payload = has_payload or (name == "profile_and_fees" and isinstance(data, dict))
+            if include_payload:
                 combined_data[name] = data
+                self._record_useful_payload(self.RESULT_ENDPOINT_FAMILIES.get(name, name))
         
         for name, (data, period) in period_results.items():
             if data:
                 combined_data[name] = data
                 combined_data[f"{name}_period"] = period
+                self._record_useful_payload(self.RESULT_ENDPOINT_FAMILIES.get(name, name))
                 
         return combined_data
 
@@ -256,6 +333,66 @@ class FundamentalScraper:
             else:
                 json.dump(data, f, separators=(",", ":"))
 
+    def save_telemetry(
+        self,
+        total_targeted,
+        processed_conids,
+        saved_snapshots,
+        inserted_events,
+        duplicate_events,
+        auth_retries,
+        aborted,
+        output_path=None,
+    ):
+        endpoint_calls = dict(sorted(self.telemetry["endpoint_calls"].items()))
+        endpoint_useful = dict(sorted(self.telemetry["endpoint_useful_payloads"].items()))
+        status_codes = {}
+        for endpoint, counts in self.telemetry["status_codes"].items():
+            status_codes[endpoint] = dict(sorted(counts.items(), key=lambda kv: kv[0]))
+
+        endpoint_summary = []
+        for endpoint, call_count in endpoint_calls.items():
+            useful_count = endpoint_useful.get(endpoint, 0)
+            endpoint_summary.append(
+                {
+                    "endpoint": endpoint,
+                    "call_count": call_count,
+                    "useful_payload_count": useful_count,
+                    "useful_payload_rate": (useful_count / call_count) if call_count else 0.0,
+                    "status_codes": status_codes.get(endpoint, {}),
+                }
+            )
+
+        payload = {
+            "run_started_at": self.telemetry["run_started_at"],
+            "run_finished_at": datetime.now(timezone.utc).isoformat(),
+            "run_stats": {
+                "total_targeted_conids": total_targeted,
+                "processed_conids": processed_conids,
+                "saved_snapshots": saved_snapshots,
+                "inserted_events": inserted_events,
+                "duplicate_events": duplicate_events,
+                "auth_retries": auth_retries,
+                "aborted": aborted,
+            },
+            "endpoint_summary": endpoint_summary,
+        }
+
+        if output_path:
+            telemetry_path = Path(output_path)
+            telemetry_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            telemetry_path = self.research_dir / f"fundamentals_run_telemetry_{ts}.json"
+
+        latest_path = self.research_dir / "fundamentals_run_telemetry_latest.json"
+        with open(telemetry_path, "w") as f:
+            json.dump(payload, f, indent=2)
+        with open(latest_path, "w") as f:
+            json.dump(payload, f, indent=2)
+
+        return telemetry_path, latest_path
+
 def get_scraped_conids():
     """Returns a list of conids that were already successfully scraped today."""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -264,7 +401,17 @@ def get_scraped_conids():
         cursor.execute("SELECT conid FROM instruments WHERE last_scraped_fundamentals = ?", (today,))
         return [row[0] for row in cursor.fetchall()]
 
-async def main(limit=None, start_index=0, force=False, pretty_json=False):
+async def main(
+    limit=None,
+    start_index=0,
+    force=False,
+    pretty_json=False,
+    write_legacy_json=False,
+    max_auth_retries=2,
+    reauth_headless=False,
+    refresh_duckdb_at_end=True,
+    telemetry_output=None,
+):
     scraper = FundamentalScraper()
     
     if not IB_PRODUCTS_PATH.exists():
@@ -290,24 +437,88 @@ async def main(limit=None, start_index=0, force=False, pretty_json=False):
         conids_to_scrape = conids_to_scrape[start_index:]
 
     logger.info(f"Starting scrape for {len(conids_to_scrape)} instruments.")
-    
+    total_targeted = len(conids_to_scrape)
+    processed_conids = 0
+    saved_snapshots = 0
+    inserted_events = 0
+    duplicate_events = 0
+    auth_retries = 0
+    aborted = False
+
+    pbar = tqdm(total=total_targeted, desc="Scraping fundamentals")
     try:
-        async with scraper.session.get_client() as client:
-            pbar = tqdm(conids_to_scrape, desc="Scraping fundamentals")
-            for conid in pbar:
-                data = await scraper.scrape_conid(client, conid)
-                
-                if data == "__AUTH_ERROR__":
-                    logger.error("Stopping due to authentication error.")
-                    break
-                    
-                if data:
-                    scraper.save_data(conid, data, pretty=pretty_json)
-                
-                # Small delay to be polite
-                await asyncio.sleep(0.1)
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        while processed_conids < total_targeted:
+            needs_reauth = False
+            try:
+                async with scraper.session.get_client() as client:
+                    while processed_conids < total_targeted:
+                        conid = conids_to_scrape[processed_conids]
+                        data = await scraper.scrape_conid(client, conid)
+
+                        if data == "__AUTH_ERROR__":
+                            logger.warning(f"Authentication expired while scraping conid={conid}.")
+                            needs_reauth = True
+                            break
+
+                        if data:
+                            store_result = scraper.store.persist_combined_snapshot(
+                                data,
+                                refresh_duckdb=False,
+                            )
+                            inserted_events += int(store_result.get("inserted_events", 0))
+                            duplicate_events += int(store_result.get("duplicate_events", 0))
+                            if write_legacy_json:
+                                scraper.save_data(conid, data, pretty=pretty_json)
+                            saved_snapshots += 1
+
+                        processed_conids += 1
+                        pbar.update(1)
+                        await asyncio.sleep(0.1)
+            except FileNotFoundError as e:
+                logger.warning(str(e))
+                needs_reauth = True
+            except Exception as e:
+                logger.error(f"Unexpected error: {e}")
+                aborted = True
+                break
+
+            if not needs_reauth:
+                break
+
+            if auth_retries >= max_auth_retries:
+                logger.error(f"Exceeded maximum reauthentication attempts ({max_auth_retries}).")
+                aborted = True
+                break
+
+            auth_retries += 1
+            logger.info(f"Reauth attempt {auth_retries}/{max_auth_retries} starting.")
+            reauthed = await scraper.session.reauthenticate(headless=reauth_headless)
+            if not reauthed:
+                logger.error("Reauthentication failed.")
+                aborted = True
+                break
+    finally:
+        pbar.close()
+        if refresh_duckdb_at_end:
+            try:
+                refresh_result = scraper.store.refresh_duckdb_views()
+                logger.info(f"Refreshed DuckDB views: {refresh_result}")
+            except Exception as e:
+                logger.error(f"Failed refreshing DuckDB views: {e}")
+
+        telemetry_path, latest_path = scraper.save_telemetry(
+            total_targeted=total_targeted,
+            processed_conids=processed_conids,
+            saved_snapshots=saved_snapshots,
+            inserted_events=inserted_events,
+            duplicate_events=duplicate_events,
+            auth_retries=auth_retries,
+            aborted=aborted,
+            output_path=telemetry_output,
+        )
+        logger.info(f"Saved run telemetry to {telemetry_path}")
+        if telemetry_path != latest_path:
+            logger.info(f"Updated latest telemetry pointer at {latest_path}")
 
 if __name__ == "__main__":
     import fire
