@@ -6,78 +6,118 @@ from .config import SESSION_STATE_PATH
 
 class IBKRSession:
     """Manages an authenticated session for the IBKR Client Portal."""
-    DASHBOARD_SELECTORS = [
-        ".dashboard-root",
-        "[data-testid='dashboard-root']",
-        "[data-testid='dashboard']",
-        "#dashboard-root",
-        ".cp-home-page",
-        ".main-content",
-        "[class*='dashboard']",
-    ]
-
     def __init__(self, state_path=SESSION_STATE_PATH):
         self.state_path = state_path
         self.portal_url = "https://www.interactivebrokers.ie/portal/"
+        self.base_url = "https://www.interactivebrokers.ie"
+        self._headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://www.interactivebrokers.ie/portal/",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        self._auth_check_endpoints = [
+            # Prefer lightweight authenticated endpoints.
+            "/tws.proxy/portfolio/accounts",
+            "/tws.proxy/iserver/auth/status",
+            "/tws.proxy/fundamentals/landing/756733?widgets=objective",
+        ]
 
-    async def _wait_for_authenticated_portal(self, page, timeout_ms=180000):
+    def _load_state(self):
+        if not self.state_path.exists():
+            return None
+        with open(self.state_path, "r") as f:
+            return json.load(f)
+
+    def _cookies_from_state(self, state):
+        cookies = {}
+        for cookie in (state or {}).get("cookies", []):
+            name = cookie.get("name")
+            value = cookie.get("value")
+            if name and value is not None:
+                cookies[name] = value
+        return cookies
+
+    async def _validate_state_payload(self, state, timeout_s=20.0):
         """
-        Waits for a post-login portal state using URL + fallback selectors.
-        Returns True on success, False on timeout.
+        Validates a storage-state payload by making authenticated API calls.
+        Returns True only when at least one endpoint responds with a valid 200 payload.
         """
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + (timeout_ms / 1000.0)
+        if not state:
+            return False
+        cookies = self._cookies_from_state(state)
+        if not cookies:
+            return False
 
-        while loop.time() < deadline:
-            # Any authenticated portal route is acceptable.
-            if "/portal/" in page.url and "login" not in page.url.lower():
-                for selector in self.DASHBOARD_SELECTORS:
-                    try:
-                        handle = await page.query_selector(selector)
-                        if handle is not None:
-                            return True
-                    except Exception:
-                        continue
-
-                # Fallback if selector contract changed:
-                # accept portal route when login form is no longer present.
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            cookies=cookies,
+            headers=self._headers,
+            timeout=timeout_s,
+        ) as client:
+            for endpoint in self._auth_check_endpoints:
                 try:
-                    login_password = await page.query_selector("input[type='password']")
-                    if login_password is None:
-                        return True
+                    response = await client.get(endpoint)
                 except Exception:
-                    pass
+                    continue
 
-            await asyncio.sleep(1)
+                if response.status_code != 200:
+                    continue
+
+                try:
+                    payload = response.json()
+                except Exception:
+                    continue
+
+                if payload is None:
+                    continue
+                if isinstance(payload, (dict, list)) and len(payload) == 0:
+                    continue
+                return True
 
         return False
 
-    async def login(self, headless=False, timeout_ms=180000):
+    async def validate_auth_state(self, timeout_s=20.0):
+        """
+        Validates stored auth state by making authenticated API calls.
+        """
+        state = self._load_state()
+        return await self._validate_state_payload(state, timeout_s=timeout_s)
+
+    async def login(self, headless=False, timeout_ms=180000, force_browser=False):
         """
         Launches a browser and waits for the user to log in manually.
         Once the portal home is reached, it saves the session state.
         """
+        if self.state_path.exists() and not force_browser:
+            is_valid = await self.validate_auth_state()
+            if is_valid:
+                print(f"Existing session state is still valid: {self.state_path}")
+                return True
+
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=headless)
-            # Load existing state if it exists
-            if self.state_path.exists():
-                context = await browser.new_context(storage_state=self.state_path)
-            else:
-                context = await browser.new_context()
+            # If state is stale, use a fresh context to avoid stale-cookie UI loops.
+            context = await browser.new_context()
 
             page = await context.new_page()
             await page.goto(self.portal_url, wait_until="domcontentloaded")
+            print("Browser opened. Complete login in the IBKR window.")
 
             try:
-                is_ready = await self._wait_for_authenticated_portal(page, timeout_ms=timeout_ms)
-                if not is_ready:
-                    print("Login timed out before authenticated dashboard state was detected.")
-                    return False
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + (timeout_ms / 1000.0)
 
-                # Save storage state (cookies + local storage) after authenticated route is observed.
-                await context.storage_state(path=self.state_path)
-                print(f"Login successful. Session state saved to {self.state_path}")
-                return True
+                while loop.time() < deadline:
+                    state = await context.storage_state()
+                    is_valid = await self._validate_state_payload(state, timeout_s=10.0)
+                    if is_valid:
+                        await context.storage_state(path=self.state_path)
+                        print(f"Login successful. Session state saved to {self.state_path}")
+                        return True
+                    await asyncio.sleep(2)
+
+                print("Login timed out before authenticated API state was detected.")
+                return False
             except Exception as e:
                 print(f"Login failed or timed out: {e}")
                 return False
@@ -89,29 +129,19 @@ class IBKRSession:
         Interactive reauth flow used by long-running scrapers after 401/403.
         """
         print("Attempting reauthentication. Complete login in the browser window.")
-        return await self.login(headless=headless, timeout_ms=timeout_ms)
+        return await self.login(headless=headless, timeout_ms=timeout_ms, force_browser=True)
 
     def get_client(self):
         """Returns an httpx.AsyncClient initialized with the saved cookies."""
-        if not self.state_path.exists():
+        state = self._load_state()
+        if not state:
             raise FileNotFoundError("No session state found. Please run login() first.")
-
-        with open(self.state_path, 'r') as f:
-            state = json.load(f)
-
-        # Reconstruct cookies for httpx
-        cookies = {}
-        for cookie in state.get('cookies', []):
-            cookies[cookie['name']] = cookie['value']
+        cookies = self._cookies_from_state(state)
 
         return httpx.AsyncClient(
-            base_url="https://www.interactivebrokers.ie",
+            base_url=self.base_url,
             cookies=cookies,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": "https://www.interactivebrokers.ie/portal/",
-                "X-Requested-With": "XMLHttpRequest"
-            },
+            headers=self._headers,
             timeout=30.0
         )
 
