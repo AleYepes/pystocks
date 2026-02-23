@@ -14,7 +14,7 @@ from .database import init_db, log_scrape, sync_instruments_from_csv, get_connec
 from .fundamentals_store import FundamentalsStore
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class FundamentalScraper:
@@ -366,7 +366,12 @@ async def main(
     reauth_headless=False,
     refresh_duckdb_at_end=True,
     telemetry_output=None,
+    verbose=False,
 ):
+    log_level = logging.INFO if verbose else logging.WARNING
+    logging.getLogger().setLevel(log_level)
+    logger.setLevel(log_level)
+        
     scraper = FundamentalScraper()
     
     if not IB_PRODUCTS_PATH.exists():
@@ -480,8 +485,8 @@ async def main(
             logger.info(f"Updated latest telemetry pointer at {latest_path}")
 
 
-async def run_fundamentals_update(limit=100, **kwargs):
-    return await main(limit=limit, **kwargs)
+async def run_fundamentals_update(limit=100, verbose=False, **kwargs):
+    return await main(limit=limit, verbose=verbose, **kwargs)
 
 if __name__ == "__main__":
     import fire

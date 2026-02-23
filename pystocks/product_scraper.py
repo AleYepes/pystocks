@@ -1,9 +1,12 @@
 import asyncio
+import logging
 from playwright.async_api import async_playwright
 import pandas as pd
 from .config import IB_PRODUCTS_PATH
 import httpx
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 async def fetch_api_direct(client, page_number, page_size=500, retries=5):
     url = "https://www.interactivebrokers.ie/webrest/search/products-by-filters"
@@ -37,7 +40,7 @@ async def fetch_api_direct(client, page_number, page_size=500, retries=5):
             
     return None
 
-async def scrape_ibkr_products():
+async def scrape_ibkr_products(verbose=False):
     all_products = []
     page_size = 100
     
@@ -45,7 +48,7 @@ async def scrape_ibkr_products():
         first_page = await fetch_api_direct(client, 1)
         
         if first_page and "products" in first_page and first_page["products"]:
-            print("Direct API access successful.")
+            logger.info("Direct API access successful.")
             all_products.extend(first_page["products"])
             page_number = 2
             
@@ -68,7 +71,7 @@ async def scrape_ibkr_products():
                 await asyncio.sleep(0.05)
             pbar.close()
         else:
-            print("Direct API access failed")
+            logger.error("Direct API access failed")
             return
 
     df = pd.DataFrame(all_products).drop_duplicates()
@@ -77,12 +80,12 @@ async def scrape_ibkr_products():
             existing_df = pd.read_csv(IB_PRODUCTS_PATH)
             if not existing_df.empty:
                 df = pd.concat([existing_df, df]).drop_duplicates()
-                print("Updating existing product list.")
+                logger.info("Updating existing product list.")
         except Exception:
             pass
     
     df.to_csv(IB_PRODUCTS_PATH, index=False)
-    print(f"Saved {len(df)} products to {IB_PRODUCTS_PATH}")
+    logger.info(f"Saved {len(df)} products to {IB_PRODUCTS_PATH}")
 
 if __name__ == "__main__":
-    asyncio.run(scrape_ibkr_products())
+    asyncio.run(scrape_ibkr_products(verbose=True))

@@ -1,10 +1,12 @@
 import asyncio
 import re
+import logging
 from playwright.async_api import async_playwright
 import httpx
 import json
 from .config import SESSION_STATE_PATH
 
+logger = logging.getLogger(__name__)
 
 _ACCOUNT_PATH_RE = re.compile(r"/portal\.proxy/v1/portal/(?:portfolio2|acesws)/([A-Za-z0-9]+)")
 _ACCOUNT_ID_RE = re.compile(r"^(?:U|DU|DF|F)?\d+$")
@@ -121,7 +123,7 @@ class IBKRSession:
         if self.state_path.exists() and not force_browser:
             is_valid = await self.validate_auth_state()
             if is_valid:
-                print(f"Existing session state is still valid: {self.state_path}")
+                logger.info(f"Existing session state is still valid: {self.state_path}")
                 return True
 
         async with async_playwright() as p:
@@ -131,7 +133,7 @@ class IBKRSession:
 
             page = await context.new_page()
             await page.goto(self.portal_url, wait_until="domcontentloaded")
-            print("Browser opened. Complete login in the IBKR window.")
+            logger.info("Browser opened. Complete login in the IBKR window.")
 
             try:
                 loop = asyncio.get_running_loop()
@@ -142,14 +144,14 @@ class IBKRSession:
                     is_valid = await self._validate_state_payload(state, timeout_s=10.0)
                     if is_valid:
                         await context.storage_state(path=self.state_path)
-                        print(f"Login successful. Session state saved to {self.state_path}")
+                        logger.info(f"Login successful. Session state saved to {self.state_path}")
                         return True
                     await asyncio.sleep(2)
 
-                print("Login timed out before authenticated API state was detected.")
+                logger.error("Login timed out before authenticated API state was detected.")
                 return False
             except Exception as e:
-                print(f"Login failed or timed out: {e}")
+                logger.error(f"Login failed or timed out: {e}")
                 return False
             finally:
                 await browser.close()
@@ -158,7 +160,7 @@ class IBKRSession:
         """
         Interactive reauth flow used by long-running scrapers after 401/403.
         """
-        print("Attempting reauthentication. Complete login in the browser window.")
+        logger.warning("Attempting reauthentication. Complete login in the browser window.")
         return await self.login(headless=headless, timeout_ms=timeout_ms, force_browser=True)
 
     def get_client(self):

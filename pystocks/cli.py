@@ -3,15 +3,15 @@ import asyncio
 from .fundamentals_store import FundamentalsStore
 
 class PyStocksCLI:
-    def scrape_products(self):
+    def scrape_products(self, verbose=False):
         """Scrape the list of available ETF products from IBKR website."""
         from .product_scraper import scrape_ibkr_products
-        asyncio.run(scrape_ibkr_products())
+        asyncio.run(scrape_ibkr_products(verbose=verbose))
 
-    def scrape_fundamentals(self, limit=100):
+    def scrape_fundamentals(self, limit=None, verbose=False):
         """Scrape fundamental data for ETFs using the web portal proxy."""
         from .fundamentals import run_fundamentals_update
-        asyncio.run(run_fundamentals_update(limit=limit))
+        asyncio.run(run_fundamentals_update(limit=limit, verbose=verbose))
 
     def preprocess(self):
         """Clean and prepare raw data for analysis."""
@@ -48,11 +48,12 @@ class PyStocksCLI:
         analyzer.load_historical_series()
         analyzer.run_factor_analysis()
 
-    def full_pipeline(self):
+    def full_pipeline(self, verbose=False):
         """Run the entire pipeline from contract discovery to analysis."""
-        print("Starting full pipeline...")
+        if verbose:
+            print("Starting full pipeline...")
         self.scrape_products()
-        self.scrape_fundamentals()
+        self.scrape_fundamentals(verbose=verbose)
         self.preprocess()
         self.analyze()
 
