@@ -286,9 +286,9 @@ def _extract_price_chart_rows(payload):
     for point in points:
         if not isinstance(point, dict):
             continue
-        trade_date = _parse_date_candidate(point.get("debugY"))
+        trade_date = _parse_date_candidate(point.get("x"))
         if trade_date is None:
-            trade_date = _parse_date_candidate(point.get("x"))
+            trade_date = _parse_date_candidate(point.get("debugY"))
 
         row = {
             "trade_date": trade_date.isoformat() if trade_date is not None else None,

@@ -25,20 +25,33 @@ playwright install
 ## Usage
 The system is now powered by a unified CLI:
 
+### 1. Ingestion
 ```bash
 # Scrape the initial product list from IBKR website
 python3 -m pystocks.cli scrape_products
 
-# Update contract details (conIds, ISINs) via TWS API
-python3 -m pystocks.cli update_contracts
-
 # Fetch fundamental data via web portal proxy (JSON)
 python3 -m pystocks.cli scrape_fundamentals --limit 100
+```
 
-# Preprocess raw data for analysis
+### 2. Analysis Pipeline (New)
+The new "Tail Pipeline" runs price preprocessing and factor analysis:
+
+```bash
+python3 -m pystocks.cli run_tail_pipeline
+```
+This command will:
+1.  **Preprocess Prices**: Clean raw price data, flag outliers, and check eligibility (min 252 days).
+2.  **Run Analysis V1**: Construct SMB/HML factors and run ElasticNet regressions to compute betas.
+
+Artifacts are saved to `data/research/`.
+
+### 3. Legacy Commands
+```bash
+# Preprocess raw data for analysis (Legacy)
 python3 -m pystocks.cli preprocess
 
-# Run factor analysis
+# Run factor analysis (Legacy)
 python3 -m pystocks.cli analyze
 ```
 
