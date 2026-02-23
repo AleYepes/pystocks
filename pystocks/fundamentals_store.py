@@ -1168,78 +1168,6 @@ class FundamentalsStore:
             "duckdb_path": str(self.duckdb_path),
         }
 
-    def migrate_legacy_json(self, delete_legacy=True, limit=None, refresh_duckdb=True):
-        legacy_files = []
-        for child in sorted(self.fundamentals_dir.iterdir()):
-            if child.is_dir() and child.name.isdigit():
-                legacy_files.extend(sorted(child.glob("*.json")))
-
-        if limit:
-            legacy_files = legacy_files[:limit]
-
-        migrated = 0
-        failed = 0
-        deleted = 0
-        inserted_events = 0
-        duplicate_events = 0
-        inserted_analytics_rows = 0
-        duplicate_analytics_rows = 0
-
-        for path in tqdm(legacy_files, desc="Migrating legacy fundamentals JSON"):
-            try:
-                payload = json.loads(path.read_text())
-                result = self.persist_combined_snapshot(
-                    payload,
-                    source_file=str(path),
-                    refresh_duckdb=False,
-                )
-                inserted_events += int(result.get("inserted_events", 0))
-                duplicate_events += int(result.get("duplicate_events", 0))
-                inserted_analytics_rows += int(result.get("analytics_rows_inserted", 0))
-                duplicate_analytics_rows += int(result.get("analytics_rows_duplicate", 0))
-                migrated += 1
-
-                if delete_legacy:
-                    path.unlink(missing_ok=True)
-                    deleted += 1
-            except Exception as e:
-                failed += 1
-                logger.error(f"Failed to migrate {path}: {e}")
-
-        if delete_legacy:
-            for child in sorted(self.fundamentals_dir.iterdir()):
-                if child.is_dir() and child.name.isdigit():
-                    try:
-                        if not any(child.iterdir()):
-                            child.rmdir()
-                    except Exception:
-                        pass
-
-        if refresh_duckdb:
-            self.refresh_duckdb_views()
-
-        return {
-            "legacy_files_seen": len(legacy_files),
-            "migrated_files": migrated,
-            "failed_files": failed,
-            "deleted_legacy_files": deleted,
-            "inserted_events": inserted_events,
-            "duplicate_events": duplicate_events,
-            "inserted_analytics_rows": inserted_analytics_rows,
-            "duplicate_analytics_rows": duplicate_analytics_rows,
-            "events_db_path": str(self.events_db_path),
-            "duckdb_path": str(self.duckdb_path),
-        }
-
-
-def migrate_legacy_json(delete_legacy=True, limit=None):
-    store = FundamentalsStore()
-    result = store.migrate_legacy_json(delete_legacy=delete_legacy, limit=limit, refresh_duckdb=True)
-    for k, v in result.items():
-        print(f"{k}: {v}")
-    return result
-
-
 def refresh_views():
     store = FundamentalsStore()
     result = store.refresh_duckdb_views()
@@ -1261,7 +1189,6 @@ if __name__ == "__main__":
 
     fire.Fire(
         {
-            "migrate_legacy_json": migrate_legacy_json,
             "refresh_views": refresh_views,
             "backfill_complex_analytics": backfill_complex_analytics,
         }

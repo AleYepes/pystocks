@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -8,7 +7,7 @@ from urllib.parse import parse_qs
 import pandas as pd
 from tqdm.asyncio import tqdm
 
-from .config import IB_PRODUCTS_PATH, FUNDAMENTALS_DIR, RESEARCH_DIR
+from .config import IB_PRODUCTS_PATH, RESEARCH_DIR
 from .session import IBKRSession
 from .database import init_db, log_scrape, sync_instruments_from_csv, get_connection
 from .fundamentals_store import FundamentalsStore
@@ -39,9 +38,6 @@ class FundamentalScraper:
     
     def __init__(self, session=None):
         self.session = session or IBKRSession()
-        self.base_url = "https://www.interactivebrokers.ie"
-        self.fundamentals_dir = FUNDAMENTALS_DIR
-        self.fundamentals_dir.mkdir(parents=True, exist_ok=True)
         self.research_dir = RESEARCH_DIR
         self.research_dir.mkdir(parents=True, exist_ok=True)
         self.store = FundamentalsStore()
@@ -314,20 +310,6 @@ class FundamentalScraper:
                 
         return combined_data
 
-    def save_data(self, conid, data, pretty=False):
-        """Saves scraped data to a JSON file."""
-        conid_dir = self.fundamentals_dir / str(conid)
-        conid_dir.mkdir(exist_ok=True)
-        
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        file_path = conid_dir / f"{date_str}.json"
-        
-        with open(file_path, "w") as f:
-            if pretty:
-                json.dump(data, f, indent=2)
-            else:
-                json.dump(data, f, separators=(",", ":"))
-
     def save_telemetry(
         self,
         total_targeted,
@@ -400,8 +382,6 @@ async def main(
     limit=None,
     start_index=0,
     force=False,
-    pretty_json=False,
-    write_legacy_json=False,
     max_auth_retries=2,
     reauth_headless=False,
     refresh_duckdb_at_end=True,
@@ -462,8 +442,6 @@ async def main(
                             )
                             inserted_events += int(store_result.get("inserted_events", 0))
                             duplicate_events += int(store_result.get("duplicate_events", 0))
-                            if write_legacy_json:
-                                scraper.save_data(conid, data, pretty=pretty_json)
                             saved_snapshots += 1
 
                         processed_conids += 1
