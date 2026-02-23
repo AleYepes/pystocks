@@ -1,8 +1,14 @@
 import asyncio
+import re
 from playwright.async_api import async_playwright
 import httpx
 import json
 from .config import SESSION_STATE_PATH
+
+
+_ACCOUNT_PATH_RE = re.compile(r"/portal\.proxy/v1/portal/(?:portfolio2|acesws)/([A-Za-z0-9]+)")
+_ACCOUNT_ID_RE = re.compile(r"^(?:U|DU|DF|F)?\d+$")
+
 
 class IBKRSession:
     """Manages an authenticated session for the IBKR Client Portal."""
@@ -36,6 +42,30 @@ class IBKRSession:
             if name and value is not None:
                 cookies[name] = value
         return cookies
+
+    def get_primary_account_id(self):
+        state = self._load_state()
+        if not state:
+            return None
+
+        candidates = []
+        for cookie in state.get("cookies", []):
+            path = cookie.get("path")
+            if not isinstance(path, str):
+                continue
+            m = _ACCOUNT_PATH_RE.search(path)
+            if not m:
+                continue
+            account_id = m.group(1)
+            if _ACCOUNT_ID_RE.match(account_id):
+                candidates.append(account_id)
+
+        if not candidates:
+            return None
+
+        unique = sorted(set(candidates))
+        unique.sort(key=lambda x: (0 if x.startswith("U") else 1, -len(x), x))
+        return unique[0]
 
     async def _validate_state_payload(self, state, timeout_s=20.0):
         """

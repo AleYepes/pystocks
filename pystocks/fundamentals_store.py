@@ -19,6 +19,7 @@ from .config import (
     FUNDAMENTALS_DUCKDB_PATH,
     FUNDAMENTALS_EVENTS_DB_PATH,
     FUNDAMENTALS_PARQUET_DIR,
+    PRICE_CHART_PARQUET_DIR,
 )
 from .fundamentals_normalizers import (
     extract_dividends_events,
@@ -39,11 +40,10 @@ ENDPOINT_KEYS = [
     "lipper_ratings",
     "dividends",
     "morningstar",
+    "price_chart",
     "performance",
-    "risk_stats",
     "sentiment_search",
     "ownership",
-    "sentiment",
     "esg",
 ]
 
@@ -52,6 +52,7 @@ COMPLEX_ENDPOINT_ANALYTICS = {
     "dividends": ["dividends_events", "dividends_industry_metrics"],
     "ownership": ["ownership_trade_log"],
 }
+PRICE_SERIES_ENDPOINTS = {"price_chart"}
 
 ANALYTICS_BASE_VIEW_SCHEMA = [
     ("analytics_row_id", "BIGINT"),
@@ -314,6 +315,85 @@ def _flatten_payload_scalars(payload):
     return flat
 
 
+def _sanitize_sentiment_search_payload(payload):
+    if not isinstance(payload, dict):
+        return payload
+    sentiment = payload.get("sentiment")
+    if not isinstance(sentiment, list):
+        return payload
+
+    drop_keys = {
+        "high",
+        "low",
+        "price",
+        "price_change_p",
+        "close",
+        "open",
+        "price_change",
+    }
+    for row in sentiment:
+        if not isinstance(row, dict):
+            continue
+        for key in drop_keys:
+            row.pop(key, None)
+    return payload
+
+
+def _extract_price_chart_rows(payload):
+    if not isinstance(payload, dict):
+        return []
+
+    plot = payload.get("plot")
+    if not isinstance(plot, dict):
+        return []
+
+    series_list = plot.get("series")
+    if not isinstance(series_list, list):
+        return []
+
+    selected_series = None
+    for series in series_list:
+        if not isinstance(series, dict):
+            continue
+        name = str(series.get("name") or series.get("title") or "").strip().lower()
+        if "price" in name:
+            selected_series = series
+            break
+    if selected_series is None and series_list:
+        first = series_list[0]
+        if isinstance(first, dict):
+            selected_series = first
+    if selected_series is None:
+        return []
+
+    points = selected_series.get("plotData")
+    if not isinstance(points, list):
+        return []
+
+    rows = []
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        trade_date = _parse_date_candidate(point.get("debugY"))
+        if trade_date is None:
+            trade_date = _parse_date_candidate(point.get("x"))
+
+        row = {
+            "trade_date": trade_date.isoformat() if trade_date is not None else None,
+            "timestamp_ms": point.get("x"),
+            "price": point.get("y"),
+            "open": point.get("open"),
+            "high": point.get("high"),
+            "low": point.get("low"),
+            "close": point.get("close"),
+            "debug_y": point.get("debugY"),
+        }
+        if any(v is not None for v in row.values()):
+            rows.append(row)
+
+    return rows
+
+
 class FundamentalsStore:
     """
     Storage backend:
@@ -329,18 +409,21 @@ class FundamentalsStore:
         fundamentals_dir=FUNDAMENTALS_DIR,
         blobs_dir=FUNDAMENTALS_BLOBS_DIR,
         parquet_dir=FUNDAMENTALS_PARQUET_DIR,
+        price_chart_parquet_dir=PRICE_CHART_PARQUET_DIR,
         events_db_path=FUNDAMENTALS_EVENTS_DB_PATH,
         duckdb_path=FUNDAMENTALS_DUCKDB_PATH,
     ):
         self.fundamentals_dir = Path(fundamentals_dir)
         self.blobs_dir = Path(blobs_dir)
         self.parquet_dir = Path(parquet_dir)
+        self.price_chart_parquet_dir = Path(price_chart_parquet_dir)
         self.events_db_path = Path(events_db_path)
         self.duckdb_path = Path(duckdb_path)
 
         self.fundamentals_dir.mkdir(parents=True, exist_ok=True)
         self.blobs_dir.mkdir(parents=True, exist_ok=True)
         self.parquet_dir.mkdir(parents=True, exist_ok=True)
+        self.price_chart_parquet_dir.mkdir(parents=True, exist_ok=True)
 
         self._compressor = zstd.ZstdCompressor(level=10)
         self._decompressor = zstd.ZstdDecompressor()
@@ -503,6 +586,8 @@ class FundamentalsStore:
         for endpoint in ENDPOINT_KEYS:
             value = snapshot.get(endpoint)
             if isinstance(value, (dict, list)):
+                if endpoint == "sentiment_search" and isinstance(value, dict):
+                    value = _sanitize_sentiment_search_payload(value)
                 payloads[endpoint] = value
         return payloads
 
@@ -520,6 +605,40 @@ class FundamentalsStore:
         file_path = partition_dir / file_name
         pd.DataFrame([row]).to_parquet(file_path, index=False, engine="pyarrow", compression="zstd")
         return file_path
+
+    def _write_price_chart_series_parquet(self, rows, lineage_meta):
+        conid = str(lineage_meta.get("conid"))
+        event_id = int(lineage_meta.get("endpoint_event_id"))
+        payload_hash = str(lineage_meta.get("payload_hash"))
+        effective_at = str(lineage_meta.get("effective_at"))
+
+        partition_dir = self.price_chart_parquet_dir / f"conid={conid}"
+        partition_dir.mkdir(parents=True, exist_ok=True)
+
+        file_name = f"{effective_at}_{payload_hash[:12]}_{event_id}.parquet"
+        file_path = partition_dir / file_name
+
+        enriched_rows = []
+        for row in rows:
+            full_row = {
+                "endpoint_event_id": event_id,
+                "endpoint": "price_chart",
+                "conid": conid,
+                "observed_at": lineage_meta.get("observed_at"),
+                "effective_at": effective_at,
+                "payload_hash": payload_hash,
+                "source_file": lineage_meta.get("source_file"),
+                "inserted_at": lineage_meta.get("inserted_at"),
+            }
+            for key, value in row.items():
+                full_row[_sanitize_segment(key)] = _normalize_scalar(value)
+            enriched_rows.append(full_row)
+
+        if not enriched_rows:
+            return None, 0
+
+        pd.DataFrame(enriched_rows).to_parquet(file_path, index=False, engine="pyarrow", compression="zstd")
+        return file_path, len(enriched_rows)
 
     def _partition_date_for_analytics(self, analytics_name, row, lineage_meta):
         candidate = None
@@ -803,12 +922,30 @@ class FundamentalsStore:
             "inserted_at": now_iso,
         }
 
-        endpoint_row = self._build_endpoint_analytics_row(endpoint, payload, base_row)
-        parquet_path = self._write_endpoint_event_parquet(endpoint_row, endpoint_slug, effective_at)
-
         analytics_rows_inserted = 0
         analytics_rows_duplicate = 0
         analytics_datasets = []
+        parquet_path = None
+        price_chart_series_path = None
+        price_chart_rows_written = 0
+
+        if endpoint in PRICE_SERIES_ENDPOINTS:
+            rows = _extract_price_chart_rows(payload)
+            price_chart_series_path, price_chart_rows_written = self._write_price_chart_series_parquet(
+                rows,
+                lineage_meta={
+                    "endpoint_event_id": event_id,
+                    "conid": str(conid),
+                    "observed_at": observed_at,
+                    "effective_at": effective_at,
+                    "payload_hash": blob_info["hash"],
+                    "source_file": source_file,
+                    "inserted_at": now_iso,
+                },
+            )
+        else:
+            endpoint_row = self._build_endpoint_analytics_row(endpoint, payload, base_row)
+            parquet_path = self._write_endpoint_event_parquet(endpoint_row, endpoint_slug, effective_at)
 
         if endpoint in COMPLEX_ENDPOINTS:
             analytics_result = self._persist_complex_endpoint_analytics(
@@ -832,7 +969,9 @@ class FundamentalsStore:
             "inserted": True,
             "duplicate": False,
             "endpoint": endpoint,
-            "parquet_path": str(parquet_path),
+            "parquet_path": str(parquet_path) if parquet_path is not None else None,
+            "price_chart_series_path": str(price_chart_series_path) if price_chart_series_path is not None else None,
+            "price_chart_rows_written": price_chart_rows_written,
             "analytics_rows_inserted": analytics_rows_inserted,
             "analytics_rows_duplicate": analytics_rows_duplicate,
             "analytics_datasets": analytics_datasets,
@@ -916,6 +1055,7 @@ class FundamentalsStore:
 
         endpoint_files = list(self.parquet_dir.glob("endpoint=*/year=*/month=*/*.parquet"))
         analytics_files = list(self.parquet_dir.glob("analytics=*/year=*/month=*/*.parquet"))
+        price_chart_files = list(self.price_chart_parquet_dir.glob("conid=*/*.parquet"))
 
         db = duckdb.connect(str(self.duckdb_path))
         try:
@@ -1042,12 +1182,58 @@ class FundamentalsStore:
                 ORDER BY analytics_name
                 """
             )
+
+            if price_chart_files:
+                price_pattern = f"{self.price_chart_parquet_dir.as_posix()}/conid=*/*.parquet"
+                db.execute(
+                    f"""
+                    CREATE OR REPLACE VIEW price_chart_series_all AS
+                    SELECT * FROM read_parquet('{price_pattern}', union_by_name=true)
+                    """
+                )
+            else:
+                db.execute(
+                    """
+                    CREATE OR REPLACE VIEW price_chart_series_all AS
+                    SELECT
+                        CAST(NULL AS BIGINT) AS endpoint_event_id,
+                        CAST(NULL AS VARCHAR) AS endpoint,
+                        CAST(NULL AS VARCHAR) AS conid,
+                        CAST(NULL AS VARCHAR) AS observed_at,
+                        CAST(NULL AS VARCHAR) AS effective_at,
+                        CAST(NULL AS VARCHAR) AS payload_hash,
+                        CAST(NULL AS VARCHAR) AS source_file,
+                        CAST(NULL AS VARCHAR) AS inserted_at,
+                        CAST(NULL AS VARCHAR) AS trade_date,
+                        CAST(NULL AS BIGINT) AS timestamp_ms,
+                        CAST(NULL AS DOUBLE) AS price,
+                        CAST(NULL AS DOUBLE) AS open,
+                        CAST(NULL AS DOUBLE) AS high,
+                        CAST(NULL AS DOUBLE) AS low,
+                        CAST(NULL AS DOUBLE) AS close,
+                        CAST(NULL AS BIGINT) AS debug_y
+                    WHERE FALSE
+                    """
+                )
+
+            db.execute(
+                """
+                CREATE OR REPLACE VIEW price_chart_series_catalog AS
+                SELECT conid, COUNT(*) AS n_rows,
+                       MIN(trade_date) AS min_trade_date,
+                       MAX(trade_date) AS max_trade_date
+                FROM price_chart_series_all
+                GROUP BY conid
+                ORDER BY conid
+                """
+            )
         finally:
             db.close()
 
         return {
             "endpoint_views": len(endpoint_slugs),
             "analytics_views": len(set(analytics_names).union(known_analytics_names)),
+            "price_chart_views": 2,
             "duckdb_path": str(self.duckdb_path),
         }
 
@@ -1168,6 +1354,70 @@ class FundamentalsStore:
             "duckdb_path": str(self.duckdb_path),
         }
 
+    def backfill_price_chart_series(self, refresh_duckdb=True, purge_legacy_endpoint_parquet=True):
+        price_chart_dir = self.price_chart_parquet_dir
+        if price_chart_dir.exists():
+            shutil.rmtree(price_chart_dir)
+        price_chart_dir.mkdir(parents=True, exist_ok=True)
+
+        if purge_legacy_endpoint_parquet:
+            legacy_dir = self.parquet_dir / "endpoint=price_chart"
+            if legacy_dir.exists():
+                shutil.rmtree(legacy_dir)
+
+        with self._get_conn() as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, conid, observed_at, effective_at, payload_hash, blob_path, source_file, inserted_at
+                FROM endpoint_events
+                WHERE endpoint = 'price_chart'
+                ORDER BY id
+                """
+            )
+            event_rows = [dict(r) for r in cur.fetchall()]
+
+        files_written = 0
+        rows_written = 0
+        failed = 0
+
+        for event_row in tqdm(event_rows, desc="Backfilling price chart series"):
+            try:
+                payload = self._load_blob_payload(event_row["blob_path"])
+                rows = _extract_price_chart_rows(payload)
+                file_path, row_count = self._write_price_chart_series_parquet(
+                    rows=rows,
+                    lineage_meta={
+                        "endpoint_event_id": int(event_row["id"]),
+                        "conid": str(event_row["conid"]),
+                        "observed_at": event_row["observed_at"],
+                        "effective_at": event_row["effective_at"],
+                        "payload_hash": event_row["payload_hash"],
+                        "source_file": event_row.get("source_file"),
+                        "inserted_at": event_row.get("inserted_at"),
+                    },
+                )
+                if file_path is not None:
+                    files_written += 1
+                rows_written += int(row_count)
+            except Exception as e:
+                failed += 1
+                logger.error(f"Failed backfilling price_chart event_id={event_row.get('id')}: {e}")
+
+        if refresh_duckdb:
+            self.refresh_duckdb_views()
+
+        return {
+            "status": "ok",
+            "events_seen": len(event_rows),
+            "files_written": files_written,
+            "rows_written": rows_written,
+            "failed": failed,
+            "price_chart_dir": str(price_chart_dir),
+            "duckdb_path": str(self.duckdb_path),
+        }
+
 def refresh_views():
     store = FundamentalsStore()
     result = store.refresh_duckdb_views()
@@ -1184,6 +1434,14 @@ def backfill_complex_analytics(endpoints=None):
     return result
 
 
+def backfill_price_chart_series():
+    store = FundamentalsStore()
+    result = store.backfill_price_chart_series(refresh_duckdb=True, purge_legacy_endpoint_parquet=True)
+    for k, v in result.items():
+        print(f"{k}: {v}")
+    return result
+
+
 if __name__ == "__main__":
     import fire
 
@@ -1191,5 +1449,6 @@ if __name__ == "__main__":
         {
             "refresh_views": refresh_views,
             "backfill_complex_analytics": backfill_complex_analytics,
+            "backfill_price_chart_series": backfill_price_chart_series,
         }
     )
