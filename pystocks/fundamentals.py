@@ -141,7 +141,8 @@ class FundamentalScraper:
             "ratios": ["ratios", "zscore"],
             "lipper": ["universes"],
             "esg": ["content"],
-            "divs": ["history"], # 'industry_average' is often just peer data, we want 'history'
+            # Keep both short and long dividends payload families.
+            "divs": ["history", "industry_average", "no_div_data_marker", "last_payed_dividend_amount"],
             "mstar": ["summary", "commentary"],
             "perf": ["cumulative", "annualized"],
             "risk": ["risk", "statistic", "performance"],
@@ -167,13 +168,7 @@ class FundamentalScraper:
         node = landing.get(section)
         if not isinstance(node, dict):
             return False
-        
-        # Special case for dividends: marker 1 means no data
-        if section == "dividends":
-            content = node.get("content", {})
-            if content.get("no_div_data_marker") == 1:
-                return False
-                
+
         return self._has_any_value(node.get("data")) or self._has_any_value(node.get("content"))
 
     def _build_sma_search_endpoint(self, conid):

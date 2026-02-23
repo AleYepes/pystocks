@@ -22,9 +22,21 @@ This map reflects current empirical behavior in the ETF universe and the default
 | Endpoint | Default | Typical Issue |
 | --- | --- | --- |
 | `impact/esg` | No | Frequent 400, near-zero useful payload |
-| `ownership` | No | Frequent 404 |
+| `ownership` | No | Frequent 404 (kept as optional low-yield mode) |
 | `sma/request?type=tick` | No | Frequent 404, low useful payload |
 | `sma/request?type=high_low` | No | Low-to-moderate yield, not essential for baseline |
+
+## Storage Policy (Current)
+
+All fetched endpoints use the same two-layer policy:
+
+1. raw response in CAS blobs (`data/fundamentals/blobs`)
+2. analytics parquet representation (`data/fundamentals/parquet`)
+
+Complex endpoint analytics behavior:
+
+- `dividends`: canonical endpoint snapshot + normalized datasets `dividends_events`, `dividends_industry_metrics`; embedded price series is excluded from normalized analytics rows.
+- `ownership`: canonical endpoint snapshot + normalized dataset `ownership_trade_log`; `NO CHANGE` actions are excluded; embedded ownership price series is excluded from normalized analytics rows.
 
 ## Fallback Strategy
 
@@ -64,5 +76,7 @@ Manual discovery logs (`166` JSON captures, ~`4.6 MB`) were reviewed against:
 - Account/position UX: `position`, `canTradeRecurringInvestment`, `recurringInvestment`, quote lookup (`?field_names=...`), `assetClasses`, `companies`.
 - Lending/short-sale specialized data: `lending`, `widget`, `studyLine`, `lastLine`.
 - Large chart series payloads (`{conid}?chart_period=MAX/3M`) not required for current fundamentals factor pipeline.
+
+Short-selling endpoint family (`hmds/lastLine`, `hmds/studyLine?source=FeeRate`, `hmds/studyLine?source=Inventory`) remains deferred in this phase.
 
 No additional endpoint family from discovery was promoted into default daily fundamentals fetch policy in this pass.
