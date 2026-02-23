@@ -58,6 +58,61 @@ def _parse_percent(value):
         return None
 
 
+def _parse_number(value, percent_as_fraction=False):
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return float(value)
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    s = str(value).strip()
+    if not s:
+        return None
+
+    is_percent = s.endswith("%")
+    s = s.replace(",", "").replace("%", "")
+    try:
+        out = float(s)
+    except Exception:
+        return None
+
+    if is_percent and percent_as_fraction:
+        return out / 100.0
+    return out
+
+
+_PERCENT_FRACTION_METRICS = {
+    "dividend_yield",
+    "dividend_yield_ttm",
+    "div_yield",
+    "paying_companies_percent",
+}
+
+_KNOWN_DIVIDENDS_NUMERIC_METRICS = {
+    "dividend_yield",
+    "dividend_yield_ttm",
+    "div_yield",
+    "annual_dividend",
+    "dividend_ttm",
+    "div_per_share",
+    "paying_companies",
+    "paying_companies_percent",
+}
+
+
+def _coerce_dividends_metric_value(metric_id, value):
+    metric = _sanitize_metric_id(metric_id)
+    parsed = _parse_number(value, percent_as_fraction=metric in _PERCENT_FRACTION_METRICS)
+    if parsed is not None:
+        return parsed
+    if metric in _KNOWN_DIVIDENDS_NUMERIC_METRICS:
+        return None
+    return value
+
+
 def _to_iso_date(value):
     if value is None:
         return None
@@ -165,14 +220,17 @@ def normalize_dividends_snapshot(payload):
         "embedded_price_points": int(embedded_price_points),
         "no_div_data_marker": payload.get("no_div_data_marker"),
         "no_div_data_period": payload.get("no_div_data_period"),
-        "dividend_yield": industry_average.get("dividend_yield"),
-        "annual_dividend": industry_average.get("annual_dividend"),
-        "paying_companies": industry_average.get("paying_companies"),
-        "paying_companies_percent": industry_average.get("paying_companies_percent"),
+        "dividend_yield": _coerce_dividends_metric_value("dividend_yield", industry_average.get("dividend_yield")),
+        "annual_dividend": _coerce_dividends_metric_value("annual_dividend", industry_average.get("annual_dividend")),
+        "paying_companies": _coerce_dividends_metric_value("paying_companies", industry_average.get("paying_companies")),
+        "paying_companies_percent": _coerce_dividends_metric_value(
+            "paying_companies_percent",
+            industry_average.get("paying_companies_percent"),
+        ),
         "dividend_ttm": None,
         "dividend_yield_ttm": None,
         "last_paid_date": _to_iso_date(payload.get("last_payed_dividend_date")),
-        "last_paid_amount": payload.get("last_payed_dividend_amount"),
+        "last_paid_amount": _parse_number(payload.get("last_payed_dividend_amount")),
         "last_paid_currency": payload.get("last_payed_dividend_currency"),
     }
 
@@ -181,14 +239,14 @@ def normalize_dividends_snapshot(payload):
             continue
         metric_id = _metric_id(item)
         if metric_id in {"div_yield", "dividend_yield_ttm", "dividend_yield"}:
-            out["dividend_yield_ttm"] = item.get("value")
+            out["dividend_yield_ttm"] = _coerce_dividends_metric_value(metric_id, item.get("value"))
         elif metric_id in {"div_per_share", "dividend_ttm", "annual_dividend"}:
-            out["dividend_ttm"] = item.get("value")
+            out["dividend_ttm"] = _coerce_dividends_metric_value(metric_id, item.get("value"))
 
     if out["dividend_ttm"] is None and industry_average.get("annual_dividend") is not None:
-        out["dividend_ttm"] = industry_average.get("annual_dividend")
+        out["dividend_ttm"] = _coerce_dividends_metric_value("annual_dividend", industry_average.get("annual_dividend"))
     if out["dividend_yield_ttm"] is None and industry_average.get("dividend_yield") is not None:
-        out["dividend_yield_ttm"] = industry_average.get("dividend_yield")
+        out["dividend_yield_ttm"] = _coerce_dividends_metric_value("dividend_yield", industry_average.get("dividend_yield"))
 
     return out
 
@@ -216,6 +274,9 @@ def extract_dividends_events(payload):
             amount = point.get("amount")
             if amount is None:
                 amount = point.get("y")
+            amount_value = _parse_number(amount)
+            if amount_value is not None:
+                amount = amount_value
 
             row = {
                 "event_date": event_date,
@@ -249,12 +310,13 @@ def extract_dividends_industry_metrics(payload):
     for source_key, metric_id in field_map.items():
         if source_key not in industry_average:
             continue
-        value = industry_average.get(source_key)
+        raw_value = industry_average.get(source_key)
+        value = _coerce_dividends_metric_value(metric_id, raw_value)
         rows.append(
             {
                 "metric_id": metric_id,
                 "value": value,
-                "formatted_value": str(value) if value is not None else None,
+                "formatted_value": str(raw_value) if raw_value is not None else None,
             }
         )
 
@@ -262,11 +324,16 @@ def extract_dividends_industry_metrics(payload):
     for item in _safe_list(industry_comparison.get("content")):
         if not isinstance(item, dict):
             continue
+        metric_id = _metric_id(item)
+        raw_value = item.get("value")
+        formatted_value = item.get("formatted_value")
+        if formatted_value is None and raw_value is not None:
+            formatted_value = str(raw_value)
         rows.append(
             {
-                "metric_id": _metric_id(item),
-                "value": item.get("value"),
-                "formatted_value": item.get("formatted_value"),
+                "metric_id": metric_id,
+                "value": _coerce_dividends_metric_value(metric_id, raw_value),
+                "formatted_value": formatted_value,
             }
         )
 
