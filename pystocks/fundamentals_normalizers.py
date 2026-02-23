@@ -1,5 +1,7 @@
 import json
+import math
 import re
+from collections import defaultdict
 from datetime import datetime, timezone
 
 _MONTH_MAP = {
@@ -29,6 +31,30 @@ _MONTH_MAP = {
     "DECEMBER": 12,
 }
 
+_NUM_WITH_SUFFIX_RE = re.compile(r"^[\s\$€£¥]*([+-]?\d+(?:\.\d+)?)\s*([KMBT])?\b", re.IGNORECASE)
+_DATE_LIKE_RE = re.compile(r"\b\d{4}[/-]\d{2}[/-]\d{2}\b")
+
+
+_MORNINGSTAR_ORDINAL = {
+    "very_low": 1.0,
+    "low": 2.0,
+    "below_average": 2.0,
+    "negative": 1.0,
+    "neutral": 3.0,
+    "average": 3.0,
+    "bronze": 3.0,
+    "above_average": 4.0,
+    "silver": 4.0,
+    "high": 5.0,
+    "very_high": 5.0,
+    "gold": 5.0,
+    "medalist_rating_negative": 1.0,
+    "medalist_rating_neutral": 3.0,
+    "medalist_rating_bronze": 3.0,
+    "medalist_rating_silver": 4.0,
+    "medalist_rating_gold": 5.0,
+}
+
 
 def _safe_list(value):
     return value if isinstance(value, list) else []
@@ -38,24 +64,18 @@ def _safe_dict(value):
     return value if isinstance(value, dict) else {}
 
 
-def _sanitize_metric_id(value):
+def _slug(value):
     s = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
     return s or "metric"
 
 
-def _parse_percent(value):
+def _looks_like_date_string(value):
     if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
+        return False
     s = str(value).strip()
     if not s:
-        return None
-    s = s.replace("%", "").replace(",", "")
-    try:
-        return float(s)
-    except Exception:
-        return None
+        return False
+    return bool(_DATE_LIKE_RE.search(s))
 
 
 def _parse_number(value, percent_as_fraction=False):
@@ -66,51 +86,56 @@ def _parse_number(value, percent_as_fraction=False):
         return float(value)
 
     if isinstance(value, (int, float)):
-        return float(value)
+        out = float(value)
+        if math.isfinite(out):
+            return out
+        return None
 
     s = str(value).strip()
     if not s:
         return None
 
-    is_percent = s.endswith("%")
-    s = s.replace(",", "").replace("%", "")
+    if s.lower() in {"na", "n/a", "none", "null", "unknown", "nan", "inf", "-inf"}:
+        return None
+
+    if _looks_like_date_string(s):
+        return None
+
+    is_percent = "%" in s
+    plain = s.replace(",", "").replace("%", "").strip()
+
     try:
-        out = float(s)
+        out = float(plain)
+        if is_percent and percent_as_fraction:
+            out /= 100.0
+        if math.isfinite(out):
+            return out
+        return None
     except Exception:
+        pass
+
+    m = _NUM_WITH_SUFFIX_RE.match(s)
+    if not m:
         return None
 
+    num = float(m.group(1))
+    suffix = (m.group(2) or "").upper()
+    mult = {"": 1.0, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}.get(suffix, 1.0)
+    out = num * mult
     if is_percent and percent_as_fraction:
-        return out / 100.0
-    return out
+        out /= 100.0
+    if math.isfinite(out):
+        return out
+    return None
 
 
-_PERCENT_FRACTION_METRICS = {
-    "dividend_yield",
-    "dividend_yield_ttm",
-    "div_yield",
-    "paying_companies_percent",
-}
-
-_KNOWN_DIVIDENDS_NUMERIC_METRICS = {
-    "dividend_yield",
-    "dividend_yield_ttm",
-    "div_yield",
-    "annual_dividend",
-    "dividend_ttm",
-    "div_per_share",
-    "paying_companies",
-    "paying_companies_percent",
-}
-
-
-def _coerce_dividends_metric_value(metric_id, value):
-    metric = _sanitize_metric_id(metric_id)
-    parsed = _parse_number(value, percent_as_fraction=metric in _PERCENT_FRACTION_METRICS)
-    if parsed is not None:
-        return parsed
-    if metric in _KNOWN_DIVIDENDS_NUMERIC_METRICS:
+def _to_fraction_weight(value):
+    parsed = _parse_number(value, percent_as_fraction=True)
+    if parsed is None:
         return None
-    return value
+    if parsed > 1.5:
+        return parsed / 100.0
+    return parsed
 
 
 def _to_iso_date(value):
@@ -185,9 +210,9 @@ def _extract_currency(formatted_amount):
 def _metric_id(item):
     if not isinstance(item, dict):
         return "metric"
-    for key in ("search_id", "title_tag", "name_tag", "title", "name"):
+    for key in ("search_id", "title_tag", "name_tag", "id", "title", "name"):
         if item.get(key):
-            return _sanitize_metric_id(item.get(key))
+            return _slug(item.get(key))
     return "metric"
 
 
@@ -202,6 +227,75 @@ def _series_points(history_payload, needle):
     return points
 
 
+def _add_feature(rows, feature_name, feature_group, feature_value, feature_source):
+    value = _parse_number(feature_value)
+    if value is None or not math.isfinite(value):
+        return
+    rows.append(
+        {
+            "feature_name": _slug(feature_name),
+            "feature_group": _slug(feature_group),
+            "feature_value": float(value),
+            "feature_source": str(feature_source),
+        }
+    )
+
+
+def _dedupe_feature_rows(rows):
+    grouped = defaultdict(list)
+    meta = {}
+    for row in rows:
+        key = row["feature_name"]
+        grouped[key].append(float(row["feature_value"]))
+        meta[key] = (row["feature_group"], row["feature_source"])
+
+    out = []
+    for feature_name, values in grouped.items():
+        group, source = meta[feature_name]
+        out.append(
+            {
+                "feature_name": feature_name,
+                "feature_group": group,
+                "feature_value": float(sum(values) / len(values)),
+                "feature_source": source,
+            }
+        )
+    out.sort(key=lambda r: (r["feature_group"], r["feature_name"]))
+    return out
+
+
+_PERCENT_FRACTION_METRICS = {
+    "dividend_yield",
+    "dividend_yield_ttm",
+    "div_yield",
+    "paying_companies_percent",
+}
+
+_KNOWN_DIVIDENDS_NUMERIC_METRICS = {
+    "dividend_yield",
+    "dividend_yield_ttm",
+    "div_yield",
+    "annual_dividend",
+    "dividend_ttm",
+    "div_per_share",
+    "paying_companies",
+    "paying_companies_percent",
+}
+
+
+def _coerce_dividends_metric_value(metric_id, value):
+    metric = _slug(metric_id)
+    parsed = _parse_number(value, percent_as_fraction=metric in _PERCENT_FRACTION_METRICS)
+    if parsed is not None:
+        return parsed
+    if metric in _KNOWN_DIVIDENDS_NUMERIC_METRICS:
+        return None
+    return value
+
+
+# -------------------------
+# Existing canonical helpers
+# -------------------------
 def normalize_dividends_snapshot(payload):
     payload = _safe_dict(payload)
 
@@ -279,6 +373,7 @@ def extract_dividends_events(payload):
                 amount = amount_value
 
             row = {
+                "trade_date": event_date,
                 "event_date": event_date,
                 "amount": amount,
                 "currency": _extract_currency(point.get("formatted_amount")) or fallback_currency,
@@ -384,11 +479,11 @@ def normalize_ownership_snapshot(payload):
         "institutional_total_value": inst_total.get("display_value"),
         "institutional_total_shares": inst_total.get("display_shares"),
         "institutional_total_pct": inst_total.get("display_pct"),
-        "institutional_total_pct_num": _parse_percent(inst_total.get("display_pct")),
+        "institutional_total_pct_num": _parse_number(inst_total.get("display_pct"), percent_as_fraction=True),
         "insider_total_value": insider_total.get("display_value"),
         "insider_total_shares": insider_total.get("display_shares"),
         "insider_total_pct": insider_total.get("display_pct"),
-        "insider_total_pct_num": _parse_percent(insider_total.get("display_pct")),
+        "insider_total_pct_num": _parse_number(insider_total.get("display_pct"), percent_as_fraction=True),
         "owners_types_json": json.dumps(owners_types_summary, separators=(",", ":"), ensure_ascii=False),
     }
 
@@ -408,9 +503,9 @@ def extract_ownership_trade_log(payload, drop_no_change=True):
         row = {
             "trade_date": _to_iso_date(item.get("displayDate")),
             "action": action or None,
-            "shares": item.get("shares"),
-            "value": item.get("value"),
-            "holding": item.get("holding"),
+            "shares": _parse_number(item.get("shares")),
+            "value": _parse_number(item.get("value")),
+            "holding": _parse_number(item.get("holding")),
             "party": item.get("party"),
             "source": item.get("source"),
             "insider": item.get("insider"),
@@ -422,7 +517,350 @@ def extract_ownership_trade_log(payload, drop_no_change=True):
     return rows
 
 
+# -------------------------
+# Factor feature extractors
+# -------------------------
+def _extract_profile_and_fees_features(payload):
+    payload = _safe_dict(payload)
+    rows = []
+
+    for item in _safe_list(payload.get("fund_and_profile")):
+        item = _safe_dict(item)
+        metric = _slug(item.get("name_tag") or item.get("name"))
+        value = item.get("value")
+
+        num = _parse_number(value, percent_as_fraction=True)
+        if num is not None:
+            _add_feature(rows, f"profile_{metric}", "profile", num, f"fund_and_profile:{metric}")
+
+        if metric == "asset_type" and value:
+            _add_feature(rows, f"asset_{_slug(value)}", "asset", 1.0, "fund_and_profile:asset_type")
+        elif metric in {"fund_market_cap_focus", "market_cap_focus"} and value:
+            _add_feature(rows, f"marketcap_{_slug(value)}", "marketcap", 1.0, "fund_and_profile:market_cap")
+        elif metric == "domicile" and value:
+            _add_feature(rows, f"domicile_{_slug(value)}", "domicile", 1.0, "fund_and_profile:domicile")
+        elif metric in {"management_approach", "distribution_details", "fund_category"} and value:
+            _add_feature(rows, f"profile_{metric}_{_slug(value)}", "profile", 1.0, f"fund_and_profile:{metric}")
+
+    for report in _safe_list(payload.get("reports")):
+        report = _safe_dict(report)
+        report_name = _slug(report.get("name") or "report")
+        for field in _safe_list(report.get("fields")):
+            field = _safe_dict(field)
+            field_name = _slug(field.get("name") or field.get("name_tag") or "field")
+            num = _parse_number(field.get("value"), percent_as_fraction=True)
+            if num is None:
+                continue
+            _add_feature(
+                rows,
+                f"profile_report_{report_name}_{field_name}",
+                "profile",
+                num,
+                f"reports:{report_name}:{field_name}",
+            )
+
+    for theme in _safe_list(payload.get("themes")):
+        theme_name = None
+        if isinstance(theme, dict):
+            theme_name = theme.get("name") or theme.get("title") or theme.get("theme")
+        elif isinstance(theme, str):
+            theme_name = theme
+        if theme_name:
+            _add_feature(rows, f"style_{_slug(theme_name)}", "style", 1.0, "themes")
+
+    for exp in _safe_list(payload.get("expenses_allocation")):
+        exp = _safe_dict(exp)
+        name = _slug(exp.get("name") or exp.get("name_tag") or "expense")
+        weight = exp.get("weight")
+        if weight is None:
+            weight = exp.get("value")
+        if weight is None:
+            weight = exp.get("formatted_weight")
+        frac = _to_fraction_weight(weight)
+        if frac is None:
+            continue
+        _add_feature(rows, f"profile_expense_{name}", "profile", frac, f"expenses_allocation:{name}")
+
+    warning = payload.get("jap_fund_warning")
+    if isinstance(warning, bool):
+        _add_feature(rows, "profile_jap_fund_warning", "profile", 1.0 if warning else 0.0, "jap_fund_warning")
+
+    return _dedupe_feature_rows(rows)
+
+
+def _extract_holdings_features(payload):
+    payload = _safe_dict(payload)
+    rows = []
+
+    sections = [
+        ("allocation_self", "holding_types"),
+        ("industry", "industries"),
+        ("currency", "currencies"),
+        ("investor_country", "countries"),
+    ]
+
+    for section_key, feature_prefix in sections:
+        for item in _safe_list(payload.get(section_key)):
+            item = _safe_dict(item)
+            name = _slug(item.get("name") or item.get("type") or "item")
+            weight = item.get("weight")
+            if weight is None:
+                weight = item.get("assets_pct")
+            if weight is None:
+                weight = item.get("formatted_weight")
+            frac = _to_fraction_weight(weight)
+            if frac is None:
+                continue
+            _add_feature(rows, f"{feature_prefix}_{name}", feature_prefix, frac, f"{section_key}:{name}")
+
+    geo = _safe_dict(payload.get("geographic"))
+    for key, value in geo.items():
+        frac = _to_fraction_weight(value)
+        if frac is None:
+            continue
+        _add_feature(rows, f"countries_{_slug(key)}", "countries", frac, f"geographic:{key}")
+
+    top10_weight = _to_fraction_weight(payload.get("top_10_weight"))
+    if top10_weight is not None:
+        _add_feature(rows, "holding_top_10_weight", "holdings", top10_weight, "top_10_weight")
+
+    return _dedupe_feature_rows(rows)
+
+
+def _extract_ratios_features(payload):
+    payload = _safe_dict(payload)
+    rows = []
+    seen = set()
+
+    for section in ("ratios", "financials", "fixed_income", "dividend", "zscore"):
+        for item in _safe_list(payload.get(section)):
+            item = _safe_dict(item)
+            metric = _metric_id(item)
+            base = f"fundamentals_{metric}"
+            if base in seen:
+                base = f"fundamentals_{_slug(section)}_{metric}"
+            seen.add(base)
+
+            value = _parse_number(item.get("value"))
+            if value is not None:
+                _add_feature(rows, base, "fundamentals", value, f"{section}:{metric}:value")
+
+            for field in ("vs", "min", "max", "avg", "percentile"):
+                v = _parse_number(item.get(field))
+                if v is None:
+                    continue
+                _add_feature(rows, f"{base}_{field}", "fundamentals", v, f"{section}:{metric}:{field}")
+
+    return _dedupe_feature_rows(rows)
+
+
+def _extract_lipper_ratings_features(payload):
+    payload = _safe_dict(payload)
+    rows = []
+
+    for universe in _safe_list(payload.get("universes")):
+        universe = _safe_dict(universe)
+        for period_key, period_items in universe.items():
+            if period_key in {"as_of_date", "asOfDate", "name", "title"}:
+                continue
+            if not isinstance(period_items, list):
+                continue
+
+            period = _slug(period_key)
+            for item in period_items:
+                item = _safe_dict(item)
+                metric = _metric_id(item)
+                rating = _safe_dict(item.get("rating")).get("value")
+                value = _parse_number(rating)
+                if value is None:
+                    continue
+                _add_feature(rows, f"lipper_{period}_{metric}", "lipper", value, f"universes:{period}:{metric}")
+
+    return _dedupe_feature_rows(rows)
+
+
+def _extract_dividends_features(payload):
+    rows = []
+
+    snapshot = normalize_dividends_snapshot(payload)
+    for key, value in snapshot.items():
+        if key in {"last_paid_currency", "response_type", "last_paid_date"}:
+            continue
+        num = _parse_number(value)
+        if num is None:
+            continue
+        _add_feature(rows, f"dividends_{_slug(key)}", "dividends", num, f"snapshot:{key}")
+
+    for item in extract_dividends_industry_metrics(payload):
+        metric_id = _slug(item.get("metric_id"))
+        value = _parse_number(item.get("value"))
+        if value is None:
+            continue
+        _add_feature(rows, f"dividends_metric_{metric_id}", "dividends", value, f"industry:{metric_id}")
+
+    return _dedupe_feature_rows(rows)
+
+
+def _morningstar_numeric(value, metric_id):
+    num = _parse_number(value)
+    if num is not None:
+        return num
+
+    key = _slug(value)
+    if key in _MORNINGSTAR_ORDINAL:
+        return _MORNINGSTAR_ORDINAL[key]
+
+    metric_key = f"{_slug(metric_id)}_{key}"
+    if metric_key in _MORNINGSTAR_ORDINAL:
+        return _MORNINGSTAR_ORDINAL[metric_key]
+
+    return None
+
+
+def _extract_morningstar_features(payload):
+    payload = _safe_dict(payload)
+    rows = []
+
+    for item in _safe_list(payload.get("summary")):
+        item = _safe_dict(item)
+        metric = _slug(item.get("id") or item.get("title") or "metric")
+        value = _morningstar_numeric(item.get("value"), metric)
+        if value is None:
+            continue
+        _add_feature(rows, f"morningstar_{metric}", "morningstar", value, f"summary:{metric}")
+
+    return _dedupe_feature_rows(rows)
+
+
+def _extract_performance_features(payload):
+    payload = _safe_dict(payload)
+    rows = []
+
+    for section in ("cumulative", "annualized", "yield", "risk", "statistic"):
+        for item in _safe_list(payload.get(section)):
+            item = _safe_dict(item)
+            metric = _metric_id(item)
+            base = f"performance_{_slug(section)}_{metric}"
+
+            value = _parse_number(item.get("value"))
+            if value is not None:
+                _add_feature(rows, base, "performance", value, f"{section}:{metric}:value")
+
+            for field in ("vs", "percentile", "min", "max", "avg"):
+                extra = _parse_number(item.get(field))
+                if extra is None:
+                    continue
+                _add_feature(rows, f"{base}_{field}", "performance", extra, f"{section}:{metric}:{field}")
+
+    return _dedupe_feature_rows(rows)
+
+
+def _extract_ownership_features(payload):
+    payload = _safe_dict(payload)
+    rows = []
+
+    snapshot = normalize_ownership_snapshot(payload)
+    for key, value in snapshot.items():
+        if key in {
+            "owners_types_json",
+            "institutional_total_value",
+            "institutional_total_shares",
+            "institutional_total_pct",
+            "insider_total_value",
+            "insider_total_shares",
+            "insider_total_pct",
+        }:
+            continue
+        num = _parse_number(value)
+        if num is None:
+            continue
+        _add_feature(rows, f"ownership_{_slug(key)}", "ownership", num, f"snapshot:{key}")
+
+    for item in _safe_list(payload.get("owners_types")):
+        item = _safe_dict(item)
+        type_info = _safe_dict(item.get("type"))
+        label = type_info.get("type") or type_info.get("display_type")
+        if not label:
+            continue
+        value = item.get("float")
+        if value is None:
+            value = item.get("display_float")
+        frac = _to_fraction_weight(value)
+        if frac is None:
+            continue
+        _add_feature(rows, f"ownership_type_{_slug(label)}", "ownership", frac, f"owners_types:{label}")
+
+    return _dedupe_feature_rows(rows)
+
+
+def _extract_esg_features(payload):
+    payload = _safe_dict(payload)
+    rows = []
+
+    def walk(nodes, prefix):
+        for node in _safe_list(nodes):
+            node = _safe_dict(node)
+            name = _slug(node.get("name"))
+            path = f"{prefix}_{name}" if prefix else name
+            value = _parse_number(node.get("value"))
+            if value is not None:
+                _add_feature(rows, f"esg_{path}", "esg", value, f"content:{path}")
+            walk(node.get("children"), path)
+
+    walk(payload.get("content"), "")
+
+    coverage = _parse_number(payload.get("coverage"))
+    if coverage is not None:
+        _add_feature(rows, "esg_coverage", "esg", coverage, "coverage")
+
+    if isinstance(payload.get("no_settings"), bool):
+        _add_feature(rows, "esg_no_settings", "esg", 1.0 if payload["no_settings"] else 0.0, "no_settings")
+
+    return _dedupe_feature_rows(rows)
+
+
+_FACTOR_EXTRACTORS = {
+    "landing": lambda payload: [],
+    "profile_and_fees": _extract_profile_and_fees_features,
+    "holdings": _extract_holdings_features,
+    "ratios": _extract_ratios_features,
+    "lipper_ratings": _extract_lipper_ratings_features,
+    "dividends": _extract_dividends_features,
+    "morningstar": _extract_morningstar_features,
+    "performance": _extract_performance_features,
+    "ownership": _extract_ownership_features,
+    "esg": _extract_esg_features,
+    # Time-series endpoints are handled in dedicated series tables in v1.
+    "price_chart": lambda payload: [],
+    "sentiment_search": lambda payload: [],
+}
+
+
+def extract_factor_features(endpoint, payload, effective_at=None):
+    extractor = _FACTOR_EXTRACTORS.get(str(endpoint or ""))
+    if extractor is None:
+        return []
+    rows = extractor(payload)
+    if not rows:
+        return []
+
+    # Keep deterministic output ordering and stable shape.
+    out = []
+    for row in rows:
+        out.append(
+            {
+                "feature_name": row["feature_name"],
+                "feature_group": row["feature_group"],
+                "feature_value": float(row["feature_value"]),
+                "feature_source": row["feature_source"],
+            }
+        )
+    out.sort(key=lambda r: (r["feature_group"], r["feature_name"]))
+    return out
+
+
 __all__ = [
+    "extract_factor_features",
     "normalize_dividends_snapshot",
     "extract_dividends_events",
     "extract_dividends_industry_metrics",

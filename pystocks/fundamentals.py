@@ -293,6 +293,8 @@ class FundamentalScraper:
         saved_snapshots,
         inserted_events,
         duplicate_events,
+        factor_rows_written,
+        series_rows_written,
         auth_retries,
         aborted,
         output_path=None,
@@ -325,6 +327,8 @@ class FundamentalScraper:
                 "saved_snapshots": saved_snapshots,
                 "inserted_events": inserted_events,
                 "duplicate_events": duplicate_events,
+                "factor_rows_written": factor_rows_written,
+                "series_rows_written": series_rows_written,
                 "auth_retries": auth_retries,
                 "aborted": aborted,
             },
@@ -393,6 +397,8 @@ async def main(
     saved_snapshots = 0
     inserted_events = 0
     duplicate_events = 0
+    factor_rows_written = 0
+    series_rows_written = 0
     auth_retries = 0
     aborted = False
 
@@ -418,6 +424,8 @@ async def main(
                             )
                             inserted_events += int(store_result.get("inserted_events", 0))
                             duplicate_events += int(store_result.get("duplicate_events", 0))
+                            factor_rows_written += int(store_result.get("factor_rows_written", 0))
+                            series_rows_written += int(store_result.get("series_rows_written", 0))
                             saved_snapshots += 1
 
                         processed_conids += 1
@@ -461,6 +469,8 @@ async def main(
             saved_snapshots=saved_snapshots,
             inserted_events=inserted_events,
             duplicate_events=duplicate_events,
+            factor_rows_written=factor_rows_written,
+            series_rows_written=series_rows_written,
             auth_retries=auth_retries,
             aborted=aborted,
             output_path=telemetry_output,
@@ -468,6 +478,10 @@ async def main(
         logger.info(f"Saved run telemetry to {telemetry_path}")
         if telemetry_path != latest_path:
             logger.info(f"Updated latest telemetry pointer at {latest_path}")
+
+
+async def run_fundamentals_update(limit=100, **kwargs):
+    return await main(limit=limit, **kwargs)
 
 if __name__ == "__main__":
     import fire
