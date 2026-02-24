@@ -18,8 +18,6 @@ from .ops_state import (
 )
 from .fundamentals_store import FundamentalsStore
 
-# Set up logging
-logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class FundamentalScraper:
@@ -178,32 +176,6 @@ class FundamentalScraper:
             return f"impact/esg/{conid}?accounts={self.esg_account_id}"
         return f"impact/esg/{conid}"
 
-    def _sanitize_sentiment_search_payload(self, payload):
-        if not isinstance(payload, dict):
-            return payload
-
-        sentiment = payload.get("sentiment")
-        if not isinstance(sentiment, list):
-            return payload
-
-        drop_keys = {
-            "high",
-            "low",
-            "price",
-            "price_change_p",
-            "close",
-            "open",
-            "price_change",
-        }
-
-        for row in sentiment:
-            if not isinstance(row, dict):
-                continue
-            for key in drop_keys:
-                row.pop(key, None)
-
-        return payload
-
     async def fetch_performance_with_period_fallback(self, client, conid):
         """
         Try largest->smallest period and return first performance payload with data.
@@ -271,8 +243,6 @@ class FundamentalScraper:
         
         # Merge results, only if they have actual payload data
         for name, data in fixed_results.items():
-            if name == "sentiment_search" and isinstance(data, dict):
-                data = self._sanitize_sentiment_search_payload(data)
             has_payload = self._has_payload_data(data, name)
             include_payload = has_payload or (
                 name in {"profile_and_fees", "sentiment_search", "price_chart"}
@@ -366,7 +336,10 @@ async def main(
     verbose=False,
 ):
     log_level = logging.INFO if verbose else logging.WARNING
-    logging.getLogger().setLevel(log_level)
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s")
+    root_logger.setLevel(log_level)
     logger.setLevel(log_level)
     
     scraper = FundamentalScraper()

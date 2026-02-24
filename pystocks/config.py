@@ -22,9 +22,7 @@ FACTOR_FEATURES_PARQUET_DIR = FACTORS_DIR / "ibkr_factor_features"
 RESEARCH_DIR = DATA_DIR / "research"
 
 # File Paths
-CONTRACTS_DB_PATH = DATA_DIR / "contract_details.csv"
 SESSION_STATE_PATH = DATA_DIR / "auth_state.json"
-FUNDAMENTALS_ARCHIVE_PATH = FUNDAMENTALS_DIR / "fundamentals_archive.parquet"
 FUNDAMENTALS_EVENTS_DB_PATH = FUNDAMENTALS_DIR / "events.db"
 FUNDAMENTALS_DUCKDB_PATH = FUNDAMENTALS_DIR / "fundamentals.duckdb"
 

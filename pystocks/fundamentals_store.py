@@ -2,7 +2,6 @@ import hashlib
 import json
 import logging
 import re
-import shutil
 import sqlite3
 from collections import Counter
 from datetime import datetime, timezone
@@ -11,7 +10,6 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 import zstandard as zstd
-from tqdm import tqdm
 
 from .config import (
     DIVIDENDS_EVENTS_PARQUET_DIR,
@@ -50,8 +48,6 @@ ENDPOINT_KEYS = [
     "ownership",
     "esg",
 ]
-
-SERIES_ENDPOINTS = {"price_chart", "sentiment_search"}
 
 DISCRETE_ENDPOINTS = {
     "profile_and_fees",
@@ -1246,7 +1242,8 @@ class FundamentalsStore:
                 CAST(NULL AS DOUBLE) AS high,
                 CAST(NULL AS DOUBLE) AS low,
                 CAST(NULL AS DOUBLE) AS close,
-                CAST(NULL AS BIGINT) AS debug_y
+                CAST(NULL AS BIGINT) AS debug_y,
+                CAST(NULL AS VARCHAR) AS row_key
             WHERE FALSE
             """
         )
@@ -1265,7 +1262,8 @@ class FundamentalsStore:
                 CAST(NULL AS VARCHAR) AS source_file,
                 CAST(NULL AS VARCHAR) AS inserted_at,
                 CAST(NULL AS VARCHAR) AS trade_date,
-                CAST(NULL AS BIGINT) AS datetime_ms
+                CAST(NULL AS BIGINT) AS datetime_ms,
+                CAST(NULL AS VARCHAR) AS row_key
             WHERE FALSE
             """
         )
@@ -1290,7 +1288,8 @@ class FundamentalsStore:
                 CAST(NULL AS DOUBLE) AS holding,
                 CAST(NULL AS VARCHAR) AS party,
                 CAST(NULL AS VARCHAR) AS source,
-                CAST(NULL AS VARCHAR) AS insider
+                CAST(NULL AS VARCHAR) AS insider,
+                CAST(NULL AS VARCHAR) AS row_key
             WHERE FALSE
             """
         )
@@ -1316,7 +1315,8 @@ class FundamentalsStore:
                 CAST(NULL AS VARCHAR) AS event_type,
                 CAST(NULL AS VARCHAR) AS declaration_date,
                 CAST(NULL AS VARCHAR) AS record_date,
-                CAST(NULL AS VARCHAR) AS payment_date
+                CAST(NULL AS VARCHAR) AS payment_date,
+                CAST(NULL AS VARCHAR) AS row_key
             WHERE FALSE
             """
         )
@@ -1859,392 +1859,9 @@ class FundamentalsStore:
             "duckdb_path": str(self.duckdb_path),
         }
 
-    def _iterate_endpoint_events(self, endpoint):
-        with self._get_conn() as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT id, conid, observed_at, effective_at, payload_hash, blob_path, source_file, inserted_at
-                FROM endpoint_events
-                WHERE endpoint = ?
-                ORDER BY id
-                """,
-                (endpoint,),
-            )
-            return [dict(r) for r in cur.fetchall()]
-
-    def backfill_endpoint_snapshots(self, refresh_duckdb=True, purge_existing=True):
-        if purge_existing:
-            for endpoint_dir in self.parquet_dir.glob("endpoint=*"):
-                if endpoint_dir.is_dir():
-                    shutil.rmtree(endpoint_dir)
-
-        with self._get_conn() as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT id, conid, endpoint, endpoint_slug, observed_at, effective_at,
-                       effective_source, payload_hash, blob_path, payload_size_raw,
-                       payload_size_compressed, source_file, inserted_at
-                FROM endpoint_events
-                ORDER BY id
-                """
-            )
-            event_rows = [dict(r) for r in cur.fetchall()]
-
-        files_written = 0
-        failed = 0
-
-        for event_row in tqdm(event_rows, desc="Backfilling endpoint snapshots"):
-            try:
-                payload = self._load_blob_payload(event_row["blob_path"])
-                base_row = {
-                    "event_id": int(event_row["id"]),
-                    "conid": str(event_row["conid"]),
-                    "endpoint": event_row["endpoint"],
-                    "endpoint_slug": event_row["endpoint_slug"],
-                    "observed_at": event_row["observed_at"],
-                    "effective_at": event_row["effective_at"],
-                    "effective_source": event_row["effective_source"],
-                    "payload_hash": event_row["payload_hash"],
-                    "blob_path": event_row["blob_path"],
-                    "payload_size_raw": event_row["payload_size_raw"],
-                    "payload_size_compressed": event_row["payload_size_compressed"],
-                    "source_file": event_row["source_file"],
-                    "inserted_at": event_row["inserted_at"],
-                }
-                snapshot_row = self._build_endpoint_snapshot_row(base_row, payload)
-                self._write_endpoint_event_parquet(snapshot_row, event_row["endpoint_slug"], event_row["effective_at"])
-                files_written += 1
-            except Exception as e:
-                failed += 1
-                logger.error(f"Failed backfilling endpoint snapshot event_id={event_row.get('id')}: {e}")
-
-        if refresh_duckdb:
-            self.refresh_duckdb_views()
-
-        return {
-            "status": "ok",
-            "events_seen": len(event_rows),
-            "files_written": files_written,
-            "failed": failed,
-            "parquet_dir": str(self.parquet_dir),
-            "duckdb_path": str(self.duckdb_path),
-        }
-
-    def backfill_factor_features(self, refresh_duckdb=True, purge_existing=True):
-        factor_dir = self.factor_features_parquet_dir
-        if purge_existing and factor_dir.exists():
-            shutil.rmtree(factor_dir)
-        factor_dir.mkdir(parents=True, exist_ok=True)
-
-        with self._get_conn() as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT id, conid, endpoint, endpoint_slug, observed_at, effective_at,
-                       payload_hash, blob_path, source_file, inserted_at
-                FROM endpoint_events
-                ORDER BY id
-                """
-            )
-            event_rows = [dict(r) for r in cur.fetchall()]
-
-        files_written = 0
-        rows_written = 0
-        failed = 0
-
-        for event_row in tqdm(event_rows, desc="Backfilling factor features"):
-            try:
-                payload = self._load_blob_payload(event_row["blob_path"])
-                rows = extract_factor_features(
-                    endpoint=event_row["endpoint"],
-                    payload=payload,
-                    effective_at=event_row["effective_at"],
-                )
-                file_path, row_count = self._write_factor_features_parquet(
-                    rows=rows,
-                    lineage_meta={
-                        "endpoint_event_id": int(event_row["id"]),
-                        "endpoint": event_row["endpoint"],
-                        "conid": str(event_row["conid"]),
-                        "observed_at": event_row["observed_at"],
-                        "effective_at": event_row["effective_at"],
-                        "payload_hash": event_row["payload_hash"],
-                        "source_file": event_row.get("source_file"),
-                        "inserted_at": event_row.get("inserted_at"),
-                    },
-                    endpoint_slug=event_row["endpoint_slug"],
-                )
-                if file_path is not None:
-                    files_written += 1
-                rows_written += int(row_count)
-            except Exception as e:
-                failed += 1
-                logger.error(f"Failed backfilling factor features event_id={event_row.get('id')}: {e}")
-
-        if refresh_duckdb:
-            self.refresh_duckdb_views()
-
-        return {
-            "status": "ok",
-            "events_seen": len(event_rows),
-            "files_written": files_written,
-            "rows_written": rows_written,
-            "failed": failed,
-            "factor_features_dir": str(factor_dir),
-            "duckdb_path": str(self.duckdb_path),
-        }
-
-    def backfill_price_chart_series(self, refresh_duckdb=True, purge_existing=True):
-        price_chart_dir = self.price_chart_parquet_dir
-        if purge_existing and price_chart_dir.exists():
-            shutil.rmtree(price_chart_dir)
-        price_chart_dir.mkdir(parents=True, exist_ok=True)
-
-        event_rows = self._iterate_endpoint_events("price_chart")
-
-        files_written = 0
-        rows_written = 0
-        failed = 0
-
-        for event_row in tqdm(event_rows, desc="Backfilling price chart series"):
-            try:
-                payload = self._load_blob_payload(event_row["blob_path"])
-                rows = _extract_price_chart_rows(payload)
-                file_path, row_count = self._write_price_chart_series_parquet(
-                    rows=rows,
-                    lineage_meta={
-                        "endpoint_event_id": int(event_row["id"]),
-                        "conid": str(event_row["conid"]),
-                        "observed_at": event_row["observed_at"],
-                        "effective_at": event_row["effective_at"],
-                        "payload_hash": event_row["payload_hash"],
-                        "source_file": event_row.get("source_file"),
-                        "inserted_at": event_row.get("inserted_at"),
-                    },
-                )
-                if file_path is not None:
-                    files_written += 1
-                rows_written += int(row_count)
-            except Exception as e:
-                failed += 1
-                logger.error(f"Failed backfilling price_chart event_id={event_row.get('id')}: {e}")
-
-        if refresh_duckdb:
-            self.refresh_duckdb_views()
-
-        return {
-            "status": "ok",
-            "events_seen": len(event_rows),
-            "files_written": files_written,
-            "rows_written": rows_written,
-            "failed": failed,
-            "price_chart_dir": str(price_chart_dir),
-            "duckdb_path": str(self.duckdb_path),
-        }
-
-    def backfill_sentiment_search_series(self, refresh_duckdb=True, purge_existing=True):
-        sentiment_dir = self.sentiment_search_parquet_dir
-        if purge_existing and sentiment_dir.exists():
-            shutil.rmtree(sentiment_dir)
-        sentiment_dir.mkdir(parents=True, exist_ok=True)
-
-        event_rows = self._iterate_endpoint_events("sentiment_search")
-
-        files_written = 0
-        rows_written = 0
-        failed = 0
-
-        for event_row in tqdm(event_rows, desc="Backfilling sentiment_search series"):
-            try:
-                payload = self._load_blob_payload(event_row["blob_path"])
-                payload = _sanitize_sentiment_search_payload(payload)
-                rows = _extract_sentiment_search_rows(payload)
-                file_path, row_count = self._write_sentiment_search_series_parquet(
-                    rows=rows,
-                    lineage_meta={
-                        "endpoint_event_id": int(event_row["id"]),
-                        "conid": str(event_row["conid"]),
-                        "observed_at": event_row["observed_at"],
-                        "effective_at": event_row["effective_at"],
-                        "payload_hash": event_row["payload_hash"],
-                        "source_file": event_row.get("source_file"),
-                        "inserted_at": event_row.get("inserted_at"),
-                    },
-                )
-                if file_path is not None:
-                    files_written += 1
-                rows_written += int(row_count)
-            except Exception as e:
-                failed += 1
-                logger.error(f"Failed backfilling sentiment_search event_id={event_row.get('id')}: {e}")
-
-        if refresh_duckdb:
-            self.refresh_duckdb_views()
-
-        return {
-            "status": "ok",
-            "events_seen": len(event_rows),
-            "files_written": files_written,
-            "rows_written": rows_written,
-            "failed": failed,
-            "sentiment_search_dir": str(sentiment_dir),
-            "duckdb_path": str(self.duckdb_path),
-        }
-
-    def backfill_ownership_trade_log_series(self, refresh_duckdb=True, purge_existing=True):
-        ownership_dir = self.ownership_trade_log_parquet_dir
-        if purge_existing and ownership_dir.exists():
-            shutil.rmtree(ownership_dir)
-        ownership_dir.mkdir(parents=True, exist_ok=True)
-
-        event_rows = self._iterate_endpoint_events("ownership")
-
-        files_written = 0
-        rows_written = 0
-        failed = 0
-
-        for event_row in tqdm(event_rows, desc="Backfilling ownership trade-log series"):
-            try:
-                payload = self._load_blob_payload(event_row["blob_path"])
-                rows = extract_ownership_trade_log(payload, drop_no_change=True)
-                file_path, row_count = self._write_ownership_trade_log_series_parquet(
-                    rows=rows,
-                    lineage_meta={
-                        "endpoint_event_id": int(event_row["id"]),
-                        "conid": str(event_row["conid"]),
-                        "observed_at": event_row["observed_at"],
-                        "effective_at": event_row["effective_at"],
-                        "payload_hash": event_row["payload_hash"],
-                        "source_file": event_row.get("source_file"),
-                        "inserted_at": event_row.get("inserted_at"),
-                    },
-                )
-                if file_path is not None:
-                    files_written += 1
-                rows_written += int(row_count)
-            except Exception as e:
-                failed += 1
-                logger.error(f"Failed backfilling ownership event_id={event_row.get('id')}: {e}")
-
-        if refresh_duckdb:
-            self.refresh_duckdb_views()
-
-        return {
-            "status": "ok",
-            "events_seen": len(event_rows),
-            "files_written": files_written,
-            "rows_written": rows_written,
-            "failed": failed,
-            "ownership_trade_log_dir": str(ownership_dir),
-            "duckdb_path": str(self.duckdb_path),
-        }
-
-    def backfill_dividends_events_series(self, refresh_duckdb=True, purge_existing=True):
-        dividends_dir = self.dividends_events_parquet_dir
-        if purge_existing and dividends_dir.exists():
-            shutil.rmtree(dividends_dir)
-        dividends_dir.mkdir(parents=True, exist_ok=True)
-
-        event_rows = self._iterate_endpoint_events("dividends")
-
-        files_written = 0
-        rows_written = 0
-        failed = 0
-
-        for event_row in tqdm(event_rows, desc="Backfilling dividends events series"):
-            try:
-                payload = self._load_blob_payload(event_row["blob_path"])
-                rows = extract_dividends_events(payload)
-                file_path, row_count = self._write_dividends_events_series_parquet(
-                    rows=rows,
-                    lineage_meta={
-                        "endpoint_event_id": int(event_row["id"]),
-                        "conid": str(event_row["conid"]),
-                        "observed_at": event_row["observed_at"],
-                        "effective_at": event_row["effective_at"],
-                        "payload_hash": event_row["payload_hash"],
-                        "source_file": event_row.get("source_file"),
-                        "inserted_at": event_row.get("inserted_at"),
-                    },
-                )
-                if file_path is not None:
-                    files_written += 1
-                rows_written += int(row_count)
-            except Exception as e:
-                failed += 1
-                logger.error(f"Failed backfilling dividends event_id={event_row.get('id')}: {e}")
-
-        if refresh_duckdb:
-            self.refresh_duckdb_views()
-
-        return {
-            "status": "ok",
-            "events_seen": len(event_rows),
-            "files_written": files_written,
-            "rows_written": rows_written,
-            "failed": failed,
-            "dividends_events_dir": str(dividends_dir),
-            "duckdb_path": str(self.duckdb_path),
-        }
-
-
-
 def refresh_views():
     store = FundamentalsStore()
     result = store.refresh_duckdb_views()
-    for k, v in result.items():
-        print(f"{k}: {v}")
-    return result
-
-
-def backfill_endpoint_snapshots():
-    store = FundamentalsStore()
-    result = store.backfill_endpoint_snapshots(refresh_duckdb=True, purge_existing=True)
-    for k, v in result.items():
-        print(f"{k}: {v}")
-    return result
-
-
-def backfill_factor_features():
-    store = FundamentalsStore()
-    result = store.backfill_factor_features(refresh_duckdb=True, purge_existing=True)
-    for k, v in result.items():
-        print(f"{k}: {v}")
-    return result
-
-
-def backfill_price_chart_series():
-    store = FundamentalsStore()
-    result = store.backfill_price_chart_series(refresh_duckdb=True, purge_existing=True)
-    for k, v in result.items():
-        print(f"{k}: {v}")
-    return result
-
-
-def backfill_sentiment_search_series():
-    store = FundamentalsStore()
-    result = store.backfill_sentiment_search_series(refresh_duckdb=True, purge_existing=True)
-    for k, v in result.items():
-        print(f"{k}: {v}")
-    return result
-
-
-def backfill_ownership_trade_log_series():
-    store = FundamentalsStore()
-    result = store.backfill_ownership_trade_log_series(refresh_duckdb=True, purge_existing=True)
-    for k, v in result.items():
-        print(f"{k}: {v}")
-    return result
-
-
-def backfill_dividends_events_series():
-    store = FundamentalsStore()
-    result = store.backfill_dividends_events_series(refresh_duckdb=True, purge_existing=True)
     for k, v in result.items():
         print(f"{k}: {v}")
     return result
@@ -2256,11 +1873,5 @@ if __name__ == "__main__":
     fire.Fire(
         {
             "refresh_views": refresh_views,
-            "backfill_endpoint_snapshots": backfill_endpoint_snapshots,
-            "backfill_factor_features": backfill_factor_features,
-            "backfill_price_chart_series": backfill_price_chart_series,
-            "backfill_sentiment_search_series": backfill_sentiment_search_series,
-            "backfill_ownership_trade_log_series": backfill_ownership_trade_log_series,
-            "backfill_dividends_events_series": backfill_dividends_events_series,
         }
     )

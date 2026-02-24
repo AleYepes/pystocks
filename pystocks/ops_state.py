@@ -7,6 +7,7 @@ from .config import FUNDAMENTALS_DUCKDB_PATH
 
 
 DB_PATH = FUNDAMENTALS_DUCKDB_PATH
+_INITIALIZED_DB_PATH = None
 
 
 def get_connection():
@@ -15,6 +16,11 @@ def get_connection():
 
 def init_db():
     """Initializes operational tables inside DuckDB."""
+    global _INITIALIZED_DB_PATH
+    db_path = str(DB_PATH)
+    if _INITIALIZED_DB_PATH == db_path:
+        return
+
     con = get_connection()
     try:
         con.execute(
@@ -45,12 +51,15 @@ def init_db():
         )
     finally:
         con.close()
+    _INITIALIZED_DB_PATH = db_path
 
 
-def _coalesce_series(series, default=None):
-    if series is None:
-        return pd.Series(default)
-    return series
+def _series_or_default(df, column, default=""):
+    if column in df.columns:
+        series = df[column]
+    else:
+        series = pd.Series([default] * len(df), index=df.index)
+    return series.fillna(default)
 
 
 def upsert_instruments_from_products(products_df):
@@ -65,21 +74,31 @@ def upsert_instruments_from_products(products_df):
     if "conid" not in df.columns:
         raise ValueError("products_df must include a 'conid' column")
 
+    conid_series = _series_or_default(df, "conid", "").astype(str).str.strip()
+    name_series = _series_or_default(df, "name", "").astype(str)
+    description_series = _series_or_default(df, "description", "").astype(str)
+    merged_name = name_series.where(name_series.str.strip() != "", description_series)
+
     normalized = pd.DataFrame(
         {
-            "conid": df["conid"].astype(str),
-            "symbol": _coalesce_series(df.get("symbol"), "").astype(str),
-            "exchange": _coalesce_series(df.get("exchangeId"), "").astype(str),
-            "isin": _coalesce_series(df.get("isin"), "").astype(str),
-            "currency": _coalesce_series(df.get("currency"), "").astype(str),
-            "name": _coalesce_series(df.get("name"), _coalesce_series(df.get("description"), "")).astype(str),
+            "conid": conid_series,
+            "symbol": _series_or_default(df, "symbol", "").astype(str),
+            "exchange": _series_or_default(df, "exchangeId", "").astype(str),
+            "isin": _series_or_default(df, "isin", "").astype(str),
+            "currency": _series_or_default(df, "currency", "").astype(str),
+            "name": merged_name,
         }
-    ).drop_duplicates(subset=["conid"], keep="last")
+    )
+    normalized = normalized[
+        normalized["conid"].notna()
+        & normalized["conid"].ne("")
+        & (normalized["conid"].str.lower() != "nan")
+    ].drop_duplicates(subset=["conid"], keep="last")
 
     now_iso = datetime.now(timezone.utc).isoformat()
+    init_db()
     con = get_connection()
     try:
-        init_db()
         con.register("products_df", normalized)
         con.execute(
             """
@@ -157,7 +176,6 @@ def get_scraped_conids(today=None):
 
 
 def log_scrape(conid, endpoint, status_code, error_message=None):
-    init_db()
     con = get_connection()
     try:
         con.execute(
@@ -182,7 +200,6 @@ def update_instrument_fundamentals_status(conid, status, mark_scraped=False):
     Updates per-conid fundamentals scrape status.
     `mark_scraped=True` marks the conid as successfully scraped today.
     """
-    init_db()
     con = get_connection()
     try:
         if mark_scraped:

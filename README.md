@@ -17,7 +17,6 @@ python -m pystocks.cli scrape_products
 python -m pystocks.cli scrape_fundamentals --limit 100
 
 # storage maintenance
-python -m pystocks.cli backfill_fundamentals_normalized
 python -m pystocks.cli refresh_fundamentals_views
 
 # tail-end pipeline
