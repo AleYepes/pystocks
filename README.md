@@ -19,15 +19,20 @@ python -m pystocks.cli scrape_fundamentals --limit 100
 # storage maintenance
 python -m pystocks.cli refresh_fundamentals_views
 
-# tail-end pipeline
+# tail-end steps
 python -m pystocks.cli preprocess_prices
 python -m pystocks.cli run_analysis
+
+# full end-to-end pipeline
 python -m pystocks.cli run_pipeline
 ```
 
 `run_pipeline` executes:
-1. `preprocess_prices`
-2. `run_analysis`
+1. `scrape_products`
+2. `scrape_fundamentals`
+3. `refresh_fundamentals_views`
+4. `preprocess_prices`
+5. `run_analysis`
 
 ## Data locations (current)
 - Manifest/event store: `data/fundamentals/events.db`
