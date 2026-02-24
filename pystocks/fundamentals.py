@@ -176,6 +176,24 @@ class FundamentalScraper:
             return f"impact/esg/{conid}?accounts={self.esg_account_id}"
         return f"impact/esg/{conid}"
 
+    def _landing_has_total_net_assets(self, landing_data):
+        """True when landing payload provides key_profile.data.total_net_assets."""
+        if not isinstance(landing_data, dict):
+            return False
+
+        key_profile = landing_data.get("key_profile") or landing_data.get("keyProfile")
+        if not isinstance(key_profile, dict):
+            return False
+
+        profile_data = key_profile.get("data")
+        if not isinstance(profile_data, dict):
+            return False
+
+        if "total_net_assets" not in profile_data:
+            return False
+
+        return self._has_any_value(profile_data.get("total_net_assets"))
+
     async def fetch_performance_with_period_fallback(self, client, conid):
         """
         Try largest->smallest period and return first performance payload with data.
@@ -202,6 +220,19 @@ class FundamentalScraper:
             return None
         if self._has_any_value(landing_data):
             self._record_useful_payload("landing")
+
+        combined_data = {
+            "conid": conid,
+            "scraped_at": datetime.now().isoformat(),
+            "landing": landing_data,
+        }
+
+        if not self._landing_has_total_net_assets(landing_data):
+            logger.info(
+                "Skipping endpoint fanout for conid=%s: landing.key_profile.data.total_net_assets missing/null.",
+                conid,
+            )
+            return combined_data
 
         fixed_task_items = [
             ("profile_and_fees", self.fetch_endpoint(client, f"mf_profile_and_fees/{conid}?sustainability=UK&lang=en", conid)),
@@ -234,12 +265,6 @@ class FundamentalScraper:
 
         if "__AUTH_ERROR__" in fixed_results.values() or any(r[0] == "__AUTH_ERROR__" for r in period_results.values()):
             return "__AUTH_ERROR__"
-
-        combined_data = {
-            "conid": conid,
-            "scraped_at": datetime.now().isoformat(),
-            "landing": landing_data,
-        }
         
         # Merge results, only if they have actual payload data
         for name, data in fixed_results.items():
