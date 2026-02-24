@@ -5,12 +5,17 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs
-import pandas as pd
 from tqdm.asyncio import tqdm
 
-from .config import IB_PRODUCTS_PATH, RESEARCH_DIR
+from .config import RESEARCH_DIR
 from .session import IBKRSession
-from .database import init_db, log_scrape, sync_instruments_from_csv, get_connection
+from .ops_state import (
+    init_db,
+    log_scrape,
+    get_all_instrument_conids,
+    get_scraped_conids,
+    update_instrument_fundamentals_status,
+)
 from .fundamentals_store import FundamentalsStore
 
 # Set up logging
@@ -350,14 +355,6 @@ class FundamentalScraper:
 
         return telemetry_path, latest_path
 
-def get_scraped_conids():
-    """Returns a list of conids that were already successfully scraped today."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT conid FROM instruments WHERE last_scraped_fundamentals = ?", (today,))
-        return [row[0] for row in cursor.fetchall()]
-
 async def main(
     limit=None,
     start_index=0,
@@ -371,24 +368,20 @@ async def main(
     log_level = logging.INFO if verbose else logging.WARNING
     logging.getLogger().setLevel(log_level)
     logger.setLevel(log_level)
-        
+    
     scraper = FundamentalScraper()
-    
-    if not IB_PRODUCTS_PATH.exists():
-        logger.error(f"Products file not found: {IB_PRODUCTS_PATH}")
-        return
 
-    sync_instruments_from_csv(IB_PRODUCTS_PATH)
-    
     scraped_today = [] if force else get_scraped_conids()
     logger.info(f"Skipping {len(scraped_today)} instruments already scraped today.")
 
-    df = pd.read_csv(IB_PRODUCTS_PATH)
-    # Ensure conid is treated as string for consistency
-    df['conid'] = df['conid'].astype(str)
-    
-    # Filter for unique conids not already scraped today
-    all_conids = df['conid'].unique()
+    all_conids = get_all_instrument_conids()
+    if not all_conids:
+        logger.error(
+            "No products found in DuckDB instruments table. "
+            "Run `python -m pystocks.cli scrape_products` first."
+        )
+        return
+
     conids_to_scrape = [c for c in all_conids if c not in scraped_today]
     
     if limit:
@@ -418,6 +411,7 @@ async def main(
                         data = await scraper.scrape_conid(client, conid)
 
                         if data == "__AUTH_ERROR__":
+                            update_instrument_fundamentals_status(conid, "auth_error", mark_scraped=False)
                             logger.warning(f"Authentication expired while scraping conid={conid}.")
                             needs_reauth = True
                             break
@@ -431,7 +425,17 @@ async def main(
                             duplicate_events += int(store_result.get("duplicate_events", 0))
                             factor_rows_written += int(store_result.get("factor_rows_written", 0))
                             series_rows_written += int(store_result.get("series_rows_written", 0))
-                            saved_snapshots += 1
+                            if store_result.get("status") == "ok":
+                                update_instrument_fundamentals_status(conid, "success", mark_scraped=True)
+                                saved_snapshots += 1
+                            else:
+                                update_instrument_fundamentals_status(
+                                    conid,
+                                    str(store_result.get("status") or "store_error"),
+                                    mark_scraped=False,
+                                )
+                        else:
+                            update_instrument_fundamentals_status(conid, "empty_payload", mark_scraped=False)
 
                         processed_conids += 1
                         pbar.update(1)

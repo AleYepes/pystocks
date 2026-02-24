@@ -685,6 +685,7 @@ class FundamentalsStore:
             }
             for key, value in (row or {}).items():
                 full_row[_sanitize_segment(key)] = _to_scalar(value)
+            full_row["row_key"] = self._series_row_key(endpoint, full_row)
             enriched_rows.append(full_row)
 
         if not enriched_rows:
@@ -692,11 +693,324 @@ class FundamentalsStore:
 
         partition_dir = Path(base_dir) / f"conid={conid}"
         partition_dir.mkdir(parents=True, exist_ok=True)
+        target_path = partition_dir / "series.parquet"
 
-        file_name = f"{effective_at}_{payload_hash[:12]}_{event_id}.parquet"
-        file_path = partition_dir / file_name
-        pd.DataFrame(enriched_rows).to_parquet(file_path, index=False, engine="pyarrow", compression="zstd")
-        return file_path, len(enriched_rows)
+        existing_files = sorted(partition_dir.glob("*.parquet"))
+        existing_df = pd.DataFrame()
+        if existing_files:
+            frames = []
+            for path in existing_files:
+                try:
+                    frames.append(pd.read_parquet(path))
+                except Exception as e:
+                    logger.warning(f"Failed reading existing series parquet {path}: {e}")
+            if frames:
+                existing_df = pd.concat(frames, ignore_index=True, sort=False)
+
+        incoming_df = pd.DataFrame(enriched_rows)
+        if existing_df.empty:
+            combined = incoming_df
+        else:
+            combined = pd.concat([existing_df, incoming_df], ignore_index=True, sort=False)
+
+        if "row_key" not in combined.columns:
+            combined["row_key"] = None
+
+        missing_row_key = combined["row_key"].isna() | (
+            combined["row_key"].astype(str).str.strip() == ""
+        )
+        if bool(missing_row_key.any()):
+            combined.loc[missing_row_key, "row_key"] = combined.loc[missing_row_key].apply(
+                lambda r: self._series_row_key(endpoint, r),
+                axis=1,
+            )
+
+        combined = combined.drop_duplicates(subset=["row_key"], keep="last")
+        combined = self._sort_series_rows(endpoint, combined)
+
+        combined.to_parquet(target_path, index=False, engine="pyarrow", compression="zstd")
+
+        for stale_file in existing_files:
+            if stale_file != target_path and stale_file.exists():
+                stale_file.unlink()
+
+        return target_path, len(enriched_rows)
+
+    def _base_row_from_event_meta(self, event_meta):
+        return {
+            "event_id": int(event_meta["event_id"]),
+            "conid": str(event_meta["conid"]),
+            "endpoint": event_meta["endpoint"],
+            "endpoint_slug": event_meta["endpoint_slug"],
+            "observed_at": event_meta["observed_at"],
+            "effective_at": event_meta["effective_at"],
+            "effective_source": event_meta["effective_source"],
+            "payload_hash": event_meta["payload_hash"],
+            "blob_path": event_meta["blob_path"],
+            "payload_size_raw": event_meta["payload_size_raw"],
+            "payload_size_compressed": event_meta["payload_size_compressed"],
+            "source_file": event_meta.get("source_file"),
+            "inserted_at": event_meta["inserted_at"],
+        }
+
+    def _lineage_meta_from_event_meta(self, event_meta):
+        return {
+            "endpoint_event_id": int(event_meta["event_id"]),
+            "endpoint": event_meta["endpoint"],
+            "conid": str(event_meta["conid"]),
+            "observed_at": event_meta["observed_at"],
+            "effective_at": event_meta["effective_at"],
+            "payload_hash": event_meta["payload_hash"],
+            "source_file": event_meta.get("source_file"),
+            "inserted_at": event_meta["inserted_at"],
+        }
+
+    def _expected_endpoint_snapshot_path(self, event_meta):
+        effective_at = str(event_meta["effective_at"])
+        dt = datetime.fromisoformat(f"{effective_at}T00:00:00+00:00")
+        partition_dir = (
+            self.parquet_dir
+            / f"endpoint={event_meta['endpoint_slug']}"
+            / f"year={dt.year:04d}"
+            / f"month={dt.month:02d}"
+        )
+        file_name = (
+            f"{effective_at}_{event_meta['conid']}_"
+            f"{str(event_meta['payload_hash'])[:12]}_{int(event_meta['event_id'])}.parquet"
+        )
+        return partition_dir / file_name
+
+    def _expected_factor_features_path(self, event_meta):
+        partition_dir = (
+            self.factor_features_parquet_dir
+            / f"endpoint={event_meta['endpoint_slug']}"
+            / f"conid={event_meta['conid']}"
+        )
+        file_name = (
+            f"{event_meta['effective_at']}_"
+            f"{str(event_meta['payload_hash'])[:12]}_{int(event_meta['event_id'])}.parquet"
+        )
+        return partition_dir / file_name
+
+    def _expected_series_path(self, event_meta, base_dir):
+        return Path(base_dir) / f"conid={event_meta['conid']}" / "series.parquet"
+
+    def _series_row_key(self, endpoint, row):
+        def value(name):
+            v = row.get(name) if hasattr(row, "get") else None
+            if v is None:
+                return ""
+            if isinstance(v, float) and pd.isna(v):
+                return ""
+            text = str(v).strip()
+            if not text or text.lower() == "nan":
+                return ""
+            return text
+
+        if endpoint == "price_chart":
+            ident = value("trade_date") or value("timestamp_ms") or value("debug_y")
+            return f"price_chart|{ident}"
+        if endpoint == "sentiment_search":
+            ident = value("datetime_ms") or value("trade_date")
+            return f"sentiment_search|{ident}"
+        if endpoint == "ownership":
+            return "|".join(
+                [
+                    "ownership",
+                    value("trade_date"),
+                    value("action"),
+                    value("party"),
+                    value("source"),
+                    value("insider"),
+                    value("shares"),
+                    value("value"),
+                    value("holding"),
+                ]
+            )
+        if endpoint == "dividends":
+            return "|".join(
+                [
+                    "dividends",
+                    value("event_date") or value("trade_date"),
+                    value("amount"),
+                    value("currency"),
+                    value("event_type"),
+                    value("declaration_date"),
+                    value("record_date"),
+                    value("payment_date"),
+                    value("description"),
+                ]
+            )
+
+        skip = {
+            "endpoint_event_id",
+            "endpoint",
+            "conid",
+            "observed_at",
+            "effective_at",
+            "payload_hash",
+            "source_file",
+            "inserted_at",
+            "row_key",
+        }
+        payload = []
+        for k in sorted(row.keys()):
+            if k in skip:
+                continue
+            payload.append(f"{k}={value(k)}")
+        return f"{endpoint}|{'|'.join(payload)}"
+
+    def _sort_series_rows(self, endpoint, df):
+        sort_map = {
+            "price_chart": ["trade_date", "timestamp_ms", "debug_y"],
+            "sentiment_search": ["trade_date", "datetime_ms"],
+            "ownership": ["trade_date", "action", "party", "source", "insider", "shares", "value", "holding"],
+            "dividends": [
+                "event_date",
+                "trade_date",
+                "payment_date",
+                "record_date",
+                "declaration_date",
+                "amount",
+                "currency",
+                "event_type",
+            ],
+        }
+        cols = [c for c in sort_map.get(endpoint, ["row_key"]) if c in df.columns]
+        if not cols:
+            return df.reset_index(drop=True)
+        try:
+            return df.sort_values(by=cols, kind="stable", na_position="last").reset_index(drop=True)
+        except Exception:
+            if "row_key" in df.columns:
+                return df.sort_values(by=["row_key"], kind="stable").reset_index(drop=True)
+            return df.reset_index(drop=True)
+
+    def _get_existing_event(self, conid, endpoint, effective_at, payload_hash):
+        with self._get_conn() as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    conid,
+                    endpoint,
+                    endpoint_slug,
+                    observed_at,
+                    effective_at,
+                    effective_source,
+                    payload_hash,
+                    blob_path,
+                    payload_size_raw,
+                    payload_size_compressed,
+                    source_file,
+                    inserted_at
+                FROM endpoint_events
+                WHERE conid = ?
+                  AND endpoint = ?
+                  AND effective_at = ?
+                  AND payload_hash = ?
+                LIMIT 1
+                """,
+                (str(conid), endpoint, effective_at, payload_hash),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            out = dict(row)
+            out["event_id"] = int(out.pop("id"))
+            return out
+
+    def _materialize_event_artifacts(self, event_meta, payload, only_missing=False):
+        base_row = self._base_row_from_event_meta(event_meta)
+        lineage_meta = self._lineage_meta_from_event_meta(event_meta)
+        endpoint = base_row["endpoint"]
+        endpoint_slug = base_row["endpoint_slug"]
+        effective_at = base_row["effective_at"]
+
+        snapshot_path = self._expected_endpoint_snapshot_path(event_meta)
+        if (not only_missing) or (not snapshot_path.exists()):
+            snapshot_row = self._build_endpoint_snapshot_row(base_row, payload)
+            snapshot_path = Path(
+                self._write_endpoint_event_parquet(snapshot_row, endpoint_slug, effective_at)
+            )
+
+        factor_rows = extract_factor_features(endpoint, payload, effective_at=effective_at)
+        factor_path = None
+        factor_rows_written = 0
+        if factor_rows:
+            expected_factor_path = self._expected_factor_features_path(event_meta)
+            if (not only_missing) or (not expected_factor_path.exists()):
+                written_factor_path, factor_rows_written = self._write_factor_features_parquet(
+                    rows=factor_rows,
+                    lineage_meta=lineage_meta,
+                    endpoint_slug=endpoint_slug,
+                )
+                if written_factor_path is not None:
+                    factor_path = Path(written_factor_path)
+            else:
+                factor_path = expected_factor_path
+
+        series_path = None
+        series_rows_written = 0
+        if endpoint == "price_chart":
+            rows = _extract_price_chart_rows(payload)
+            expected_series_path = self._expected_series_path(event_meta, self.price_chart_parquet_dir)
+            if rows and ((not only_missing) or (not expected_series_path.exists())):
+                written_series_path, series_rows_written = self._write_price_chart_series_parquet(
+                    rows,
+                    lineage_meta=lineage_meta,
+                )
+                if written_series_path is not None:
+                    series_path = Path(written_series_path)
+            elif expected_series_path.exists():
+                series_path = expected_series_path
+        elif endpoint == "sentiment_search":
+            sanitized = _sanitize_sentiment_search_payload(payload)
+            rows = _extract_sentiment_search_rows(sanitized)
+            expected_series_path = self._expected_series_path(event_meta, self.sentiment_search_parquet_dir)
+            if rows and ((not only_missing) or (not expected_series_path.exists())):
+                written_series_path, series_rows_written = self._write_sentiment_search_series_parquet(
+                    rows,
+                    lineage_meta=lineage_meta,
+                )
+                if written_series_path is not None:
+                    series_path = Path(written_series_path)
+            elif expected_series_path.exists():
+                series_path = expected_series_path
+        elif endpoint == "ownership":
+            rows = extract_ownership_trade_log(payload, drop_no_change=True)
+            expected_series_path = self._expected_series_path(event_meta, self.ownership_trade_log_parquet_dir)
+            if rows and ((not only_missing) or (not expected_series_path.exists())):
+                written_series_path, series_rows_written = self._write_ownership_trade_log_series_parquet(
+                    rows,
+                    lineage_meta=lineage_meta,
+                )
+                if written_series_path is not None:
+                    series_path = Path(written_series_path)
+            elif expected_series_path.exists():
+                series_path = expected_series_path
+        elif endpoint == "dividends":
+            rows = extract_dividends_events(payload)
+            expected_series_path = self._expected_series_path(event_meta, self.dividends_events_parquet_dir)
+            if rows and ((not only_missing) or (not expected_series_path.exists())):
+                written_series_path, series_rows_written = self._write_dividends_events_series_parquet(
+                    rows,
+                    lineage_meta=lineage_meta,
+                )
+                if written_series_path is not None:
+                    series_path = Path(written_series_path)
+            elif expected_series_path.exists():
+                series_path = expected_series_path
+
+        return {
+            "snapshot_path": str(snapshot_path) if snapshot_path is not None else None,
+            "factor_path": str(factor_path) if factor_path is not None else None,
+            "factor_rows_written": int(factor_rows_written),
+            "series_path": str(series_path) if series_path is not None else None,
+            "series_rows_written": int(series_rows_written),
+        }
 
     def persist_endpoint_payload(
         self,
@@ -744,18 +1058,37 @@ class FundamentalsStore:
             conn.commit()
 
         if not inserted:
+            existing_event = self._get_existing_event(
+                conid=conid,
+                endpoint=endpoint,
+                effective_at=effective_at,
+                payload_hash=blob_info["hash"],
+            )
+            artifacts = {
+                "snapshot_path": None,
+                "factor_path": None,
+                "factor_rows_written": 0,
+                "series_path": None,
+                "series_rows_written": 0,
+            }
+            if existing_event is not None:
+                artifacts = self._materialize_event_artifacts(
+                    event_meta=existing_event,
+                    payload=payload,
+                    only_missing=True,
+                )
             return {
                 "inserted": False,
                 "duplicate": True,
                 "endpoint": endpoint,
-                "factor_rows_written": 0,
-                "series_rows_written": 0,
-                "series_path": None,
-                "factor_path": None,
-                "snapshot_path": None,
+                "snapshot_path": artifacts["snapshot_path"],
+                "factor_path": artifacts["factor_path"],
+                "factor_rows_written": int(artifacts["factor_rows_written"]),
+                "series_path": artifacts["series_path"],
+                "series_rows_written": int(artifacts["series_rows_written"]),
             }
 
-        base_row = {
+        event_meta = {
             "event_id": event_id,
             "conid": str(conid),
             "endpoint": endpoint,
@@ -770,95 +1103,21 @@ class FundamentalsStore:
             "source_file": source_file,
             "inserted_at": now_iso,
         }
-
-        snapshot_row = self._build_endpoint_snapshot_row(base_row, payload)
-        snapshot_path = self._write_endpoint_event_parquet(snapshot_row, endpoint_slug, effective_at)
-
-        factor_rows = extract_factor_features(endpoint, payload, effective_at=effective_at)
-        factor_path, factor_rows_written = self._write_factor_features_parquet(
-            rows=factor_rows,
-            lineage_meta={
-                "endpoint_event_id": event_id,
-                "endpoint": endpoint,
-                "conid": str(conid),
-                "observed_at": observed_at,
-                "effective_at": effective_at,
-                "payload_hash": blob_info["hash"],
-                "source_file": source_file,
-                "inserted_at": now_iso,
-            },
-            endpoint_slug=endpoint_slug,
+        artifacts = self._materialize_event_artifacts(
+            event_meta=event_meta,
+            payload=payload,
+            only_missing=False,
         )
-
-        series_path = None
-        series_rows_written = 0
-        if endpoint == "price_chart":
-            rows = _extract_price_chart_rows(payload)
-            series_path, series_rows_written = self._write_price_chart_series_parquet(
-                rows,
-                lineage_meta={
-                    "endpoint_event_id": event_id,
-                    "conid": str(conid),
-                    "observed_at": observed_at,
-                    "effective_at": effective_at,
-                    "payload_hash": blob_info["hash"],
-                    "source_file": source_file,
-                    "inserted_at": now_iso,
-                },
-            )
-        elif endpoint == "sentiment_search":
-            sanitized = _sanitize_sentiment_search_payload(payload)
-            rows = _extract_sentiment_search_rows(sanitized)
-            series_path, series_rows_written = self._write_sentiment_search_series_parquet(
-                rows,
-                lineage_meta={
-                    "endpoint_event_id": event_id,
-                    "conid": str(conid),
-                    "observed_at": observed_at,
-                    "effective_at": effective_at,
-                    "payload_hash": blob_info["hash"],
-                    "source_file": source_file,
-                    "inserted_at": now_iso,
-                },
-            )
-        elif endpoint == "ownership":
-            rows = extract_ownership_trade_log(payload, drop_no_change=True)
-            series_path, series_rows_written = self._write_ownership_trade_log_series_parquet(
-                rows,
-                lineage_meta={
-                    "endpoint_event_id": event_id,
-                    "conid": str(conid),
-                    "observed_at": observed_at,
-                    "effective_at": effective_at,
-                    "payload_hash": blob_info["hash"],
-                    "source_file": source_file,
-                    "inserted_at": now_iso,
-                },
-            )
-        elif endpoint == "dividends":
-            rows = extract_dividends_events(payload)
-            series_path, series_rows_written = self._write_dividends_events_series_parquet(
-                rows,
-                lineage_meta={
-                    "endpoint_event_id": event_id,
-                    "conid": str(conid),
-                    "observed_at": observed_at,
-                    "effective_at": effective_at,
-                    "payload_hash": blob_info["hash"],
-                    "source_file": source_file,
-                    "inserted_at": now_iso,
-                },
-            )
 
         return {
             "inserted": True,
             "duplicate": False,
             "endpoint": endpoint,
-            "snapshot_path": str(snapshot_path) if snapshot_path is not None else None,
-            "factor_path": str(factor_path) if factor_path is not None else None,
-            "factor_rows_written": int(factor_rows_written),
-            "series_path": str(series_path) if series_path is not None else None,
-            "series_rows_written": int(series_rows_written),
+            "snapshot_path": artifacts["snapshot_path"],
+            "factor_path": artifacts["factor_path"],
+            "factor_rows_written": int(artifacts["factor_rows_written"]),
+            "series_path": artifacts["series_path"],
+            "series_rows_written": int(artifacts["series_rows_written"]),
         }
 
     def persist_combined_snapshot(self, snapshot, source_file=None, refresh_duckdb=False):

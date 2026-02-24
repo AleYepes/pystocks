@@ -1,10 +1,11 @@
 import asyncio
 import logging
-from playwright.async_api import async_playwright
 import pandas as pd
-from .config import IB_PRODUCTS_PATH
 import httpx
 from tqdm import tqdm
+
+from .config import FUNDAMENTALS_DUCKDB_PATH
+from .ops_state import init_db, upsert_instruments_from_products
 
 logger = logging.getLogger(__name__)
 
@@ -74,18 +75,11 @@ async def scrape_ibkr_products(verbose=False):
             logger.error("Direct API access failed")
             return
 
-    df = pd.DataFrame(all_products).drop_duplicates()
-    if IB_PRODUCTS_PATH.exists():
-        try:
-            existing_df = pd.read_csv(IB_PRODUCTS_PATH)
-            if not existing_df.empty:
-                df = pd.concat([existing_df, df]).drop_duplicates()
-                logger.info("Updating existing product list.")
-        except Exception:
-            pass
-    
-    df.to_csv(IB_PRODUCTS_PATH, index=False)
-    logger.info(f"Saved {len(df)} products to {IB_PRODUCTS_PATH}")
+    df = pd.DataFrame(all_products).drop_duplicates(subset=["conid"], keep="last")
+    init_db()
+    n_upserted = upsert_instruments_from_products(df)
+    logger.info(f"Upserted {n_upserted} products into DuckDB instruments table at {FUNDAMENTALS_DUCKDB_PATH}")
+    return {"status": "ok", "products_upserted": n_upserted, "duckdb_path": str(FUNDAMENTALS_DUCKDB_PATH)}
 
 if __name__ == "__main__":
     asyncio.run(scrape_ibkr_products(verbose=True))

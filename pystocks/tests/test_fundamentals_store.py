@@ -178,17 +178,20 @@ class FundamentalsStoreIntegrationTests(unittest.TestCase):
 
         sentiment_files = list((self.root / "sentiment" / "ibkr_sma_search").glob("conid=*/*.parquet"))
         self.assertEqual(len(sentiment_files), 1)
+        self.assertEqual(sentiment_files[0].name, "series.parquet")
         sentiment_df = pd.read_parquet(sentiment_files[0])
         forbidden = {"price", "open", "high", "low", "close", "price_change", "price_change_p"}
         self.assertTrue(forbidden.isdisjoint(set(sentiment_df.columns)))
 
         ownership_files = list((self.root / "ownership" / "ibkr_ownership_trade_log").glob("conid=*/*.parquet"))
         self.assertEqual(len(ownership_files), 1)
+        self.assertEqual(ownership_files[0].name, "series.parquet")
         ownership_df = pd.read_parquet(ownership_files[0])
         self.assertNotIn("NO CHANGE", set(ownership_df["action"].dropna().astype(str).str.upper()))
 
         dividends_files = list((self.root / "dividends" / "ibkr_dividends_events").glob("conid=*/*.parquet"))
         self.assertEqual(len(dividends_files), 1)
+        self.assertEqual(dividends_files[0].name, "series.parquet")
 
         con = duckdb.connect(str(self.root / "fundamentals" / "fundamentals.duckdb"))
         try:
@@ -208,6 +211,94 @@ class FundamentalsStoreIntegrationTests(unittest.TestCase):
             self.assertEqual(legacy_views, [])
         finally:
             con.close()
+
+    def test_duplicate_event_repairs_missing_series_file(self):
+        snapshot = {
+            "conid": "repair_123",
+            "scraped_at": "2026-02-23T12:00:00+00:00",
+            "price_chart": {
+                "plot": {
+                    "series": [
+                        {
+                            "name": "price",
+                            "plotData": [
+                                {"x": 1704067200000, "y": 100.0, "close": 100.0, "debugY": 20240101},
+                                {"x": 1704153600000, "y": 101.0, "close": 101.0, "debugY": 20240102},
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+
+        first = self.store.persist_combined_snapshot(snapshot, refresh_duckdb=False)
+        self.assertEqual(first["inserted_events"], 1)
+
+        series_glob = self.root / "prices" / "ibkr_mf_performance_chart"
+        price_files = list(series_glob.glob("conid=repair_123/*.parquet"))
+        self.assertEqual(len(price_files), 1)
+
+        price_files[0].unlink()
+        self.assertFalse(price_files[0].exists())
+
+        second = self.store.persist_combined_snapshot(snapshot, refresh_duckdb=False)
+        self.assertEqual(second["inserted_events"], 0)
+        self.assertEqual(second["duplicate_events"], 1)
+        self.assertGreater(second["per_endpoint"]["price_chart"]["series_rows_written"], 0)
+
+        repaired_files = list(series_glob.glob("conid=repair_123/*.parquet"))
+        self.assertEqual(len(repaired_files), 1)
+
+    def test_price_series_is_single_extended_file_per_conid(self):
+        first_snapshot = {
+            "conid": "extend_123",
+            "scraped_at": "2026-02-23T12:00:00+00:00",
+            "price_chart": {
+                "plot": {
+                    "series": [
+                        {
+                            "name": "price",
+                            "plotData": [
+                                {"x": 1704067200000, "y": 100.0, "close": 100.0, "debugY": 20240101},
+                                {"x": 1704153600000, "y": 101.0, "close": 101.0, "debugY": 20240102},
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+        second_snapshot = {
+            "conid": "extend_123",
+            "scraped_at": "2026-02-24T12:00:00+00:00",
+            "price_chart": {
+                "plot": {
+                    "series": [
+                        {
+                            "name": "price",
+                            "plotData": [
+                                # full-history re-send from endpoint plus one new date
+                                {"x": 1704067200000, "y": 100.0, "close": 100.0, "debugY": 20240101},
+                                {"x": 1704153600000, "y": 101.0, "close": 101.0, "debugY": 20240102},
+                                {"x": 1704240000000, "y": 103.0, "close": 103.0, "debugY": 20240103},
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+
+        self.store.persist_combined_snapshot(first_snapshot, refresh_duckdb=False)
+        self.store.persist_combined_snapshot(second_snapshot, refresh_duckdb=False)
+
+        series_glob = self.root / "prices" / "ibkr_mf_performance_chart"
+        files = list(series_glob.glob("conid=extend_123/*.parquet"))
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].name, "series.parquet")
+
+        df = pd.read_parquet(files[0])
+        self.assertEqual(len(df), 3)
+        self.assertEqual(sorted(df["trade_date"].tolist()), ["2024-01-01", "2024-01-02", "2024-01-03"])
+        self.assertEqual(df["trade_date"].nunique(), 3)
 
 
 if __name__ == "__main__":

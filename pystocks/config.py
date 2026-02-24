@@ -23,9 +23,7 @@ RESEARCH_DIR = DATA_DIR / "research"
 
 # File Paths
 CONTRACTS_DB_PATH = DATA_DIR / "contract_details.csv"
-IB_PRODUCTS_PATH = DATA_DIR / "ib_products.csv"
 SESSION_STATE_PATH = DATA_DIR / "auth_state.json"
-SQLITE_DB_PATH = DATA_DIR / "pystocks.db"
 FUNDAMENTALS_ARCHIVE_PATH = FUNDAMENTALS_DIR / "fundamentals_archive.parquet"
 FUNDAMENTALS_EVENTS_DB_PATH = FUNDAMENTALS_DIR / "events.db"
 FUNDAMENTALS_DUCKDB_PATH = FUNDAMENTALS_DIR / "fundamentals.duckdb"
