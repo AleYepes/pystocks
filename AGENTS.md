@@ -18,7 +18,8 @@
 - `data/fundamentals/fundamentals.duckdb`: analytics/query views.
 - Series stores outside `data/fundamentals/` must keep one `series.parquet` per `conid` and extend it (no per-run file fanout).
 
-## Guardrails
+## Code Guidelines
+- Do not write comments unless the code requires critical info that cannot be easily infered.
 - Do not add backfill or migration logic unless explicitly requested.
 - Prefer DuckDB + parquet flows over CSV duplication.
 - Never run destructive git commands unless explicitly requested.

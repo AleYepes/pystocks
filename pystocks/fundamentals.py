@@ -194,6 +194,12 @@ class FundamentalScraper:
 
         return self._has_any_value(profile_data.get("total_net_assets"))
 
+    def _should_skip_fanout(self, landing_data):
+        """Evaluates if we should stop after the landing page."""
+        if not self._landing_has_total_net_assets(landing_data):
+            return True, "total_net_assets missing"
+        return False, None
+
     async def fetch_performance_with_period_fallback(self, client, conid):
         """
         Try largest->smallest period and return first performance payload with data.
@@ -209,10 +215,9 @@ class FundamentalScraper:
         return None, None
 
     async def scrape_conid(self, client, conid):
-        """Scrapes fundamentals by always requesting the full supported endpoint set."""
+        """Scrapes fundamental data for a given conid."""
         widgets = "objective,mstar,lipper_ratings,mf_key_ratios,risk_and_statistics,holdings,performance_and_peers,keyProfile,ownership,dividends,tear_sheet,news,fund_mstar,mf_esg,social_sentiment,securities_lending,sv,short_sale,ukuser"
 
-        # Fetch landing first for baseline context.
         landing_data = await self.fetch_endpoint(client, f"landing/{conid}?widgets={widgets}", conid)
         if landing_data == "__AUTH_ERROR__":
             return "__AUTH_ERROR__"
@@ -227,11 +232,9 @@ class FundamentalScraper:
             "landing": landing_data,
         }
 
-        if not self._landing_has_total_net_assets(landing_data):
-            logger.info(
-                "Skipping endpoint fanout for conid=%s: landing.key_profile.data.total_net_assets missing/null.",
-                conid,
-            )
+        skip, reason = self._should_skip_fanout(landing_data)
+        if skip:
+            logger.info("Skipping fanout for conid=%s: %s", conid, reason)
             return combined_data
 
         fixed_task_items = [
@@ -250,7 +253,6 @@ class FundamentalScraper:
             ("performance", self.fetch_performance_with_period_fallback(client, conid)),
         ]
 
-        # 4) Execute determined tasks
         fixed_results = {}
         if fixed_task_items:
             names, tasks = zip(*fixed_task_items)
@@ -266,7 +268,6 @@ class FundamentalScraper:
         if "__AUTH_ERROR__" in fixed_results.values() or any(r[0] == "__AUTH_ERROR__" for r in period_results.values()):
             return "__AUTH_ERROR__"
         
-        # Merge results, only if they have actual payload data
         for name, data in fixed_results.items():
             has_payload = self._has_payload_data(data, name)
             include_payload = has_payload or (
