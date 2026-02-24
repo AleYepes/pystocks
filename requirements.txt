@@ -18,3 +18,4 @@ zstandard
 duckdb
 pyarrow
 polars
+pytest

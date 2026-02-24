@@ -1401,7 +1401,8 @@ class FundamentalsStore:
                 db.execute(
                     f"""
                     CREATE OR REPLACE VIEW factor_features_all AS
-                    SELECT * FROM read_parquet('{factor_pattern}', union_by_name=true)
+                    SELECT * REPLACE (CAST(conid AS VARCHAR) AS conid)
+                    FROM read_parquet('{factor_pattern}', union_by_name=true)
                     """
                 )
             else:
@@ -1447,7 +1448,8 @@ class FundamentalsStore:
                 db.execute(
                     f"""
                     CREATE OR REPLACE VIEW price_chart_series_all AS
-                    SELECT * FROM read_parquet('{price_pattern}', union_by_name=true)
+                    SELECT * REPLACE (CAST(conid AS VARCHAR) AS conid)
+                    FROM read_parquet('{price_pattern}', union_by_name=true)
                     """
                 )
             else:
@@ -1470,7 +1472,8 @@ class FundamentalsStore:
                 db.execute(
                     f"""
                     CREATE OR REPLACE VIEW sentiment_search_series_all AS
-                    SELECT * FROM read_parquet('{sentiment_pattern}', union_by_name=true)
+                    SELECT * REPLACE (CAST(conid AS VARCHAR) AS conid)
+                    FROM read_parquet('{sentiment_pattern}', union_by_name=true)
                     """
                 )
             else:
@@ -1511,7 +1514,8 @@ class FundamentalsStore:
                 db.execute(
                     f"""
                     CREATE OR REPLACE VIEW ownership_trade_log_series_all AS
-                    SELECT * FROM read_parquet('{ownership_pattern}', union_by_name=true)
+                    SELECT * REPLACE (CAST(conid AS VARCHAR) AS conid)
+                    FROM read_parquet('{ownership_pattern}', union_by_name=true)
                     """
                 )
             else:
@@ -1552,7 +1556,8 @@ class FundamentalsStore:
                 db.execute(
                     f"""
                     CREATE OR REPLACE VIEW dividends_events_series_all AS
-                    SELECT * FROM read_parquet('{dividends_pattern}', union_by_name=true)
+                    SELECT * REPLACE (CAST(conid AS VARCHAR) AS conid)
+                    FROM read_parquet('{dividends_pattern}', union_by_name=true)
                     """
                 )
             else:
