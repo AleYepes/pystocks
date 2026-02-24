@@ -1,22 +1,20 @@
-# AGENTS.md
+# Pystocks
 
-## Canonical Runtime Path
-- Use `pystocks/` modules as the production source of truth.
+This repository is an ETF ingestion and analysis pipeline.
+
+## Refactoring from the ground up
+- Use `pystocks/` modules as the new production source of truth.
 - Treat `src/` and `notebooks/` as historical/reference unless explicitly requested.
 
-## Standard Run Order
-1. `python -m pystocks.cli scrape_products`
-2. `python -m pystocks.cli scrape_fundamentals --limit 100`
-3. `python -m pystocks.cli refresh_fundamentals_views`
-4. `python -m pystocks.cli preprocess_prices`
-5. `python -m pystocks.cli run_analysis`
+## New Execution Flow
+1. Validate/login session: `pystocks/session.py`
+2. Scrape product universe: `pystocks/product_scraper.py`
+3. Scrape fundamentals/series payloads: `pystocks/fundamentals.py`
+4. CAS + parquet + DuckDB materialization: `pystocks/fundamentals_store.py`
+5. Price preprocessing and eligibility: `pystocks/price_preprocess.py`
+6. Daily factor analysis: `pystocks/analysis.py`
 
-- One-command full run: `python -m pystocks.cli run_pipeline --limit 100`
-
-## Data Expectations
-- `data/fundamentals/events.db`: endpoint event/manifest log.
-- `data/fundamentals/fundamentals.duckdb`: analytics/query views.
-- Series stores outside `data/fundamentals/` must keep one `series.parquet` per `conid` and extend it (no per-run file fanout).
+- One-command full run: `python -m pystocks.cli run_pipeline`
 
 ## Code Guidelines
 - Do not write comments unless the code requires critical info that cannot be easily infered.
@@ -27,4 +25,3 @@
 ## Validation Before Handoff
 - Run: `./venv/bin/python -m pytest -q`
 - If storage/view logic changed, run: `python -m pystocks.cli refresh_fundamentals_views`
-- Report exactly what you ran and any failures/limits.
