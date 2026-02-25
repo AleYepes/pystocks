@@ -9,9 +9,11 @@ import pystocks.ops_state as database
 class DatabaseStatusTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.tmp.name) / "fundamentals.duckdb"
+        self.db_path = Path(self.tmp.name) / "pystocks.sqlite"
         self._original_db_path = database.DB_PATH
+        self._original_initialized = database._INITIALIZED_DB_PATH
         database.DB_PATH = self.db_path
+        database._INITIALIZED_DB_PATH = None
         database.init_db()
         database.upsert_instruments_from_products(
             pd.DataFrame(
@@ -29,6 +31,7 @@ class DatabaseStatusTests(unittest.TestCase):
 
     def tearDown(self):
         database.DB_PATH = self._original_db_path
+        database._INITIALIZED_DB_PATH = self._original_initialized
         self.tmp.cleanup()
 
     def _instrument_state(self):
@@ -37,7 +40,7 @@ class DatabaseStatusTests(unittest.TestCase):
             return conn.execute(
                 """
                 SELECT last_scraped_fundamentals, last_status_fundamentals
-                FROM instruments
+                FROM products
                 WHERE conid = ?
                 """,
                 ["123"],

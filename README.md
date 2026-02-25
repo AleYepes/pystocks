@@ -1,56 +1,40 @@
-# pystocks v0.2.0
+# pystocks v0.3.0
 
-IBKR-first ETF fundamentals and series ingestion pipeline with a lean tail-end analysis workflow.
+SQLite-first ETF ingestion pipeline for IBKR fundamentals and series snapshots.
 
-## What this repo currently does
-- Authenticated IBKR portal session handling (`pystocks/session.py`)
-- ETF universe discovery (`pystocks/product_scraper.py`)
-- Fundamentals + series scraping (`pystocks/fundamentals.py`)
-- Raw+normalized storage and DuckDB views (`pystocks/fundamentals_store.py`)
-- Price cleaning and eligibility gating (`pystocks/price_preprocess.py`)
-- Lean daily factor analysis (`pystocks/analysis.py`)
+## Current runtime scope
+- Auth/session: `pystocks/session.py`
+- Product universe scrape: `pystocks/product_scraper.py`
+- Fundamentals + series scrape: `pystocks/fundamentals.py`
+- Endpoint-centric SQLite storage: `pystocks/fundamentals_store.py`
 
-## Current CLI commands
+Postprocessing and analysis are intentionally deferred in this refactor.
+
+## CLI
 ```bash
-# discovery + ingestion
 python -m pystocks.cli scrape_products
 python -m pystocks.cli scrape_fundamentals --limit 100
-
-# storage maintenance
 python -m pystocks.cli refresh_fundamentals_views
-
-# tail-end steps
-python -m pystocks.cli preprocess_prices
-python -m pystocks.cli run_analysis
-
-# full end-to-end pipeline
-python -m pystocks.cli run_pipeline
+python -m pystocks.cli run_pipeline --limit 100
 ```
 
-`run_pipeline` executes:
+`run_pipeline` now executes only:
 1. `scrape_products`
 2. `scrape_fundamentals`
-3. `refresh_fundamentals_views`
-4. `preprocess_prices`
-5. `run_analysis`
 
-## Data locations (current)
-- Manifest/event store: `data/fundamentals/events.db`
-- DuckDB query layer: `data/fundamentals/fundamentals.duckdb`
-- Raw CAS blobs: `data/fundamentals/blobs/`
-- Endpoint parquet: `data/fundamentals/parquet/endpoint=*/...`
-- Factor features parquet: `data/factors/ibkr_factor_features/`
-- Price series parquet: `data/prices/ibkr_mf_performance_chart/`
-- Cleaned price parquet: `data/prices/ibkr_mf_performance_chart_clean/`
-- Research outputs: `data/research/`
+## Data layout
+- Canonical DB: `data/pystocks.sqlite`
+- Telemetry JSON artifacts: `data/research/fundamentals_run_telemetry_*.json`
 
-## Notes for new contributors
-- `src/` notebooks/scripts are historical references, not the production runtime path.
-- Primary production modules live in `pystocks/`.
-- Start with docs in this order:
-  1. `docs/1.OVERVIEW.md`
-  2. `docs/2.REFACTOR_SUMMARY.md`
-  3. `docs/3.IBKR_PORTAL_API.md`
-  4. `docs/4.DATA_SCHEMA.md`
-  5. `docs/5.IMPLEMENTATION_REPORT.md`
-  6. `docs/6.PLAN.md`
+## Storage model
+- `products` table keyed by `conid`
+- Per-endpoint snapshot tables keyed by `(conid, effective_at)`
+- Endpoint child tables for nested payload structures
+- Raw payload blob table (`raw_payload_blobs`) keyed by payload hash
+- Series stored as:
+1. append-only `*_series_raw`
+2. deduped `*_series_latest`
+
+## Legacy note
+- Existing DuckDB/parquet stores are now legacy and not used by ingestion runtime.
+- They remain on disk until explicitly removed.

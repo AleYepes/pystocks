@@ -293,9 +293,10 @@ class FundamentalScraper:
         processed_conids,
         saved_snapshots,
         inserted_events,
-        duplicate_events,
-        factor_rows_written,
-        series_rows_written,
+        overwritten_events,
+        unchanged_events,
+        series_raw_rows_written,
+        series_latest_rows_upserted,
         auth_retries,
         aborted,
         output_path=None,
@@ -327,9 +328,10 @@ class FundamentalScraper:
                 "processed_conids": processed_conids,
                 "saved_snapshots": saved_snapshots,
                 "inserted_events": inserted_events,
-                "duplicate_events": duplicate_events,
-                "factor_rows_written": factor_rows_written,
-                "series_rows_written": series_rows_written,
+                "overwritten_events": overwritten_events,
+                "unchanged_events": unchanged_events,
+                "series_raw_rows_written": series_raw_rows_written,
+                "series_latest_rows_upserted": series_latest_rows_upserted,
                 "auth_retries": auth_retries,
                 "aborted": aborted,
             },
@@ -348,6 +350,14 @@ class FundamentalScraper:
             json.dump(payload, f, indent=2)
         with open(latest_path, "w") as f:
             json.dump(payload, f, indent=2)
+
+        try:
+            run_stats = dict(payload.get("run_stats", {}))
+            run_stats["run_started_at"] = payload.get("run_started_at")
+            run_stats["run_finished_at"] = payload.get("run_finished_at")
+            self.store.persist_ingest_run(run_stats=run_stats, endpoint_summary=endpoint_summary)
+        except Exception as e:
+            logger.warning(f"Failed persisting run telemetry to SQLite: {e}")
 
         return telemetry_path, latest_path
 
@@ -376,7 +386,7 @@ async def main(
     all_conids = get_all_instrument_conids()
     if not all_conids:
         logger.error(
-            "No products found in DuckDB instruments table. "
+            "No products found in SQLite products table. "
             "Run `python -m pystocks.cli scrape_products` first."
         )
         return
@@ -393,9 +403,10 @@ async def main(
     processed_conids = 0
     saved_snapshots = 0
     inserted_events = 0
-    duplicate_events = 0
-    factor_rows_written = 0
-    series_rows_written = 0
+    overwritten_events = 0
+    unchanged_events = 0
+    series_raw_rows_written = 0
+    series_latest_rows_upserted = 0
     auth_retries = 0
     aborted = False
 
@@ -421,9 +432,10 @@ async def main(
                                 refresh_duckdb=False,
                             )
                             inserted_events += int(store_result.get("inserted_events", 0))
-                            duplicate_events += int(store_result.get("duplicate_events", 0))
-                            factor_rows_written += int(store_result.get("factor_rows_written", 0))
-                            series_rows_written += int(store_result.get("series_rows_written", 0))
+                            overwritten_events += int(store_result.get("overwritten_events", 0))
+                            unchanged_events += int(store_result.get("unchanged_events", 0))
+                            series_raw_rows_written += int(store_result.get("series_raw_rows_written", 0))
+                            series_latest_rows_upserted += int(store_result.get("series_latest_rows_upserted", 0))
                             if store_result.get("status") == "ok":
                                 update_instrument_fundamentals_status(conid, "success", mark_scraped=True)
                                 saved_snapshots += 1
@@ -467,18 +479,19 @@ async def main(
         if refresh_duckdb_at_end:
             try:
                 refresh_result = scraper.store.refresh_duckdb_views()
-                logger.info(f"Refreshed DuckDB views: {refresh_result}")
+                logger.info(f"Refreshed SQLite maintenance: {refresh_result}")
             except Exception as e:
-                logger.error(f"Failed refreshing DuckDB views: {e}")
+                logger.error(f"Failed SQLite maintenance refresh: {e}")
 
         telemetry_path, latest_path = scraper.save_telemetry(
             total_targeted=total_targeted,
             processed_conids=processed_conids,
             saved_snapshots=saved_snapshots,
             inserted_events=inserted_events,
-            duplicate_events=duplicate_events,
-            factor_rows_written=factor_rows_written,
-            series_rows_written=series_rows_written,
+            overwritten_events=overwritten_events,
+            unchanged_events=unchanged_events,
+            series_raw_rows_written=series_raw_rows_written,
+            series_latest_rows_upserted=series_latest_rows_upserted,
             auth_retries=auth_retries,
             aborted=aborted,
             output_path=telemetry_output,

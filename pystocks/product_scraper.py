@@ -5,7 +5,7 @@ import httpx
 import pandas as pd
 from tqdm import tqdm
 
-from .config import FUNDAMENTALS_DUCKDB_PATH
+from .config import SQLITE_DB_PATH
 from .ops_state import upsert_instruments_from_products
 
 logger = logging.getLogger(__name__)
@@ -80,8 +80,8 @@ async def scrape_ibkr_products():
 
     df = pd.DataFrame(all_products).drop_duplicates(subset=["conid"], keep="last")
     n_upserted = upsert_instruments_from_products(df)
-    logger.info(f"Upserted {n_upserted} products into DuckDB instruments table at {FUNDAMENTALS_DUCKDB_PATH}")
-    return {"status": "ok", "products_upserted": n_upserted, "duckdb_path": str(FUNDAMENTALS_DUCKDB_PATH)}
+    logger.info(f"Upserted {n_upserted} products into SQLite products table at {SQLITE_DB_PATH}")
+    return {"status": "ok", "products_upserted": n_upserted, "sqlite_path": str(SQLITE_DB_PATH)}
 
 
 if __name__ == "__main__":

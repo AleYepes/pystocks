@@ -27,28 +27,32 @@ class PyStocksCLI:
         )
 
     def refresh_fundamentals_views(self):
-        """Refresh DuckDB views over normalized fundamentals stores."""
+        """Run SQLite maintenance and return table counts."""
         store = FundamentalsStore()
         result = store.refresh_duckdb_views()
         print(result)
         return result
 
     def preprocess_prices(self):
-        """Run the price preprocessing pipeline (clean, dedup, quality check)."""
-        from .price_preprocess import run
-        result = run()
+        """Deferred until SQLite postprocessing refactor lands."""
+        result = {
+            "status": "deferred",
+            "message": "price_preprocess is deferred in SQLite-first refactor.",
+        }
         print(result)
         return result
 
     def run_analysis(self):
-        """Run the daily factor analysis using cleaned prices and factors."""
-        from .analysis import run
-        result = run()
+        """Deferred until SQLite postprocessing refactor lands."""
+        result = {
+            "status": "deferred",
+            "message": "analysis is deferred in SQLite-first refactor.",
+        }
         print(result)
         return result
 
     def run_pipeline(self, limit=100, verbose=False, force=False):
-        """Run full pipeline: products -> fundamentals -> views -> preprocess -> analysis."""
+        """Run ingestion pipeline: products -> fundamentals."""
         print("Starting full pipeline...")
         result = {}
 
@@ -60,17 +64,8 @@ class PyStocksCLI:
             limit=limit,
             verbose=verbose,
             force=force,
-            refresh_views_at_end=False,
+            refresh_views_at_end=True,
         )
-
-        print("3. Refreshing fundamentals views...")
-        result["refresh_views"] = self.refresh_fundamentals_views()
-
-        print("4. Preprocessing prices...")
-        result["preprocess_prices"] = self.preprocess_prices()
-
-        print("5. Running analysis...")
-        result["analysis"] = self.run_analysis()
 
         print("Pipeline complete.")
         print(result)

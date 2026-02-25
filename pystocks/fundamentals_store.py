@@ -1,31 +1,19 @@
 import hashlib
 import json
 import logging
+import math
 import re
 import sqlite3
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-import duckdb
-import pandas as pd
 import zstandard as zstd
 
-from .config import (
-    DIVIDENDS_EVENTS_PARQUET_DIR,
-    FACTOR_FEATURES_PARQUET_DIR,
-    FUNDAMENTALS_BLOBS_DIR,
-    FUNDAMENTALS_DIR,
-    FUNDAMENTALS_DUCKDB_PATH,
-    FUNDAMENTALS_EVENTS_DB_PATH,
-    FUNDAMENTALS_PARQUET_DIR,
-    OWNERSHIP_TRADE_LOG_PARQUET_DIR,
-    PRICE_CHART_PARQUET_DIR,
-    SENTIMENT_SEARCH_PARQUET_DIR,
-)
+from .config import SQLITE_DB_PATH
 from .fundamentals_normalizers import (
     extract_dividends_events,
-    extract_factor_features,
+    extract_dividends_industry_metrics,
     extract_ownership_trade_log,
     normalize_dividends_snapshot,
     normalize_ownership_snapshot,
@@ -59,6 +47,38 @@ DISCRETE_ENDPOINTS = {
     "ownership",
     "esg",
 }
+
+SERIES_ENDPOINTS = {"price_chart", "sentiment_search", "ownership", "dividends"}
+
+_MONTH_MAP = {
+    "JAN": 1,
+    "JANUARY": 1,
+    "FEB": 2,
+    "FEBRUARY": 2,
+    "MAR": 3,
+    "MARCH": 3,
+    "APR": 4,
+    "APRIL": 4,
+    "MAY": 5,
+    "JUN": 6,
+    "JUNE": 6,
+    "JUL": 7,
+    "JULY": 7,
+    "AUG": 8,
+    "AUGUST": 8,
+    "SEP": 9,
+    "SEPT": 9,
+    "SEPTEMBER": 9,
+    "OCT": 10,
+    "OCTOBER": 10,
+    "NOV": 11,
+    "NOVEMBER": 11,
+    "DEC": 12,
+    "DECEMBER": 12,
+}
+
+_DATE_IN_TEXT_RE = re.compile(r"(?<!\d)(\d{4}[/-]\d{2}[/-]\d{2})(?!\d)")
+_NUM_WITH_SUFFIX_RE = re.compile(r"^[\s\$€£¥]*([+-]?\d+(?:\.\d+)?)\s*([KMBT])?\b", re.IGNORECASE)
 
 
 def _sanitize_segment(value):
@@ -118,6 +138,121 @@ def _parse_date_candidate(value):
     return None
 
 
+def _parse_ymd_text(value):
+    if not value:
+        return None
+    m = _DATE_IN_TEXT_RE.search(str(value))
+    if not m:
+        return None
+    return _parse_date_candidate(m.group(1))
+
+
+def _to_iso_date(value):
+    if value is None:
+        return None
+
+    if isinstance(value, dict):
+        if "t" in value:
+            parsed = _parse_date_candidate(value.get("t"))
+            if parsed is not None:
+                return parsed.isoformat()
+        d = value.get("d")
+        m = value.get("m")
+        y = value.get("y")
+        if y is not None and m is not None and d is not None:
+            try:
+                mi = int(m) if isinstance(m, (int, float)) else _MONTH_MAP.get(str(m).strip().upper())
+                if mi is None:
+                    return None
+                return datetime(int(y), int(mi), int(d), tzinfo=timezone.utc).date().isoformat()
+            except Exception:
+                return None
+        return None
+
+    parsed = _parse_date_candidate(value)
+    return parsed.isoformat() if parsed is not None else None
+
+
+def _parse_number(value, percent_as_fraction=False):
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return float(value)
+
+    if isinstance(value, (int, float)):
+        out = float(value)
+        if math.isfinite(out):
+            return out
+        return None
+
+    s = str(value).strip()
+    if not s:
+        return None
+
+    if s.lower() in {"na", "n/a", "none", "null", "unknown", "nan", "inf", "-inf"}:
+        return None
+
+    is_percent = "%" in s
+    plain = s.replace(",", "").replace("%", "").strip()
+
+    try:
+        out = float(plain)
+        if is_percent and percent_as_fraction:
+            out /= 100.0
+        if math.isfinite(out):
+            return out
+        return None
+    except Exception:
+        pass
+
+    m = _NUM_WITH_SUFFIX_RE.match(s)
+    if not m:
+        return None
+
+    num = float(m.group(1))
+    suffix = (m.group(2) or "").upper()
+    mul = {"": 1.0, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}.get(suffix, 1.0)
+    out = num * mul
+    if is_percent and percent_as_fraction:
+        out /= 100.0
+    return out if math.isfinite(out) else None
+
+
+def _to_fraction_weight(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            return None
+        if abs(v) > 1.0:
+            return v / 100.0
+        return v
+
+    s = str(value).strip()
+    if not s:
+        return None
+    if "%" in s:
+        p = _parse_number(s, percent_as_fraction=True)
+        return p
+
+    p = _parse_number(s)
+    if p is None:
+        return None
+    if abs(p) > 1.0:
+        return p / 100.0
+    return p
+
+
+def _to_int_bool(value):
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if value in {0, 1}:
+        return int(value)
+    return None
+
+
 def _extract_as_of_date(payload):
     if not isinstance(payload, dict):
         return None
@@ -149,18 +284,6 @@ def _collect_nested_as_of_dates(payload):
 
     walk(payload)
     return dates
-
-
-_DATE_IN_TEXT_RE = re.compile(r"(?<!\d)(\d{4}[/-]\d{2}[/-]\d{2})(?!\d)")
-
-
-def _parse_ymd_text(value):
-    if not value:
-        return None
-    m = _DATE_IN_TEXT_RE.search(str(value))
-    if not m:
-        return None
-    return _parse_date_candidate(m.group(1))
 
 
 def _extract_profile_embedded_dates(payload):
@@ -239,12 +362,15 @@ def _sanitize_sentiment_search_payload(payload):
         "open",
         "price_change",
     }
+    out = {k: v for k, v in payload.items()}
+    out_sentiment = []
     for row in sentiment:
         if not isinstance(row, dict):
             continue
-        for key in drop_keys:
-            row.pop(key, None)
-    return payload
+        row_copy = {k: v for k, v in row.items() if k not in drop_keys}
+        out_sentiment.append(row_copy)
+    out["sentiment"] = out_sentiment
+    return out
 
 
 def _extract_price_chart_rows(payload):
@@ -318,12 +444,15 @@ def _extract_sentiment_search_rows(payload):
         row = {
             "trade_date": dt.isoformat() if dt is not None else None,
             "datetime_ms": point.get("datetime"),
+            "sscore": point.get("sscore"),
+            "sdelta": point.get("sdelta"),
+            "svolatility": point.get("svolatility"),
+            "sdispersion": point.get("sdispersion"),
+            "svscore": point.get("svscore"),
+            "svolume": point.get("svolume"),
+            "smean": point.get("smean"),
+            "sbuzz": point.get("sbuzz"),
         }
-
-        for key, value in point.items():
-            if key == "datetime":
-                continue
-            row[key] = value
 
         if any(v is not None for v in row.values()):
             rows.append(row)
@@ -331,151 +460,858 @@ def _extract_sentiment_search_rows(payload):
     return rows
 
 
-def _to_scalar(value):
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
+def _collect_scalar_paths(node, prefix=""):
+    out = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            key_name = _sanitize_segment(key)
+            path = f"{prefix}.{key_name}" if prefix else key_name
+            if isinstance(value, (dict, list)):
+                continue
+            out.append((path, value))
+    return out
 
 
 class FundamentalsStore:
-    """
-    Storage backend:
-    - CAS compressed blobs for full raw endpoint payloads.
-    - Slim endpoint snapshot parquet rows for lineage/audit.
-    - Unified long factor-feature parquet rows.
-    - Dedicated series parquet stores.
-    - SQLite manifest for blobs + endpoint events.
-    - DuckDB views over parquet partitions.
-    """
-
-    def __init__(
-        self,
-        fundamentals_dir=FUNDAMENTALS_DIR,
-        blobs_dir=FUNDAMENTALS_BLOBS_DIR,
-        parquet_dir=FUNDAMENTALS_PARQUET_DIR,
-        factor_features_parquet_dir=FACTOR_FEATURES_PARQUET_DIR,
-        price_chart_parquet_dir=PRICE_CHART_PARQUET_DIR,
-        sentiment_search_parquet_dir=SENTIMENT_SEARCH_PARQUET_DIR,
-        ownership_trade_log_parquet_dir=OWNERSHIP_TRADE_LOG_PARQUET_DIR,
-        dividends_events_parquet_dir=DIVIDENDS_EVENTS_PARQUET_DIR,
-        events_db_path=FUNDAMENTALS_EVENTS_DB_PATH,
-        duckdb_path=FUNDAMENTALS_DUCKDB_PATH,
-    ):
-        self.fundamentals_dir = Path(fundamentals_dir)
-        self.blobs_dir = Path(blobs_dir)
-        self.parquet_dir = Path(parquet_dir)
-        self.factor_features_parquet_dir = Path(factor_features_parquet_dir)
-        self.price_chart_parquet_dir = Path(price_chart_parquet_dir)
-        self.sentiment_search_parquet_dir = Path(sentiment_search_parquet_dir)
-        self.ownership_trade_log_parquet_dir = Path(ownership_trade_log_parquet_dir)
-        self.dividends_events_parquet_dir = Path(dividends_events_parquet_dir)
-        self.events_db_path = Path(events_db_path)
-        self.duckdb_path = Path(duckdb_path)
-
-        self.fundamentals_dir.mkdir(parents=True, exist_ok=True)
-        self.blobs_dir.mkdir(parents=True, exist_ok=True)
-        self.parquet_dir.mkdir(parents=True, exist_ok=True)
-        self.factor_features_parquet_dir.mkdir(parents=True, exist_ok=True)
-        self.price_chart_parquet_dir.mkdir(parents=True, exist_ok=True)
-        self.sentiment_search_parquet_dir.mkdir(parents=True, exist_ok=True)
-        self.ownership_trade_log_parquet_dir.mkdir(parents=True, exist_ok=True)
-        self.dividends_events_parquet_dir.mkdir(parents=True, exist_ok=True)
-
+    def __init__(self, sqlite_path=SQLITE_DB_PATH):
+        self.sqlite_path = Path(sqlite_path)
+        self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
         self._compressor = zstd.ZstdCompressor(level=10)
         self._decompressor = zstd.ZstdDecompressor()
-        self._init_manifest_db()
+        self._init_db()
 
     def _get_conn(self):
-        conn = sqlite3.connect(self.events_db_path)
+        conn = sqlite3.connect(str(self.sqlite_path))
+        conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA foreign_keys=ON;")
+        conn.execute("PRAGMA temp_store=MEMORY;")
         return conn
 
-    def _init_manifest_db(self):
+    def _init_db(self):
         with self._get_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
+            conn.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS blobs (
-                    hash TEXT PRIMARY KEY,
-                    blob_path TEXT NOT NULL UNIQUE,
+                CREATE TABLE IF NOT EXISTS schema_meta (
+                    schema_version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS products (
+                    conid TEXT PRIMARY KEY,
+                    symbol TEXT,
+                    exchange TEXT,
+                    isin TEXT,
+                    currency TEXT,
+                    name TEXT,
+                    last_scraped_fundamentals TEXT,
+                    last_status_fundamentals TEXT,
+                    updated_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS raw_payload_blobs (
+                    payload_hash TEXT PRIMARY KEY,
+                    compression TEXT NOT NULL,
                     raw_size_bytes INTEGER NOT NULL,
                     compressed_size_bytes INTEGER NOT NULL,
+                    payload_blob BLOB NOT NULL,
                     created_at TEXT NOT NULL
-                )
-                """
-            )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS endpoint_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conid TEXT NOT NULL,
+                );
+
+                CREATE TABLE IF NOT EXISTS ingest_runs (
+                    run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_started_at TEXT NOT NULL,
+                    run_finished_at TEXT NOT NULL,
+                    total_targeted_conids INTEGER NOT NULL,
+                    processed_conids INTEGER NOT NULL,
+                    saved_snapshots INTEGER NOT NULL,
+                    inserted_events INTEGER NOT NULL,
+                    overwritten_events INTEGER NOT NULL,
+                    unchanged_events INTEGER NOT NULL,
+                    series_raw_rows_written INTEGER NOT NULL,
+                    series_latest_rows_upserted INTEGER NOT NULL,
+                    auth_retries INTEGER NOT NULL,
+                    aborted INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS ingest_run_endpoint_rollups (
+                    run_id INTEGER NOT NULL,
                     endpoint TEXT NOT NULL,
-                    endpoint_slug TEXT NOT NULL,
-                    observed_at TEXT NOT NULL,
+                    call_count INTEGER NOT NULL,
+                    useful_payload_count INTEGER NOT NULL,
+                    useful_payload_rate REAL NOT NULL,
+                    status_2xx INTEGER NOT NULL,
+                    status_4xx INTEGER NOT NULL,
+                    status_5xx INTEGER NOT NULL,
+                    status_other INTEGER NOT NULL,
+                    PRIMARY KEY (run_id, endpoint),
+                    FOREIGN KEY (run_id) REFERENCES ingest_runs(run_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS endpoint_scalar_extras (
+                    endpoint TEXT NOT NULL,
+                    conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    effective_source TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    value_text TEXT,
+                    value_num REAL,
+                    value_bool INTEGER,
+                    value_date TEXT,
+                    PRIMARY KEY (endpoint, conid, effective_at, path),
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS landing_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    blob_path TEXT NOT NULL,
-                    payload_size_raw INTEGER NOT NULL,
-                    payload_size_compressed INTEGER NOT NULL,
                     source_file TEXT,
                     inserted_at TEXT NOT NULL,
-                    UNIQUE(conid, endpoint, effective_at, payload_hash)
-                )
+                    updated_at TEXT NOT NULL,
+                    total_net_assets_text TEXT,
+                    has_mstar INTEGER,
+                    has_ownership INTEGER,
+                    has_mf_esg INTEGER,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS landing_key_profile_fields (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    field_key TEXT NOT NULL,
+                    field_value_text TEXT,
+                    field_value_num REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS landing_section_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    section_name TEXT NOT NULL,
+                    metric_key TEXT NOT NULL,
+                    metric_name TEXT,
+                    value_num REAL,
+                    vs_num REAL,
+                    rank_num REAL,
+                    value_text TEXT,
+                    value_fmt TEXT,
+                    annualized INTEGER,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS landing_top10_holdings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    rank_num INTEGER,
+                    name TEXT,
+                    ticker TEXT,
+                    assets_pct_text TEXT,
+                    assets_pct_num REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS landing_top10_holding_conids (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    parent_rank INTEGER,
+                    holding_conid TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS profile_fees_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    source_file TEXT,
+                    inserted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    symbol TEXT,
+                    objective TEXT,
+                    jap_fund_warning INTEGER,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS profile_fees_fund_profile_fields (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    field_name TEXT,
+                    name_tag TEXT,
+                    value_text TEXT,
+                    value_num REAL,
+                    value_date TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS profile_fees_report_fields (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    report_name TEXT,
+                    report_as_of_date TEXT,
+                    field_name TEXT,
+                    field_value_text TEXT,
+                    field_value_num REAL,
+                    is_summary INTEGER,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS profile_fees_expense_allocations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    expense_name TEXT,
+                    ratio_text TEXT,
+                    value_num REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS profile_fees_themes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    theme_name TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    source_file TEXT,
+                    inserted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    as_of_date TEXT,
+                    top_10_weight REAL,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_bucket_weights (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    bucket_type TEXT NOT NULL,
+                    name TEXT,
+                    code TEXT,
+                    country_code TEXT,
+                    rank_num REAL,
+                    weight_num REAL,
+                    vs_num REAL,
+                    formatted_weight TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_top10 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    rank_num INTEGER,
+                    name TEXT,
+                    ticker TEXT,
+                    assets_pct_text TEXT,
+                    assets_pct_num REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_top10_conids (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    parent_rank INTEGER,
+                    holding_conid TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_geographic_weights (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    region TEXT,
+                    weight_num REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS ratios_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    source_file TEXT,
+                    inserted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    as_of_date TEXT,
+                    title_vs TEXT,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS ratios_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    section TEXT,
+                    metric_id TEXT,
+                    metric_name TEXT,
+                    value_num REAL,
+                    value_fmt TEXT,
+                    vs_num REAL,
+                    min_num REAL,
+                    max_num REAL,
+                    avg_num REAL,
+                    percentile_num REAL,
+                    min_fmt TEXT,
+                    max_fmt TEXT,
+                    avg_fmt TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS lipper_ratings_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    source_file TEXT,
+                    inserted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    universe_count INTEGER,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS lipper_ratings_values (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    period TEXT,
+                    metric_id TEXT,
+                    metric_name TEXT,
+                    rating_value REAL,
+                    rating_label TEXT,
+                    universe_name TEXT,
+                    universe_as_of_date TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS dividends_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    source_file TEXT,
+                    inserted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    response_type TEXT,
+                    has_history INTEGER,
+                    history_points INTEGER,
+                    embedded_price_points INTEGER,
+                    no_div_data_marker REAL,
+                    no_div_data_period REAL,
+                    no_dividend_text TEXT,
+                    last_paid_date TEXT,
+                    last_paid_amount REAL,
+                    last_paid_currency TEXT,
+                    dividend_yield REAL,
+                    annual_dividend REAL,
+                    paying_companies REAL,
+                    paying_companies_percent REAL,
+                    dividend_ttm REAL,
+                    dividend_yield_ttm REAL,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS dividends_industry_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    metric_id TEXT,
+                    value_num REAL,
+                    formatted_value TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS morningstar_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    source_file TEXT,
+                    inserted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    as_of_date TEXT,
+                    q_full_report_id TEXT,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS morningstar_summary (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    metric_id TEXT,
+                    title TEXT,
+                    value_text TEXT,
+                    value_num REAL,
+                    publish_date TEXT,
+                    q INTEGER,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS morningstar_commentary (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    item_id TEXT,
+                    title TEXT,
+                    subtitle TEXT,
+                    subsection_id TEXT,
+                    publish_date TEXT,
+                    q INTEGER,
+                    text TEXT,
+                    author_name TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS performance_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    source_file TEXT,
+                    inserted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    title_vs TEXT,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS performance_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    section TEXT,
+                    metric_id TEXT,
+                    metric_name TEXT,
+                    name_tag_arg TEXT,
+                    value_num REAL,
+                    value_fmt TEXT,
+                    vs_num REAL,
+                    min_num REAL,
+                    max_num REAL,
+                    avg_num REAL,
+                    percentile_num REAL,
+                    min_fmt TEXT,
+                    max_fmt TEXT,
+                    avg_fmt TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS ownership_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    source_file TEXT,
+                    inserted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    owners_types_count INTEGER,
+                    institutional_owners_count INTEGER,
+                    insider_owners_count INTEGER,
+                    trade_log_count_raw INTEGER,
+                    trade_log_count_kept INTEGER,
+                    has_ownership_history INTEGER,
+                    ownership_history_price_points INTEGER,
+                    institutional_total_value_text TEXT,
+                    institutional_total_shares_text TEXT,
+                    institutional_total_pct_text TEXT,
+                    institutional_total_pct_num REAL,
+                    insider_total_value_text TEXT,
+                    insider_total_shares_text TEXT,
+                    insider_total_pct_text TEXT,
+                    insider_total_pct_num REAL,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS ownership_owners_types (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    type TEXT,
+                    display_type TEXT,
+                    float_value REAL,
+                    display_float TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS ownership_holders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    holder_group TEXT,
+                    holder_name TEXT,
+                    holder_type TEXT,
+                    display_value TEXT,
+                    display_shares TEXT,
+                    display_pct TEXT,
+                    pct_num REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS esg_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    source_file TEXT,
+                    inserted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    as_of_date TEXT,
+                    coverage REAL,
+                    source TEXT,
+                    symbol TEXT,
+                    no_settings INTEGER,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS esg_nodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    node_path TEXT,
+                    parent_path TEXT,
+                    depth INTEGER,
+                    node_name TEXT,
+                    node_value REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS price_chart_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    source_file TEXT,
+                    inserted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    points_count INTEGER,
+                    min_trade_date TEXT,
+                    max_trade_date TEXT,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS sentiment_search_snapshots (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    source_file TEXT,
+                    inserted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    points_count INTEGER,
+                    min_trade_date TEXT,
+                    max_trade_date TEXT,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid),
+                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
+                );
+
+                CREATE TABLE IF NOT EXISTS price_chart_series_raw (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    inserted_at TEXT NOT NULL,
+                    row_key TEXT NOT NULL,
+                    trade_date TEXT,
+                    timestamp_ms INTEGER,
+                    price REAL,
+                    open REAL,
+                    high REAL,
+                    low REAL,
+                    close REAL,
+                    debug_y INTEGER,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS price_chart_series_latest (
+                    conid TEXT NOT NULL,
+                    row_key TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    trade_date TEXT,
+                    timestamp_ms INTEGER,
+                    price REAL,
+                    open REAL,
+                    high REAL,
+                    low REAL,
+                    close REAL,
+                    debug_y INTEGER,
+                    PRIMARY KEY (conid, row_key),
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS sentiment_search_series_raw (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    inserted_at TEXT NOT NULL,
+                    row_key TEXT NOT NULL,
+                    trade_date TEXT,
+                    datetime_ms INTEGER,
+                    sscore REAL,
+                    sdelta REAL,
+                    svolatility REAL,
+                    sdispersion REAL,
+                    svscore REAL,
+                    svolume REAL,
+                    smean REAL,
+                    sbuzz REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS sentiment_search_series_latest (
+                    conid TEXT NOT NULL,
+                    row_key TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    trade_date TEXT,
+                    datetime_ms INTEGER,
+                    sscore REAL,
+                    sdelta REAL,
+                    svolatility REAL,
+                    sdispersion REAL,
+                    svscore REAL,
+                    svolume REAL,
+                    smean REAL,
+                    sbuzz REAL,
+                    PRIMARY KEY (conid, row_key),
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS ownership_trade_log_series_raw (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    inserted_at TEXT NOT NULL,
+                    row_key TEXT NOT NULL,
+                    trade_date TEXT,
+                    action TEXT,
+                    shares REAL,
+                    value REAL,
+                    holding REAL,
+                    party TEXT,
+                    source TEXT,
+                    insider TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS ownership_trade_log_series_latest (
+                    conid TEXT NOT NULL,
+                    row_key TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    trade_date TEXT,
+                    action TEXT,
+                    shares REAL,
+                    value REAL,
+                    holding REAL,
+                    party TEXT,
+                    source TEXT,
+                    insider TEXT,
+                    PRIMARY KEY (conid, row_key),
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS dividends_events_series_raw (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    inserted_at TEXT NOT NULL,
+                    row_key TEXT NOT NULL,
+                    trade_date TEXT,
+                    event_date TEXT,
+                    amount REAL,
+                    currency TEXT,
+                    description TEXT,
+                    event_type TEXT,
+                    declaration_date TEXT,
+                    record_date TEXT,
+                    payment_date TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS dividends_events_series_latest (
+                    conid TEXT NOT NULL,
+                    row_key TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    trade_date TEXT,
+                    event_date TEXT,
+                    amount REAL,
+                    currency TEXT,
+                    description TEXT,
+                    event_type TEXT,
+                    declaration_date TEXT,
+                    record_date TEXT,
+                    payment_date TEXT,
+                    PRIMARY KEY (conid, row_key),
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
                 """
             )
-            # Legacy table: no longer used after unified factor-feature normalization.
-            cur.execute("DROP TABLE IF EXISTS analytics_rows")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_endpoint_events_endpoint ON endpoint_events(endpoint)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_endpoint_events_effective_at ON endpoint_events(effective_at)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_endpoint_events_conid_endpoint ON endpoint_events(conid, endpoint)")
-            conn.commit()
 
-    def _blob_path_for_hash(self, hash_hex):
-        return self.blobs_dir / hash_hex[:2] / hash_hex[2:4] / f"{hash_hex}.json.zst"
-
-    def _store_blob(self, payload):
-        raw_bytes = _canonical_json_bytes(payload)
-        payload_hash = hashlib.sha256(raw_bytes).hexdigest()
-        blob_path = self._blob_path_for_hash(payload_hash)
-        blob_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if not blob_path.exists():
-            compressed = self._compressor.compress(raw_bytes)
-            with open(blob_path, "wb") as f:
-                f.write(compressed)
-            compressed_size = len(compressed)
-        else:
-            compressed_size = blob_path.stat().st_size
-
-        raw_size = len(raw_bytes)
-        now_iso = datetime.now(timezone.utc).isoformat()
-
-        with self._get_conn() as conn:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO blobs (
-                    hash, blob_path, raw_size_bytes, compressed_size_bytes, created_at
-                ) VALUES (?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO schema_meta (schema_version, applied_at)
+                VALUES (1, ?)
                 """,
-                (payload_hash, str(blob_path), raw_size, compressed_size, now_iso),
+                [datetime.now(timezone.utc).isoformat()],
             )
-            conn.commit()
+
+            conn.executescript(
+                """
+                CREATE INDEX IF NOT EXISTS idx_landing_snapshots_hash ON landing_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_profile_fees_snapshots_hash ON profile_fees_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_hash ON holdings_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_ratios_snapshots_hash ON ratios_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_lipper_snapshots_hash ON lipper_ratings_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_dividends_snapshots_hash ON dividends_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_morningstar_snapshots_hash ON morningstar_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_performance_snapshots_hash ON performance_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_ownership_snapshots_hash ON ownership_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_esg_snapshots_hash ON esg_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_price_snapshots_hash ON price_chart_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_sentiment_snapshots_hash ON sentiment_search_snapshots(payload_hash);
+
+                CREATE INDEX IF NOT EXISTS idx_price_latest_trade_date ON price_chart_series_latest(trade_date);
+                CREATE INDEX IF NOT EXISTS idx_sentiment_latest_trade_date ON sentiment_search_series_latest(trade_date);
+                CREATE INDEX IF NOT EXISTS idx_ownership_latest_trade_date ON ownership_trade_log_series_latest(trade_date);
+                CREATE INDEX IF NOT EXISTS idx_dividends_latest_trade_date ON dividends_events_series_latest(event_date);
+                """
+            )
+
+    def _ensure_product(self, conn, conid):
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT INTO products (conid, updated_at)
+            VALUES (?, ?)
+            ON CONFLICT(conid) DO NOTHING
+            """,
+            [str(conid), now_iso],
+        )
+
+    def _store_blob(self, conn, payload):
+        raw_bytes = _canonical_json_bytes(payload)
+        payload_hash = hashlib.sha256(raw_bytes).hexdigest()
+
+        existing = conn.execute(
+            """
+            SELECT payload_hash
+            FROM raw_payload_blobs
+            WHERE payload_hash = ?
+            """,
+            [payload_hash],
+        ).fetchone()
+
+        if existing is None:
+            compressed = self._compressor.compress(raw_bytes)
+            conn.execute(
+                """
+                INSERT INTO raw_payload_blobs (
+                    payload_hash,
+                    compression,
+                    raw_size_bytes,
+                    compressed_size_bytes,
+                    payload_blob,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    payload_hash,
+                    "zstd",
+                    len(raw_bytes),
+                    len(compressed),
+                    compressed,
+                    datetime.now(timezone.utc).isoformat(),
+                ],
+            )
+
+            return {
+                "hash": payload_hash,
+                "raw_size": len(raw_bytes),
+                "compressed_size": len(compressed),
+            }
+
+        row = conn.execute(
+            """
+            SELECT raw_size_bytes, compressed_size_bytes
+            FROM raw_payload_blobs
+            WHERE payload_hash = ?
+            """,
+            [payload_hash],
+        ).fetchone()
 
         return {
             "hash": payload_hash,
-            "blob_path": str(blob_path),
-            "raw_size": raw_size,
-            "compressed_size": compressed_size,
+            "raw_size": int(row["raw_size_bytes"]),
+            "compressed_size": int(row["compressed_size_bytes"]),
         }
 
-    def _load_blob_payload(self, blob_path):
-        p = Path(blob_path)
-        with open(p, "rb") as f:
-            raw = self._decompressor.decompress(f.read())
-        return json.loads(raw.decode("utf-8"))
+    def _load_blob_payload(self, payload_hash):
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT payload_blob
+                FROM raw_payload_blobs
+                WHERE payload_hash = ?
+                """,
+                [str(payload_hash)],
+            ).fetchone()
+            if row is None:
+                return None
+            raw = self._decompressor.decompress(row["payload_blob"])
+            return json.loads(raw.decode("utf-8"))
 
     def _resolve_effective_dates(self, endpoint_payloads, observed_at):
         discrete_dates = {}
@@ -520,609 +1356,1566 @@ class FundamentalsStore:
                 payloads[endpoint] = value
         return payloads
 
-    def _build_endpoint_snapshot_row(self, base_row, payload):
-        row = dict(base_row)
-        if isinstance(payload, dict):
-            row["s__payload_kind"] = "dict"
-            row["s__top_level_keys_len"] = len(payload)
-        elif isinstance(payload, list):
-            row["s__payload_kind"] = "list"
-            row["s__top_level_keys_len"] = len(payload)
-        else:
-            row["s__payload_kind"] = type(payload).__name__
-            row["s__top_level_keys_len"] = 0
+    def _main_table_for_endpoint(self, endpoint):
+        return {
+            "landing": "landing_snapshots",
+            "profile_and_fees": "profile_fees_snapshots",
+            "holdings": "holdings_snapshots",
+            "ratios": "ratios_snapshots",
+            "lipper_ratings": "lipper_ratings_snapshots",
+            "dividends": "dividends_snapshots",
+            "morningstar": "morningstar_snapshots",
+            "price_chart": "price_chart_snapshots",
+            "performance": "performance_snapshots",
+            "sentiment_search": "sentiment_search_snapshots",
+            "ownership": "ownership_snapshots",
+            "esg": "esg_snapshots",
+        }[endpoint]
 
-        if base_row.get("endpoint") == "dividends" and isinstance(payload, dict):
-            canonical = normalize_dividends_snapshot(payload)
-            for key in ("response_type", "has_history", "history_points", "embedded_price_points"):
-                value = canonical.get(key)
-                if isinstance(value, bool):
-                    value = 1 if value else 0
-                row[f"s__dividends_{_sanitize_segment(key)}"] = _to_scalar(value)
+    def _upsert_snapshot_row(
+        self,
+        conn,
+        table,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        extra,
+    ):
+        base = {
+            "conid": str(conid),
+            "effective_at": str(effective_at),
+            "observed_at": str(observed_at),
+            "payload_hash": str(payload_hash),
+            "source_file": source_file,
+            "inserted_at": now_iso,
+            "updated_at": now_iso,
+        }
+        row = dict(base)
+        row.update(extra)
 
-        if base_row.get("endpoint") == "ownership" and isinstance(payload, dict):
-            canonical = normalize_ownership_snapshot(payload)
-            for key in (
-                "owners_types_count",
-                "institutional_owners_count",
-                "insider_owners_count",
-                "trade_log_count_raw",
-                "trade_log_count_kept",
-                "ownership_history_price_points",
-            ):
-                row[f"s__ownership_{_sanitize_segment(key)}"] = _to_scalar(canonical.get(key))
+        cols = list(row.keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        update_cols = [c for c in cols if c not in {"conid", "effective_at", "inserted_at"}]
+        update_sql = ", ".join([f"{c}=excluded.{c}" for c in update_cols])
 
-        return row
-
-    def _write_endpoint_event_parquet(self, row, endpoint_slug, effective_at):
-        dt = datetime.fromisoformat(f"{effective_at}T00:00:00+00:00")
-        partition_dir = (
-            self.parquet_dir
-            / f"endpoint={endpoint_slug}"
-            / f"year={dt.year:04d}"
-            / f"month={dt.month:02d}"
+        conn.execute(
+            f"""
+            INSERT INTO {table} ({", ".join(cols)})
+            VALUES ({placeholders})
+            ON CONFLICT(conid, effective_at) DO UPDATE SET
+                {update_sql}
+            """,
+            [row[c] for c in cols],
         )
-        partition_dir.mkdir(parents=True, exist_ok=True)
 
-        file_name = f"{effective_at}_{row['conid']}_{row['payload_hash'][:12]}_{row['event_id']}.parquet"
-        file_path = partition_dir / file_name
-        pd.DataFrame([row]).to_parquet(file_path, index=False, engine="pyarrow", compression="zstd")
-        return file_path
-
-    def _write_factor_features_parquet(self, rows, lineage_meta, endpoint_slug):
-        conid = str(lineage_meta.get("conid"))
-        event_id = int(lineage_meta.get("endpoint_event_id"))
-        payload_hash = str(lineage_meta.get("payload_hash"))
-        effective_at = str(lineage_meta.get("effective_at"))
-
-        enriched_rows = []
-        for row in rows:
-            feature_name = _sanitize_segment(row.get("feature_name"))
-            feature_group = _sanitize_segment(row.get("feature_group"))
-            feature_value = row.get("feature_value")
-            feature_source = str(row.get("feature_source") or "")
-            if feature_name == "field" or feature_value is None:
-                continue
-
-            row_key_material = "|".join(
-                [
-                    str(endpoint_slug),
-                    str(conid),
-                    str(feature_name),
-                    str(effective_at),
-                    str(payload_hash),
-                ]
+    def _delete_children(self, conn, tables, conid, effective_at):
+        for table in tables:
+            conn.execute(
+                f"DELETE FROM {table} WHERE conid = ? AND effective_at = ?",
+                [str(conid), str(effective_at)],
             )
-            row_key = hashlib.sha256(row_key_material.encode("utf-8")).hexdigest()
 
-            enriched_rows.append(
+    def _insert_rows(self, conn, table, rows):
+        if not rows:
+            return
+        cols = list(rows[0].keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        conn.executemany(
+            f"INSERT INTO {table} ({", ".join(cols)}) VALUES ({placeholders})",
+            [[row.get(c) for c in cols] for row in rows],
+        )
+
+    def _store_endpoint_scalar_extras(self, conn, endpoint, conid, effective_at, payload):
+        conn.execute(
+            """
+            DELETE FROM endpoint_scalar_extras
+            WHERE endpoint = ? AND conid = ? AND effective_at = ?
+            """,
+            [endpoint, str(conid), str(effective_at)],
+        )
+
+        if not isinstance(payload, dict):
+            return
+
+        rows = []
+        for path, value in _collect_scalar_paths(payload):
+            rows.append(
                 {
-                    "endpoint_event_id": event_id,
-                    "endpoint": lineage_meta.get("endpoint"),
-                    "conid": conid,
-                    "observed_at": lineage_meta.get("observed_at"),
-                    "effective_at": effective_at,
-                    "payload_hash": payload_hash,
-                    "feature_name": feature_name,
-                    "feature_group": feature_group,
-                    "feature_value": float(feature_value),
-                    "feature_source": feature_source,
-                    "source_file": lineage_meta.get("source_file"),
-                    "inserted_at": lineage_meta.get("inserted_at"),
-                    "row_key": row_key,
+                    "endpoint": endpoint,
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "path": path,
+                    "value_text": str(value) if value is not None else None,
+                    "value_num": _parse_number(value),
+                    "value_bool": _to_int_bool(value),
+                    "value_date": _to_iso_date(value),
                 }
             )
 
-        if not enriched_rows:
-            return None, 0
+        self._insert_rows(conn, "endpoint_scalar_extras", rows)
 
-        partition_dir = (
-            self.factor_features_parquet_dir
-            / f"endpoint={endpoint_slug}"
-            / f"conid={conid}"
-        )
-        partition_dir.mkdir(parents=True, exist_ok=True)
+    def _upsert_landing(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        key_profile = payload.get("key_profile") or payload.get("keyProfile") or {}
+        key_profile_data = key_profile.get("data") if isinstance(key_profile, dict) else {}
+        total_net_assets_text = None
+        if isinstance(key_profile_data, dict):
+            total_net_assets_text = key_profile_data.get("total_net_assets")
 
-        file_name = f"{effective_at}_{payload_hash[:12]}_{event_id}.parquet"
-        file_path = partition_dir / file_name
-
-        pd.DataFrame(enriched_rows).to_parquet(file_path, index=False, engine="pyarrow", compression="zstd")
-        return file_path, len(enriched_rows)
-
-    def _write_price_chart_series_parquet(self, rows, lineage_meta):
-        return self._write_series_parquet(
-            rows=rows,
-            lineage_meta=lineage_meta,
-            endpoint="price_chart",
-            base_dir=self.price_chart_parquet_dir,
-        )
-
-    def _write_sentiment_search_series_parquet(self, rows, lineage_meta):
-        return self._write_series_parquet(
-            rows=rows,
-            lineage_meta=lineage_meta,
-            endpoint="sentiment_search",
-            base_dir=self.sentiment_search_parquet_dir,
+        self._upsert_snapshot_row(
+            conn,
+            "landing_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "total_net_assets_text": total_net_assets_text,
+                "has_mstar": 1 if bool(payload.get("mstar")) else 0,
+                "has_ownership": 1 if bool(payload.get("ownership")) else 0,
+                "has_mf_esg": 1 if bool(payload.get("mf_esg")) else 0,
+            },
         )
 
-    def _write_ownership_trade_log_series_parquet(self, rows, lineage_meta):
-        return self._write_series_parquet(
-            rows=rows,
-            lineage_meta=lineage_meta,
-            endpoint="ownership",
-            base_dir=self.ownership_trade_log_parquet_dir,
+        self._delete_children(
+            conn,
+            [
+                "landing_key_profile_fields",
+                "landing_section_metrics",
+                "landing_top10_holdings",
+                "landing_top10_holding_conids",
+            ],
+            conid,
+            effective_at,
         )
 
-    def _write_dividends_events_series_parquet(self, rows, lineage_meta):
-        return self._write_series_parquet(
-            rows=rows,
-            lineage_meta=lineage_meta,
-            endpoint="dividends",
-            base_dir=self.dividends_events_parquet_dir,
+        key_profile_rows = []
+        if isinstance(key_profile_data, dict):
+            for key, value in key_profile_data.items():
+                if isinstance(value, (dict, list)):
+                    continue
+                key_profile_rows.append(
+                    {
+                        "conid": str(conid),
+                        "effective_at": str(effective_at),
+                        "field_key": _sanitize_segment(key),
+                        "field_value_text": str(value) if value is not None else None,
+                        "field_value_num": _parse_number(value),
+                    }
+                )
+        self._insert_rows(conn, "landing_key_profile_fields", key_profile_rows)
+
+        section_rows = []
+        for section_name, section_payload in payload.items():
+            if not isinstance(section_payload, dict):
+                continue
+            data = section_payload.get("data")
+            if not isinstance(data, list):
+                continue
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                metric_key = _sanitize_segment(item.get("name_tag") or item.get("id") or item.get("name"))
+                section_rows.append(
+                    {
+                        "conid": str(conid),
+                        "effective_at": str(effective_at),
+                        "section_name": _sanitize_segment(section_name),
+                        "metric_key": metric_key,
+                        "metric_name": item.get("name"),
+                        "value_num": _parse_number(item.get("value")),
+                        "vs_num": _parse_number(item.get("vs_value") if "vs_value" in item else item.get("vs")),
+                        "rank_num": _parse_number(item.get("rank")),
+                        "value_text": str(item.get("value")) if item.get("value") is not None else None,
+                        "value_fmt": item.get("value_fmt"),
+                        "annualized": _to_int_bool(item.get("annualized")),
+                    }
+                )
+        self._insert_rows(conn, "landing_section_metrics", section_rows)
+
+        top10_rows = []
+        top10_conids_rows = []
+        top10 = (
+            payload.get("top10", {})
+            .get("data", {})
+            .get("top10", [])
+            if isinstance(payload.get("top10"), dict)
+            else []
+        )
+        if isinstance(top10, list):
+            for idx, item in enumerate(top10):
+                if not isinstance(item, dict):
+                    continue
+                rank_num = int(_parse_number(item.get("rank")) or (idx + 1))
+                top10_rows.append(
+                    {
+                        "conid": str(conid),
+                        "effective_at": str(effective_at),
+                        "rank_num": rank_num,
+                        "name": item.get("name"),
+                        "ticker": item.get("ticker"),
+                        "assets_pct_text": item.get("assets_pct"),
+                        "assets_pct_num": _to_fraction_weight(item.get("assets_pct")),
+                    }
+                )
+                for c in item.get("conids", []) if isinstance(item.get("conids"), list) else []:
+                    top10_conids_rows.append(
+                        {
+                            "conid": str(conid),
+                            "effective_at": str(effective_at),
+                            "parent_rank": rank_num,
+                            "holding_conid": str(c),
+                        }
+                    )
+        self._insert_rows(conn, "landing_top10_holdings", top10_rows)
+        self._insert_rows(conn, "landing_top10_holding_conids", top10_conids_rows)
+
+    def _upsert_profile_fees(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        self._upsert_snapshot_row(
+            conn,
+            "profile_fees_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "symbol": payload.get("symbol"),
+                "objective": payload.get("objective"),
+                "jap_fund_warning": _to_int_bool(payload.get("jap_fund_warning")),
+            },
         )
 
-    def _write_series_parquet(self, rows, lineage_meta, endpoint, base_dir):
-        conid = str(lineage_meta.get("conid"))
-        event_id = int(lineage_meta.get("endpoint_event_id"))
-        payload_hash = str(lineage_meta.get("payload_hash"))
-        effective_at = str(lineage_meta.get("effective_at"))
-
-        enriched_rows = []
-        for row in rows:
-            full_row = {
-                "endpoint_event_id": event_id,
-                "endpoint": endpoint,
-                "conid": conid,
-                "observed_at": lineage_meta.get("observed_at"),
-                "effective_at": effective_at,
-                "payload_hash": payload_hash,
-                "source_file": lineage_meta.get("source_file"),
-                "inserted_at": lineage_meta.get("inserted_at"),
-            }
-            for key, value in (row or {}).items():
-                full_row[_sanitize_segment(key)] = _to_scalar(value)
-            full_row["row_key"] = self._series_row_key(endpoint, full_row)
-            enriched_rows.append(full_row)
-
-        if not enriched_rows:
-            return None, 0
-
-        partition_dir = Path(base_dir) / f"conid={conid}"
-        partition_dir.mkdir(parents=True, exist_ok=True)
-        target_path = partition_dir / "series.parquet"
-
-        existing_files = sorted(partition_dir.glob("*.parquet"))
-        existing_df = pd.DataFrame()
-        if existing_files:
-            frames = []
-            for path in existing_files:
-                try:
-                    frames.append(pd.read_parquet(path))
-                except Exception as e:
-                    logger.warning(f"Failed reading existing series parquet {path}: {e}")
-            if frames:
-                existing_df = pd.concat(frames, ignore_index=True, sort=False)
-
-        incoming_df = pd.DataFrame(enriched_rows)
-        if existing_df.empty:
-            combined = incoming_df
-        else:
-            combined = pd.concat([existing_df, incoming_df], ignore_index=True, sort=False)
-
-        if "row_key" not in combined.columns:
-            combined["row_key"] = None
-
-        missing_row_key = combined["row_key"].isna() | (
-            combined["row_key"].astype(str).str.strip() == ""
+        self._delete_children(
+            conn,
+            [
+                "profile_fees_fund_profile_fields",
+                "profile_fees_report_fields",
+                "profile_fees_expense_allocations",
+                "profile_fees_themes",
+            ],
+            conid,
+            effective_at,
         )
-        if bool(missing_row_key.any()):
-            combined.loc[missing_row_key, "row_key"] = combined.loc[missing_row_key].apply(
-                lambda r: self._series_row_key(endpoint, r),
-                axis=1,
+
+        profile_rows = []
+        for item in payload.get("fund_and_profile", []) if isinstance(payload.get("fund_and_profile"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("value")
+            profile_rows.append(
+                {
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "field_name": item.get("name"),
+                    "name_tag": item.get("name_tag"),
+                    "value_text": str(value) if value is not None else None,
+                    "value_num": _parse_number(value, percent_as_fraction=True),
+                    "value_date": _to_iso_date(value),
+                }
+            )
+        self._insert_rows(conn, "profile_fees_fund_profile_fields", profile_rows)
+
+        report_rows = []
+        for report in payload.get("reports", []) if isinstance(payload.get("reports"), list) else []:
+            if not isinstance(report, dict):
+                continue
+            report_name = report.get("name")
+            report_as_of = _to_iso_date(report.get("as_of_date"))
+            fields = report.get("fields", []) if isinstance(report.get("fields"), list) else []
+            for field in fields:
+                if not isinstance(field, dict):
+                    continue
+                value = field.get("value")
+                report_rows.append(
+                    {
+                        "conid": str(conid),
+                        "effective_at": str(effective_at),
+                        "report_name": report_name,
+                        "report_as_of_date": report_as_of,
+                        "field_name": field.get("name") or field.get("name_tag"),
+                        "field_value_text": str(value) if value is not None else None,
+                        "field_value_num": _parse_number(value, percent_as_fraction=True),
+                        "is_summary": _to_int_bool(field.get("is_summary")),
+                    }
+                )
+        self._insert_rows(conn, "profile_fees_report_fields", report_rows)
+
+        expense_rows = []
+        for item in payload.get("expenses_allocation", []) if isinstance(payload.get("expenses_allocation"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            expense_rows.append(
+                {
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "expense_name": item.get("name"),
+                    "ratio_text": str(item.get("ratio")) if item.get("ratio") is not None else None,
+                    "value_num": _parse_number(item.get("value"), percent_as_fraction=True),
+                }
+            )
+        self._insert_rows(conn, "profile_fees_expense_allocations", expense_rows)
+
+        theme_rows = []
+        themes = payload.get("themes", []) if isinstance(payload.get("themes"), list) else []
+        for theme in themes:
+            if isinstance(theme, dict):
+                theme_name = theme.get("name") or theme.get("title") or theme.get("theme")
+            else:
+                theme_name = str(theme) if theme is not None else None
+            if not theme_name:
+                continue
+            theme_rows.append(
+                {
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "theme_name": theme_name,
+                }
+            )
+        self._insert_rows(conn, "profile_fees_themes", theme_rows)
+
+    def _upsert_holdings(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        self._upsert_snapshot_row(
+            conn,
+            "holdings_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "as_of_date": _to_iso_date(payload.get("as_of_date")),
+                "top_10_weight": _to_fraction_weight(payload.get("top_10_weight")),
+            },
+        )
+
+        self._delete_children(
+            conn,
+            [
+                "holdings_bucket_weights",
+                "holdings_top10",
+                "holdings_top10_conids",
+                "holdings_geographic_weights",
+            ],
+            conid,
+            effective_at,
+        )
+
+        bucket_rows = []
+        sections = [
+            "allocation_self",
+            "industry",
+            "currency",
+            "investor_country",
+            "debt_type",
+            "debtor",
+            "maturity",
+        ]
+        for section in sections:
+            values = payload.get(section, []) if isinstance(payload.get(section), list) else []
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                weight_value = item.get("weight")
+                if weight_value is None:
+                    weight_value = item.get("assets_pct")
+                if weight_value is None:
+                    weight_value = item.get("formatted_weight")
+
+                bucket_rows.append(
+                    {
+                        "conid": str(conid),
+                        "effective_at": str(effective_at),
+                        "bucket_type": section,
+                        "name": item.get("name") or item.get("type"),
+                        "code": item.get("code"),
+                        "country_code": item.get("country_code"),
+                        "rank_num": _parse_number(item.get("rank")),
+                        "weight_num": _to_fraction_weight(weight_value),
+                        "vs_num": _parse_number(item.get("vs"), percent_as_fraction=True),
+                        "formatted_weight": item.get("formatted_weight"),
+                    }
+                )
+        self._insert_rows(conn, "holdings_bucket_weights", bucket_rows)
+
+        top10_rows = []
+        top10_conids_rows = []
+        for idx, item in enumerate(payload.get("top_10", []) if isinstance(payload.get("top_10"), list) else []):
+            if not isinstance(item, dict):
+                continue
+            rank_num = int(_parse_number(item.get("rank")) or (idx + 1))
+            top10_rows.append(
+                {
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "rank_num": rank_num,
+                    "name": item.get("name"),
+                    "ticker": item.get("ticker"),
+                    "assets_pct_text": item.get("assets_pct"),
+                    "assets_pct_num": _to_fraction_weight(item.get("assets_pct")),
+                }
             )
 
-        combined = combined.drop_duplicates(subset=["row_key"], keep="last")
-        combined = self._sort_series_rows(endpoint, combined)
+            for c in item.get("conids", []) if isinstance(item.get("conids"), list) else []:
+                top10_conids_rows.append(
+                    {
+                        "conid": str(conid),
+                        "effective_at": str(effective_at),
+                        "parent_rank": rank_num,
+                        "holding_conid": str(c),
+                    }
+                )
+        self._insert_rows(conn, "holdings_top10", top10_rows)
+        self._insert_rows(conn, "holdings_top10_conids", top10_conids_rows)
 
-        combined.to_parquet(target_path, index=False, engine="pyarrow", compression="zstd")
+        geographic_rows = []
+        geographic = payload.get("geographic") if isinstance(payload.get("geographic"), dict) else {}
+        for key, value in geographic.items():
+            if isinstance(value, (dict, list)):
+                continue
+            geographic_rows.append(
+                {
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "region": _sanitize_segment(key),
+                    "weight_num": _to_fraction_weight(value),
+                }
+            )
+        self._insert_rows(conn, "holdings_geographic_weights", geographic_rows)
 
-        for stale_file in existing_files:
-            if stale_file != target_path and stale_file.exists():
-                stale_file.unlink()
-
-        return target_path, len(enriched_rows)
-
-    def _base_row_from_event_meta(self, event_meta):
-        return {
-            "event_id": int(event_meta["event_id"]),
-            "conid": str(event_meta["conid"]),
-            "endpoint": event_meta["endpoint"],
-            "endpoint_slug": event_meta["endpoint_slug"],
-            "observed_at": event_meta["observed_at"],
-            "effective_at": event_meta["effective_at"],
-            "effective_source": event_meta["effective_source"],
-            "payload_hash": event_meta["payload_hash"],
-            "blob_path": event_meta["blob_path"],
-            "payload_size_raw": event_meta["payload_size_raw"],
-            "payload_size_compressed": event_meta["payload_size_compressed"],
-            "source_file": event_meta.get("source_file"),
-            "inserted_at": event_meta["inserted_at"],
-        }
-
-    def _lineage_meta_from_event_meta(self, event_meta):
-        return {
-            "endpoint_event_id": int(event_meta["event_id"]),
-            "endpoint": event_meta["endpoint"],
-            "conid": str(event_meta["conid"]),
-            "observed_at": event_meta["observed_at"],
-            "effective_at": event_meta["effective_at"],
-            "payload_hash": event_meta["payload_hash"],
-            "source_file": event_meta.get("source_file"),
-            "inserted_at": event_meta["inserted_at"],
-        }
-
-    def _expected_endpoint_snapshot_path(self, event_meta):
-        effective_at = str(event_meta["effective_at"])
-        dt = datetime.fromisoformat(f"{effective_at}T00:00:00+00:00")
-        partition_dir = (
-            self.parquet_dir
-            / f"endpoint={event_meta['endpoint_slug']}"
-            / f"year={dt.year:04d}"
-            / f"month={dt.month:02d}"
+    def _upsert_ratios(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        self._upsert_snapshot_row(
+            conn,
+            "ratios_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "as_of_date": _to_iso_date(payload.get("as_of_date")),
+                "title_vs": payload.get("title_vs"),
+            },
         )
-        file_name = (
-            f"{effective_at}_{event_meta['conid']}_"
-            f"{str(event_meta['payload_hash'])[:12]}_{int(event_meta['event_id'])}.parquet"
+
+        self._delete_children(conn, ["ratios_metrics"], conid, effective_at)
+
+        metric_rows = []
+        for section in ("ratios", "financials", "fixed_income", "dividend", "zscore"):
+            values = payload.get(section, []) if isinstance(payload.get(section), list) else []
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                metric_rows.append(
+                    {
+                        "conid": str(conid),
+                        "effective_at": str(effective_at),
+                        "section": section,
+                        "metric_id": _sanitize_segment(item.get("name_tag") or item.get("id") or item.get("name")),
+                        "metric_name": item.get("name"),
+                        "value_num": _parse_number(item.get("value")),
+                        "value_fmt": item.get("value_fmt"),
+                        "vs_num": _parse_number(item.get("vs")),
+                        "min_num": _parse_number(item.get("min")),
+                        "max_num": _parse_number(item.get("max")),
+                        "avg_num": _parse_number(item.get("avg")),
+                        "percentile_num": _parse_number(item.get("percentile")),
+                        "min_fmt": item.get("min_fmt"),
+                        "max_fmt": item.get("max_fmt"),
+                        "avg_fmt": item.get("avg_fmt"),
+                    }
+                )
+        self._insert_rows(conn, "ratios_metrics", metric_rows)
+
+    def _upsert_lipper(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        universes = payload.get("universes", []) if isinstance(payload.get("universes"), list) else []
+
+        self._upsert_snapshot_row(
+            conn,
+            "lipper_ratings_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "universe_count": len(universes),
+            },
         )
-        return partition_dir / file_name
 
-    def _expected_factor_features_path(self, event_meta):
-        partition_dir = (
-            self.factor_features_parquet_dir
-            / f"endpoint={event_meta['endpoint_slug']}"
-            / f"conid={event_meta['conid']}"
+        self._delete_children(conn, ["lipper_ratings_values"], conid, effective_at)
+
+        rows = []
+        for universe in universes:
+            if not isinstance(universe, dict):
+                continue
+            universe_name = universe.get("name")
+            universe_as_of = _to_iso_date(universe.get("as_of_date") or universe.get("asOfDate"))
+            for period_key, period_items in universe.items():
+                if period_key in {"as_of_date", "asOfDate", "name", "title"}:
+                    continue
+                if not isinstance(period_items, list):
+                    continue
+                period = _sanitize_segment(period_key)
+                for item in period_items:
+                    if not isinstance(item, dict):
+                        continue
+                    rating = item.get("rating") if isinstance(item.get("rating"), dict) else {}
+                    rows.append(
+                        {
+                            "conid": str(conid),
+                            "effective_at": str(effective_at),
+                            "period": period,
+                            "metric_id": _sanitize_segment(item.get("name_tag") or item.get("id") or item.get("name")),
+                            "metric_name": item.get("name"),
+                            "rating_value": _parse_number(rating.get("value")),
+                            "rating_label": rating.get("name"),
+                            "universe_name": universe_name,
+                            "universe_as_of_date": universe_as_of,
+                        }
+                    )
+        self._insert_rows(conn, "lipper_ratings_values", rows)
+
+    def _upsert_dividends(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        snapshot = normalize_dividends_snapshot(payload)
+
+        self._upsert_snapshot_row(
+            conn,
+            "dividends_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "response_type": snapshot.get("response_type"),
+                "has_history": _to_int_bool(snapshot.get("has_history")),
+                "history_points": int(snapshot.get("history_points") or 0),
+                "embedded_price_points": int(snapshot.get("embedded_price_points") or 0),
+                "no_div_data_marker": _parse_number(snapshot.get("no_div_data_marker")),
+                "no_div_data_period": _parse_number(snapshot.get("no_div_data_period")),
+                "no_dividend_text": payload.get("no_dividend_text"),
+                "last_paid_date": snapshot.get("last_paid_date"),
+                "last_paid_amount": _parse_number(snapshot.get("last_paid_amount")),
+                "last_paid_currency": snapshot.get("last_paid_currency"),
+                "dividend_yield": _parse_number(snapshot.get("dividend_yield")),
+                "annual_dividend": _parse_number(snapshot.get("annual_dividend")),
+                "paying_companies": _parse_number(snapshot.get("paying_companies")),
+                "paying_companies_percent": _parse_number(snapshot.get("paying_companies_percent")),
+                "dividend_ttm": _parse_number(snapshot.get("dividend_ttm")),
+                "dividend_yield_ttm": _parse_number(snapshot.get("dividend_yield_ttm")),
+            },
         )
-        file_name = (
-            f"{event_meta['effective_at']}_"
-            f"{str(event_meta['payload_hash'])[:12]}_{int(event_meta['event_id'])}.parquet"
+
+        self._delete_children(conn, ["dividends_industry_metrics"], conid, effective_at)
+
+        rows = []
+        for item in extract_dividends_industry_metrics(payload):
+            rows.append(
+                {
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "metric_id": _sanitize_segment(item.get("metric_id")),
+                    "value_num": _parse_number(item.get("value")),
+                    "formatted_value": item.get("formatted_value"),
+                }
+            )
+        self._insert_rows(conn, "dividends_industry_metrics", rows)
+
+    def _upsert_morningstar(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        self._upsert_snapshot_row(
+            conn,
+            "morningstar_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "as_of_date": _to_iso_date(payload.get("as_of_date") or payload.get("asOfDate")),
+                "q_full_report_id": payload.get("q_full_report_id"),
+            },
         )
-        return partition_dir / file_name
 
-    def _expected_series_path(self, event_meta, base_dir):
-        return Path(base_dir) / f"conid={event_meta['conid']}" / "series.parquet"
+        self._delete_children(conn, ["morningstar_summary", "morningstar_commentary"], conid, effective_at)
 
-    def _series_row_key(self, endpoint, row):
-        def value(name):
-            v = row.get(name) if hasattr(row, "get") else None
-            if v is None:
-                return ""
-            if isinstance(v, float) and pd.isna(v):
-                return ""
-            text = str(v).strip()
-            if not text or text.lower() == "nan":
-                return ""
-            return text
+        summary_rows = []
+        for item in payload.get("summary", []) if isinstance(payload.get("summary"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            summary_rows.append(
+                {
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "metric_id": _sanitize_segment(item.get("id") or item.get("title") or "metric"),
+                    "title": item.get("title"),
+                    "value_text": str(item.get("value")) if item.get("value") is not None else None,
+                    "value_num": _parse_number(item.get("value")),
+                    "publish_date": _to_iso_date(item.get("publish_date")),
+                    "q": _to_int_bool(item.get("q")),
+                }
+            )
+        self._insert_rows(conn, "morningstar_summary", summary_rows)
 
-        if endpoint == "price_chart":
-            ident = value("trade_date") or value("timestamp_ms") or value("debug_y")
-            return f"price_chart|{ident}"
-        if endpoint == "sentiment_search":
-            ident = value("datetime_ms") or value("trade_date")
-            return f"sentiment_search|{ident}"
-        if endpoint == "ownership":
-            return "|".join(
+        commentary_rows = []
+        for item in payload.get("commentary", []) if isinstance(payload.get("commentary"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            author = item.get("author") if isinstance(item.get("author"), dict) else {}
+            commentary_rows.append(
+                {
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "item_id": item.get("id"),
+                    "title": item.get("title"),
+                    "subtitle": item.get("subtitle"),
+                    "subsection_id": item.get("subsection_id"),
+                    "publish_date": _to_iso_date(item.get("publish_date")),
+                    "q": _to_int_bool(item.get("q")),
+                    "text": item.get("text"),
+                    "author_name": author.get("name"),
+                }
+            )
+        self._insert_rows(conn, "morningstar_commentary", commentary_rows)
+
+    def _upsert_performance(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        self._upsert_snapshot_row(
+            conn,
+            "performance_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "title_vs": payload.get("title_vs"),
+            },
+        )
+
+        self._delete_children(conn, ["performance_metrics"], conid, effective_at)
+
+        rows = []
+        for section in ("cumulative", "annualized", "yield", "risk", "statistic"):
+            values = payload.get(section, []) if isinstance(payload.get(section), list) else []
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                rows.append(
+                    {
+                        "conid": str(conid),
+                        "effective_at": str(effective_at),
+                        "section": section,
+                        "metric_id": _sanitize_segment(item.get("name_tag") or item.get("id") or item.get("name")),
+                        "metric_name": item.get("name"),
+                        "name_tag_arg": str(item.get("name_tag_arg")) if item.get("name_tag_arg") is not None else None,
+                        "value_num": _parse_number(item.get("value")),
+                        "value_fmt": item.get("value_fmt"),
+                        "vs_num": _parse_number(item.get("vs")),
+                        "min_num": _parse_number(item.get("min")),
+                        "max_num": _parse_number(item.get("max")),
+                        "avg_num": _parse_number(item.get("avg")),
+                        "percentile_num": _parse_number(item.get("percentile")),
+                        "min_fmt": item.get("min_fmt"),
+                        "max_fmt": item.get("max_fmt"),
+                        "avg_fmt": item.get("avg_fmt"),
+                    }
+                )
+        self._insert_rows(conn, "performance_metrics", rows)
+
+    def _upsert_ownership(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        snapshot = normalize_ownership_snapshot(payload)
+
+        self._upsert_snapshot_row(
+            conn,
+            "ownership_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "owners_types_count": int(snapshot.get("owners_types_count") or 0),
+                "institutional_owners_count": int(snapshot.get("institutional_owners_count") or 0),
+                "insider_owners_count": int(snapshot.get("insider_owners_count") or 0),
+                "trade_log_count_raw": int(snapshot.get("trade_log_count_raw") or 0),
+                "trade_log_count_kept": int(snapshot.get("trade_log_count_kept") or 0),
+                "has_ownership_history": _to_int_bool(snapshot.get("has_ownership_history")),
+                "ownership_history_price_points": int(snapshot.get("ownership_history_price_points") or 0),
+                "institutional_total_value_text": snapshot.get("institutional_total_value"),
+                "institutional_total_shares_text": snapshot.get("institutional_total_shares"),
+                "institutional_total_pct_text": snapshot.get("institutional_total_pct"),
+                "institutional_total_pct_num": _parse_number(snapshot.get("institutional_total_pct_num")),
+                "insider_total_value_text": snapshot.get("insider_total_value"),
+                "insider_total_shares_text": snapshot.get("insider_total_shares"),
+                "insider_total_pct_text": snapshot.get("insider_total_pct"),
+                "insider_total_pct_num": _parse_number(snapshot.get("insider_total_pct_num")),
+            },
+        )
+
+        self._delete_children(conn, ["ownership_owners_types", "ownership_holders"], conid, effective_at)
+
+        owners_type_rows = []
+        for item in payload.get("owners_types", []) if isinstance(payload.get("owners_types"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            type_info = item.get("type") if isinstance(item.get("type"), dict) else {}
+            owners_type_rows.append(
+                {
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "type": type_info.get("type"),
+                    "display_type": type_info.get("display_type"),
+                    "float_value": _parse_number(item.get("float")),
+                    "display_float": item.get("display_float"),
+                }
+            )
+        self._insert_rows(conn, "ownership_owners_types", owners_type_rows)
+
+        holder_rows = []
+        groups = [
+            ("institutional", payload.get("institutional_owners", [])),
+            ("insider", payload.get("insider_owners", [])),
+        ]
+        for holder_group, values in groups:
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                holder_rows.append(
+                    {
+                        "conid": str(conid),
+                        "effective_at": str(effective_at),
+                        "holder_group": holder_group,
+                        "holder_name": item.get("name"),
+                        "holder_type": item.get("type"),
+                        "display_value": item.get("display_value"),
+                        "display_shares": item.get("display_shares"),
+                        "display_pct": item.get("display_pct"),
+                        "pct_num": _parse_number(item.get("display_pct"), percent_as_fraction=True),
+                    }
+                )
+        self._insert_rows(conn, "ownership_holders", holder_rows)
+
+    def _upsert_esg(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        self._upsert_snapshot_row(
+            conn,
+            "esg_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "as_of_date": _to_iso_date(payload.get("as_of_date") or payload.get("asOfDate")),
+                "coverage": _parse_number(payload.get("coverage")),
+                "source": payload.get("source"),
+                "symbol": payload.get("symbol"),
+                "no_settings": _to_int_bool(payload.get("no_settings")),
+            },
+        )
+
+        self._delete_children(conn, ["esg_nodes"], conid, effective_at)
+
+        rows = []
+
+        def walk(nodes, parent_path, depth):
+            if not isinstance(nodes, list):
+                return
+            for idx, node in enumerate(nodes):
+                if not isinstance(node, dict):
+                    continue
+                name = str(node.get("name") or f"node_{idx}")
+                seg = f"{idx}_{_sanitize_segment(name)}"
+                node_path = f"{parent_path}/{seg}" if parent_path else seg
+                rows.append(
+                    {
+                        "conid": str(conid),
+                        "effective_at": str(effective_at),
+                        "node_path": node_path,
+                        "parent_path": parent_path if parent_path else None,
+                        "depth": depth,
+                        "node_name": name,
+                        "node_value": _parse_number(node.get("value")),
+                    }
+                )
+                walk(node.get("children"), node_path, depth + 1)
+
+        walk(payload.get("content"), "", 0)
+        self._insert_rows(conn, "esg_nodes", rows)
+
+    def _upsert_price_chart_snapshot(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        rows = _extract_price_chart_rows(payload)
+        dates = [r.get("trade_date") for r in rows if r.get("trade_date")]
+        min_date = min(dates) if dates else None
+        max_date = max(dates) if dates else None
+
+        self._upsert_snapshot_row(
+            conn,
+            "price_chart_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "points_count": len(rows),
+                "min_trade_date": min_date,
+                "max_trade_date": max_date,
+            },
+        )
+
+    def _upsert_sentiment_snapshot(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        rows = _extract_sentiment_search_rows(payload)
+        dates = [r.get("trade_date") for r in rows if r.get("trade_date")]
+        min_date = min(dates) if dates else None
+        max_date = max(dates) if dates else None
+
+        self._upsert_snapshot_row(
+            conn,
+            "sentiment_search_snapshots",
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            {
+                "points_count": len(rows),
+                "min_trade_date": min_date,
+                "max_trade_date": max_date,
+            },
+        )
+
+    def _series_is_newer(self, new_effective_at, new_observed_at, new_payload_hash, existing_row):
+        old_effective_at = str(existing_row["effective_at"] or "")
+        old_observed_at = str(existing_row["observed_at"] or "")
+        old_payload_hash = str(existing_row["payload_hash"] or "")
+
+        new_effective_at = str(new_effective_at or "")
+        new_observed_at = str(new_observed_at or "")
+        new_payload_hash = str(new_payload_hash or "")
+
+        if new_effective_at > old_effective_at:
+            return True
+        if new_effective_at < old_effective_at:
+            return False
+
+        if new_observed_at > old_observed_at:
+            return True
+        if new_observed_at < old_observed_at:
+            return False
+
+        return new_payload_hash > old_payload_hash
+
+    def _write_price_chart_series(self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload):
+        rows = _extract_price_chart_rows(payload)
+        raw_written = 0
+        latest_upserted = 0
+
+        for row in rows:
+            row_key = row.get("trade_date") or row.get("timestamp_ms") or row.get("debug_y")
+            row_key = f"price_chart|{row_key}"
+
+            conn.execute(
+                """
+                INSERT INTO price_chart_series_raw (
+                    conid,
+                    effective_at,
+                    observed_at,
+                    payload_hash,
+                    inserted_at,
+                    row_key,
+                    trade_date,
+                    timestamp_ms,
+                    price,
+                    open,
+                    high,
+                    low,
+                    close,
+                    debug_y
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    str(conid),
+                    str(effective_at),
+                    str(observed_at),
+                    str(payload_hash),
+                    inserted_at,
+                    str(row_key),
+                    row.get("trade_date"),
+                    row.get("timestamp_ms"),
+                    _parse_number(row.get("price")),
+                    _parse_number(row.get("open")),
+                    _parse_number(row.get("high")),
+                    _parse_number(row.get("low")),
+                    _parse_number(row.get("close")),
+                    int(row.get("debug_y")) if row.get("debug_y") is not None else None,
+                ],
+            )
+            raw_written += 1
+
+            existing = conn.execute(
+                """
+                SELECT effective_at, observed_at, payload_hash
+                FROM price_chart_series_latest
+                WHERE conid = ? AND row_key = ?
+                """,
+                [str(conid), str(row_key)],
+            ).fetchone()
+
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO price_chart_series_latest (
+                        conid,
+                        row_key,
+                        effective_at,
+                        observed_at,
+                        payload_hash,
+                        updated_at,
+                        trade_date,
+                        timestamp_ms,
+                        price,
+                        open,
+                        high,
+                        low,
+                        close,
+                        debug_y
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        str(conid),
+                        str(row_key),
+                        str(effective_at),
+                        str(observed_at),
+                        str(payload_hash),
+                        inserted_at,
+                        row.get("trade_date"),
+                        row.get("timestamp_ms"),
+                        _parse_number(row.get("price")),
+                        _parse_number(row.get("open")),
+                        _parse_number(row.get("high")),
+                        _parse_number(row.get("low")),
+                        _parse_number(row.get("close")),
+                        int(row.get("debug_y")) if row.get("debug_y") is not None else None,
+                    ],
+                )
+                latest_upserted += 1
+            elif self._series_is_newer(effective_at, observed_at, payload_hash, existing):
+                conn.execute(
+                    """
+                    UPDATE price_chart_series_latest
+                    SET effective_at = ?,
+                        observed_at = ?,
+                        payload_hash = ?,
+                        updated_at = ?,
+                        trade_date = ?,
+                        timestamp_ms = ?,
+                        price = ?,
+                        open = ?,
+                        high = ?,
+                        low = ?,
+                        close = ?,
+                        debug_y = ?
+                    WHERE conid = ? AND row_key = ?
+                    """,
+                    [
+                        str(effective_at),
+                        str(observed_at),
+                        str(payload_hash),
+                        inserted_at,
+                        row.get("trade_date"),
+                        row.get("timestamp_ms"),
+                        _parse_number(row.get("price")),
+                        _parse_number(row.get("open")),
+                        _parse_number(row.get("high")),
+                        _parse_number(row.get("low")),
+                        _parse_number(row.get("close")),
+                        int(row.get("debug_y")) if row.get("debug_y") is not None else None,
+                        str(conid),
+                        str(row_key),
+                    ],
+                )
+                latest_upserted += 1
+
+        return raw_written, latest_upserted
+
+    def _write_sentiment_series(self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload):
+        rows = _extract_sentiment_search_rows(payload)
+        raw_written = 0
+        latest_upserted = 0
+
+        for row in rows:
+            row_key = row.get("datetime_ms") or row.get("trade_date")
+            row_key = f"sentiment_search|{row_key}"
+
+            conn.execute(
+                """
+                INSERT INTO sentiment_search_series_raw (
+                    conid,
+                    effective_at,
+                    observed_at,
+                    payload_hash,
+                    inserted_at,
+                    row_key,
+                    trade_date,
+                    datetime_ms,
+                    sscore,
+                    sdelta,
+                    svolatility,
+                    sdispersion,
+                    svscore,
+                    svolume,
+                    smean,
+                    sbuzz
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    str(conid),
+                    str(effective_at),
+                    str(observed_at),
+                    str(payload_hash),
+                    inserted_at,
+                    str(row_key),
+                    row.get("trade_date"),
+                    int(row.get("datetime_ms")) if row.get("datetime_ms") is not None else None,
+                    _parse_number(row.get("sscore")),
+                    _parse_number(row.get("sdelta")),
+                    _parse_number(row.get("svolatility")),
+                    _parse_number(row.get("sdispersion")),
+                    _parse_number(row.get("svscore")),
+                    _parse_number(row.get("svolume")),
+                    _parse_number(row.get("smean")),
+                    _parse_number(row.get("sbuzz")),
+                ],
+            )
+            raw_written += 1
+
+            existing = conn.execute(
+                """
+                SELECT effective_at, observed_at, payload_hash
+                FROM sentiment_search_series_latest
+                WHERE conid = ? AND row_key = ?
+                """,
+                [str(conid), str(row_key)],
+            ).fetchone()
+
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO sentiment_search_series_latest (
+                        conid,
+                        row_key,
+                        effective_at,
+                        observed_at,
+                        payload_hash,
+                        updated_at,
+                        trade_date,
+                        datetime_ms,
+                        sscore,
+                        sdelta,
+                        svolatility,
+                        sdispersion,
+                        svscore,
+                        svolume,
+                        smean,
+                        sbuzz
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        str(conid),
+                        str(row_key),
+                        str(effective_at),
+                        str(observed_at),
+                        str(payload_hash),
+                        inserted_at,
+                        row.get("trade_date"),
+                        int(row.get("datetime_ms")) if row.get("datetime_ms") is not None else None,
+                        _parse_number(row.get("sscore")),
+                        _parse_number(row.get("sdelta")),
+                        _parse_number(row.get("svolatility")),
+                        _parse_number(row.get("sdispersion")),
+                        _parse_number(row.get("svscore")),
+                        _parse_number(row.get("svolume")),
+                        _parse_number(row.get("smean")),
+                        _parse_number(row.get("sbuzz")),
+                    ],
+                )
+                latest_upserted += 1
+            elif self._series_is_newer(effective_at, observed_at, payload_hash, existing):
+                conn.execute(
+                    """
+                    UPDATE sentiment_search_series_latest
+                    SET effective_at = ?,
+                        observed_at = ?,
+                        payload_hash = ?,
+                        updated_at = ?,
+                        trade_date = ?,
+                        datetime_ms = ?,
+                        sscore = ?,
+                        sdelta = ?,
+                        svolatility = ?,
+                        sdispersion = ?,
+                        svscore = ?,
+                        svolume = ?,
+                        smean = ?,
+                        sbuzz = ?
+                    WHERE conid = ? AND row_key = ?
+                    """,
+                    [
+                        str(effective_at),
+                        str(observed_at),
+                        str(payload_hash),
+                        inserted_at,
+                        row.get("trade_date"),
+                        int(row.get("datetime_ms")) if row.get("datetime_ms") is not None else None,
+                        _parse_number(row.get("sscore")),
+                        _parse_number(row.get("sdelta")),
+                        _parse_number(row.get("svolatility")),
+                        _parse_number(row.get("sdispersion")),
+                        _parse_number(row.get("svscore")),
+                        _parse_number(row.get("svolume")),
+                        _parse_number(row.get("smean")),
+                        _parse_number(row.get("sbuzz")),
+                        str(conid),
+                        str(row_key),
+                    ],
+                )
+                latest_upserted += 1
+
+        return raw_written, latest_upserted
+
+    def _write_ownership_trade_log_series(self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload):
+        rows = extract_ownership_trade_log(payload, drop_no_change=True)
+        raw_written = 0
+        latest_upserted = 0
+
+        for row in rows:
+            row_key = "|".join(
                 [
                     "ownership",
-                    value("trade_date"),
-                    value("action"),
-                    value("party"),
-                    value("source"),
-                    value("insider"),
-                    value("shares"),
-                    value("value"),
-                    value("holding"),
+                    str(row.get("trade_date") or ""),
+                    str(row.get("action") or ""),
+                    str(row.get("party") or ""),
+                    str(row.get("source") or ""),
+                    str(row.get("insider") or ""),
+                    str(row.get("shares") or ""),
+                    str(row.get("value") or ""),
+                    str(row.get("holding") or ""),
                 ]
             )
-        if endpoint == "dividends":
-            return "|".join(
+
+            conn.execute(
+                """
+                INSERT INTO ownership_trade_log_series_raw (
+                    conid,
+                    effective_at,
+                    observed_at,
+                    payload_hash,
+                    inserted_at,
+                    row_key,
+                    trade_date,
+                    action,
+                    shares,
+                    value,
+                    holding,
+                    party,
+                    source,
+                    insider
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    str(conid),
+                    str(effective_at),
+                    str(observed_at),
+                    str(payload_hash),
+                    inserted_at,
+                    row_key,
+                    row.get("trade_date"),
+                    row.get("action"),
+                    _parse_number(row.get("shares")),
+                    _parse_number(row.get("value")),
+                    _parse_number(row.get("holding")),
+                    row.get("party"),
+                    row.get("source"),
+                    str(row.get("insider")) if row.get("insider") is not None else None,
+                ],
+            )
+            raw_written += 1
+
+            existing = conn.execute(
+                """
+                SELECT effective_at, observed_at, payload_hash
+                FROM ownership_trade_log_series_latest
+                WHERE conid = ? AND row_key = ?
+                """,
+                [str(conid), row_key],
+            ).fetchone()
+
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO ownership_trade_log_series_latest (
+                        conid,
+                        row_key,
+                        effective_at,
+                        observed_at,
+                        payload_hash,
+                        updated_at,
+                        trade_date,
+                        action,
+                        shares,
+                        value,
+                        holding,
+                        party,
+                        source,
+                        insider
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        str(conid),
+                        row_key,
+                        str(effective_at),
+                        str(observed_at),
+                        str(payload_hash),
+                        inserted_at,
+                        row.get("trade_date"),
+                        row.get("action"),
+                        _parse_number(row.get("shares")),
+                        _parse_number(row.get("value")),
+                        _parse_number(row.get("holding")),
+                        row.get("party"),
+                        row.get("source"),
+                        str(row.get("insider")) if row.get("insider") is not None else None,
+                    ],
+                )
+                latest_upserted += 1
+            elif self._series_is_newer(effective_at, observed_at, payload_hash, existing):
+                conn.execute(
+                    """
+                    UPDATE ownership_trade_log_series_latest
+                    SET effective_at = ?,
+                        observed_at = ?,
+                        payload_hash = ?,
+                        updated_at = ?,
+                        trade_date = ?,
+                        action = ?,
+                        shares = ?,
+                        value = ?,
+                        holding = ?,
+                        party = ?,
+                        source = ?,
+                        insider = ?
+                    WHERE conid = ? AND row_key = ?
+                    """,
+                    [
+                        str(effective_at),
+                        str(observed_at),
+                        str(payload_hash),
+                        inserted_at,
+                        row.get("trade_date"),
+                        row.get("action"),
+                        _parse_number(row.get("shares")),
+                        _parse_number(row.get("value")),
+                        _parse_number(row.get("holding")),
+                        row.get("party"),
+                        row.get("source"),
+                        str(row.get("insider")) if row.get("insider") is not None else None,
+                        str(conid),
+                        row_key,
+                    ],
+                )
+                latest_upserted += 1
+
+        return raw_written, latest_upserted
+
+    def _write_dividends_events_series(self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload):
+        rows = extract_dividends_events(payload)
+        raw_written = 0
+        latest_upserted = 0
+
+        for row in rows:
+            row_key = "|".join(
                 [
                     "dividends",
-                    value("event_date") or value("trade_date"),
-                    value("amount"),
-                    value("currency"),
-                    value("event_type"),
-                    value("declaration_date"),
-                    value("record_date"),
-                    value("payment_date"),
-                    value("description"),
+                    str(row.get("event_date") or row.get("trade_date") or ""),
+                    str(row.get("amount") or ""),
+                    str(row.get("currency") or ""),
+                    str(row.get("event_type") or ""),
+                    str(row.get("declaration_date") or ""),
+                    str(row.get("record_date") or ""),
+                    str(row.get("payment_date") or ""),
+                    str(row.get("description") or ""),
                 ]
             )
 
-        skip = {
-            "endpoint_event_id",
-            "endpoint",
-            "conid",
-            "observed_at",
-            "effective_at",
-            "payload_hash",
-            "source_file",
-            "inserted_at",
-            "row_key",
-        }
-        payload = []
-        for k in sorted(row.keys()):
-            if k in skip:
-                continue
-            payload.append(f"{k}={value(k)}")
-        return f"{endpoint}|{'|'.join(payload)}"
-
-    def _sort_series_rows(self, endpoint, df):
-        sort_map = {
-            "price_chart": ["trade_date", "timestamp_ms", "debug_y"],
-            "sentiment_search": ["trade_date", "datetime_ms"],
-            "ownership": ["trade_date", "action", "party", "source", "insider", "shares", "value", "holding"],
-            "dividends": [
-                "event_date",
-                "trade_date",
-                "payment_date",
-                "record_date",
-                "declaration_date",
-                "amount",
-                "currency",
-                "event_type",
-            ],
-        }
-        cols = [c for c in sort_map.get(endpoint, ["row_key"]) if c in df.columns]
-        if not cols:
-            return df.reset_index(drop=True)
-        try:
-            return df.sort_values(by=cols, kind="stable", na_position="last").reset_index(drop=True)
-        except Exception:
-            if "row_key" in df.columns:
-                return df.sort_values(by=["row_key"], kind="stable").reset_index(drop=True)
-            return df.reset_index(drop=True)
-
-    def _get_existing_event(self, conid, endpoint, effective_at, payload_hash):
-        with self._get_conn() as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
+            conn.execute(
                 """
-                SELECT
-                    id,
+                INSERT INTO dividends_events_series_raw (
                     conid,
-                    endpoint,
-                    endpoint_slug,
-                    observed_at,
                     effective_at,
-                    effective_source,
+                    observed_at,
                     payload_hash,
-                    blob_path,
-                    payload_size_raw,
-                    payload_size_compressed,
-                    source_file,
-                    inserted_at
-                FROM endpoint_events
-                WHERE conid = ?
-                  AND endpoint = ?
-                  AND effective_at = ?
-                  AND payload_hash = ?
-                LIMIT 1
+                    inserted_at,
+                    row_key,
+                    trade_date,
+                    event_date,
+                    amount,
+                    currency,
+                    description,
+                    event_type,
+                    declaration_date,
+                    record_date,
+                    payment_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (str(conid), endpoint, effective_at, payload_hash),
+                [
+                    str(conid),
+                    str(effective_at),
+                    str(observed_at),
+                    str(payload_hash),
+                    inserted_at,
+                    row_key,
+                    row.get("trade_date"),
+                    row.get("event_date"),
+                    _parse_number(row.get("amount")),
+                    row.get("currency"),
+                    row.get("description"),
+                    row.get("event_type"),
+                    row.get("declaration_date"),
+                    row.get("record_date"),
+                    row.get("payment_date"),
+                ],
             )
-            row = cur.fetchone()
-            if row is None:
-                return None
-            out = dict(row)
-            out["event_id"] = int(out.pop("id"))
-            return out
+            raw_written += 1
 
-    def _materialize_event_artifacts(self, event_meta, payload, only_missing=False):
-        base_row = self._base_row_from_event_meta(event_meta)
-        lineage_meta = self._lineage_meta_from_event_meta(event_meta)
-        endpoint = base_row["endpoint"]
-        endpoint_slug = base_row["endpoint_slug"]
-        effective_at = base_row["effective_at"]
+            existing = conn.execute(
+                """
+                SELECT effective_at, observed_at, payload_hash
+                FROM dividends_events_series_latest
+                WHERE conid = ? AND row_key = ?
+                """,
+                [str(conid), row_key],
+            ).fetchone()
 
-        snapshot_path = self._expected_endpoint_snapshot_path(event_meta)
-        if (not only_missing) or (not snapshot_path.exists()):
-            snapshot_row = self._build_endpoint_snapshot_row(base_row, payload)
-            snapshot_path = Path(
-                self._write_endpoint_event_parquet(snapshot_row, endpoint_slug, effective_at)
-            )
-
-        factor_rows = extract_factor_features(endpoint, payload, effective_at=effective_at)
-        factor_path = None
-        factor_rows_written = 0
-        if factor_rows:
-            expected_factor_path = self._expected_factor_features_path(event_meta)
-            if (not only_missing) or (not expected_factor_path.exists()):
-                written_factor_path, factor_rows_written = self._write_factor_features_parquet(
-                    rows=factor_rows,
-                    lineage_meta=lineage_meta,
-                    endpoint_slug=endpoint_slug,
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO dividends_events_series_latest (
+                        conid,
+                        row_key,
+                        effective_at,
+                        observed_at,
+                        payload_hash,
+                        updated_at,
+                        trade_date,
+                        event_date,
+                        amount,
+                        currency,
+                        description,
+                        event_type,
+                        declaration_date,
+                        record_date,
+                        payment_date
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        str(conid),
+                        row_key,
+                        str(effective_at),
+                        str(observed_at),
+                        str(payload_hash),
+                        inserted_at,
+                        row.get("trade_date"),
+                        row.get("event_date"),
+                        _parse_number(row.get("amount")),
+                        row.get("currency"),
+                        row.get("description"),
+                        row.get("event_type"),
+                        row.get("declaration_date"),
+                        row.get("record_date"),
+                        row.get("payment_date"),
+                    ],
                 )
-                if written_factor_path is not None:
-                    factor_path = Path(written_factor_path)
-            else:
-                factor_path = expected_factor_path
+                latest_upserted += 1
+            elif self._series_is_newer(effective_at, observed_at, payload_hash, existing):
+                conn.execute(
+                    """
+                    UPDATE dividends_events_series_latest
+                    SET effective_at = ?,
+                        observed_at = ?,
+                        payload_hash = ?,
+                        updated_at = ?,
+                        trade_date = ?,
+                        event_date = ?,
+                        amount = ?,
+                        currency = ?,
+                        description = ?,
+                        event_type = ?,
+                        declaration_date = ?,
+                        record_date = ?,
+                        payment_date = ?
+                    WHERE conid = ? AND row_key = ?
+                    """,
+                    [
+                        str(effective_at),
+                        str(observed_at),
+                        str(payload_hash),
+                        inserted_at,
+                        row.get("trade_date"),
+                        row.get("event_date"),
+                        _parse_number(row.get("amount")),
+                        row.get("currency"),
+                        row.get("description"),
+                        row.get("event_type"),
+                        row.get("declaration_date"),
+                        row.get("record_date"),
+                        row.get("payment_date"),
+                        str(conid),
+                        row_key,
+                    ],
+                )
+                latest_upserted += 1
 
-        series_path = None
-        series_rows_written = 0
+        return raw_written, latest_upserted
+
+    def _write_series(self, conn, endpoint, conid, effective_at, observed_at, payload_hash, inserted_at, payload):
         if endpoint == "price_chart":
-            rows = _extract_price_chart_rows(payload)
-            expected_series_path = self._expected_series_path(event_meta, self.price_chart_parquet_dir)
-            if rows and ((not only_missing) or (not expected_series_path.exists())):
-                written_series_path, series_rows_written = self._write_price_chart_series_parquet(
-                    rows,
-                    lineage_meta=lineage_meta,
-                )
-                if written_series_path is not None:
-                    series_path = Path(written_series_path)
-            elif expected_series_path.exists():
-                series_path = expected_series_path
-        elif endpoint == "sentiment_search":
-            sanitized = _sanitize_sentiment_search_payload(payload)
-            rows = _extract_sentiment_search_rows(sanitized)
-            expected_series_path = self._expected_series_path(event_meta, self.sentiment_search_parquet_dir)
-            if rows and ((not only_missing) or (not expected_series_path.exists())):
-                written_series_path, series_rows_written = self._write_sentiment_search_series_parquet(
-                    rows,
-                    lineage_meta=lineage_meta,
-                )
-                if written_series_path is not None:
-                    series_path = Path(written_series_path)
-            elif expected_series_path.exists():
-                series_path = expected_series_path
-        elif endpoint == "ownership":
-            rows = extract_ownership_trade_log(payload, drop_no_change=True)
-            expected_series_path = self._expected_series_path(event_meta, self.ownership_trade_log_parquet_dir)
-            if rows and ((not only_missing) or (not expected_series_path.exists())):
-                written_series_path, series_rows_written = self._write_ownership_trade_log_series_parquet(
-                    rows,
-                    lineage_meta=lineage_meta,
-                )
-                if written_series_path is not None:
-                    series_path = Path(written_series_path)
-            elif expected_series_path.exists():
-                series_path = expected_series_path
-        elif endpoint == "dividends":
-            rows = extract_dividends_events(payload)
-            expected_series_path = self._expected_series_path(event_meta, self.dividends_events_parquet_dir)
-            if rows and ((not only_missing) or (not expected_series_path.exists())):
-                written_series_path, series_rows_written = self._write_dividends_events_series_parquet(
-                    rows,
-                    lineage_meta=lineage_meta,
-                )
-                if written_series_path is not None:
-                    series_path = Path(written_series_path)
-            elif expected_series_path.exists():
-                series_path = expected_series_path
+            return self._write_price_chart_series(conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload)
+        if endpoint == "sentiment_search":
+            return self._write_sentiment_series(conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload)
+        if endpoint == "ownership":
+            return self._write_ownership_trade_log_series(conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload)
+        if endpoint == "dividends":
+            return self._write_dividends_events_series(conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload)
+        return 0, 0
 
-        return {
-            "snapshot_path": str(snapshot_path) if snapshot_path is not None else None,
-            "factor_path": str(factor_path) if factor_path is not None else None,
-            "factor_rows_written": int(factor_rows_written),
-            "series_path": str(series_path) if series_path is not None else None,
-            "series_rows_written": int(series_rows_written),
-        }
-
-    def persist_endpoint_payload(
+    def _persist_endpoint(
         self,
+        conn,
         conid,
         endpoint,
         payload,
         observed_at,
         effective_at,
         effective_source,
-        source_file=None,
+        source_file,
     ):
-        blob_info = self._store_blob(payload)
-        endpoint_slug = _slugify_endpoint(endpoint)
         now_iso = datetime.now(timezone.utc).isoformat()
+        self._ensure_product(conn, conid)
 
-        with self._get_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO endpoint_events (
-                    conid, endpoint, endpoint_slug, observed_at, effective_at, effective_source,
-                    payload_hash, blob_path, payload_size_raw, payload_size_compressed,
-                    source_file, inserted_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(conid, endpoint, effective_at, payload_hash) DO NOTHING
-                """,
-                (
-                    str(conid),
-                    endpoint,
-                    endpoint_slug,
-                    observed_at,
-                    effective_at,
-                    effective_source,
-                    blob_info["hash"],
-                    blob_info["blob_path"],
-                    blob_info["raw_size"],
-                    blob_info["compressed_size"],
-                    source_file,
-                    now_iso,
-                ),
-            )
-            inserted = cur.rowcount > 0
-            event_id = cur.lastrowid
-            conn.commit()
+        blob_info = self._store_blob(conn, payload)
+        payload_hash = blob_info["hash"]
 
-        if not inserted:
-            existing_event = self._get_existing_event(
-                conid=conid,
-                endpoint=endpoint,
-                effective_at=effective_at,
-                payload_hash=blob_info["hash"],
-            )
-            artifacts = {
-                "snapshot_path": None,
-                "factor_path": None,
-                "factor_rows_written": 0,
-                "series_path": None,
-                "series_rows_written": 0,
-            }
-            if existing_event is not None:
-                artifacts = self._materialize_event_artifacts(
-                    event_meta=existing_event,
-                    payload=payload,
-                    only_missing=True,
-                )
+        table = self._main_table_for_endpoint(endpoint)
+        existing = conn.execute(
+            f"SELECT payload_hash FROM {table} WHERE conid = ? AND effective_at = ?",
+            [str(conid), str(effective_at)],
+        ).fetchone()
+
+        if existing is None:
+            state = "inserted"
+        elif str(existing["payload_hash"]) == str(payload_hash):
+            state = "unchanged"
+        else:
+            state = "overwritten"
+
+        if state == "unchanged":
             return {
-                "inserted": False,
-                "duplicate": True,
                 "endpoint": endpoint,
-                "snapshot_path": artifacts["snapshot_path"],
-                "factor_path": artifacts["factor_path"],
-                "factor_rows_written": int(artifacts["factor_rows_written"]),
-                "series_path": artifacts["series_path"],
-                "series_rows_written": int(artifacts["series_rows_written"]),
+                "state": state,
+                "effective_source": effective_source,
+                "series_raw_rows_written": 0,
+                "series_latest_rows_upserted": 0,
             }
 
-        event_meta = {
-            "event_id": event_id,
-            "conid": str(conid),
-            "endpoint": endpoint,
-            "endpoint_slug": endpoint_slug,
-            "observed_at": observed_at,
-            "effective_at": effective_at,
-            "effective_source": effective_source,
-            "payload_hash": blob_info["hash"],
-            "blob_path": blob_info["blob_path"],
-            "payload_size_raw": blob_info["raw_size"],
-            "payload_size_compressed": blob_info["compressed_size"],
-            "source_file": source_file,
-            "inserted_at": now_iso,
+        handlers = {
+            "landing": self._upsert_landing,
+            "profile_and_fees": self._upsert_profile_fees,
+            "holdings": self._upsert_holdings,
+            "ratios": self._upsert_ratios,
+            "lipper_ratings": self._upsert_lipper,
+            "dividends": self._upsert_dividends,
+            "morningstar": self._upsert_morningstar,
+            "price_chart": self._upsert_price_chart_snapshot,
+            "performance": self._upsert_performance,
+            "sentiment_search": self._upsert_sentiment_snapshot,
+            "ownership": self._upsert_ownership,
+            "esg": self._upsert_esg,
         }
-        artifacts = self._materialize_event_artifacts(
-            event_meta=event_meta,
-            payload=payload,
-            only_missing=False,
+
+        handler = handlers[endpoint]
+        handler(
+            conn,
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            source_file,
+            now_iso,
+            payload,
         )
 
+        self._store_endpoint_scalar_extras(conn, endpoint, conid, effective_at, payload)
+
+        series_raw_rows_written = 0
+        series_latest_rows_upserted = 0
+        if endpoint in SERIES_ENDPOINTS:
+            series_raw_rows_written, series_latest_rows_upserted = self._write_series(
+                conn,
+                endpoint,
+                conid,
+                effective_at,
+                observed_at,
+                payload_hash,
+                now_iso,
+                payload,
+            )
+
         return {
-            "inserted": True,
-            "duplicate": False,
             "endpoint": endpoint,
-            "snapshot_path": artifacts["snapshot_path"],
-            "factor_path": artifacts["factor_path"],
-            "factor_rows_written": int(artifacts["factor_rows_written"]),
-            "series_path": artifacts["series_path"],
-            "series_rows_written": int(artifacts["series_rows_written"]),
+            "state": state,
+            "effective_source": effective_source,
+            "series_raw_rows_written": int(series_raw_rows_written),
+            "series_latest_rows_upserted": int(series_latest_rows_upserted),
         }
 
     def persist_combined_snapshot(self, snapshot, source_file=None, refresh_duckdb=False):
         if not isinstance(snapshot, dict):
-            return {"inserted_events": 0, "duplicate_events": 0, "status": "invalid_snapshot"}
+            return {
+                "inserted_events": 0,
+                "overwritten_events": 0,
+                "unchanged_events": 0,
+                "series_raw_rows_written": 0,
+                "series_latest_rows_upserted": 0,
+                "status": "invalid_snapshot",
+            }
 
         conid = snapshot.get("conid")
         if conid is None:
-            return {"inserted_events": 0, "duplicate_events": 0, "status": "missing_conid"}
+            return {
+                "inserted_events": 0,
+                "overwritten_events": 0,
+                "unchanged_events": 0,
+                "series_raw_rows_written": 0,
+                "series_latest_rows_upserted": 0,
+                "status": "missing_conid",
+            }
 
         observed_at = snapshot.get("scraped_at") or datetime.now(timezone.utc).isoformat()
         try:
@@ -1135,740 +2928,211 @@ class FundamentalsStore:
 
         endpoint_payloads = self._endpoint_payloads_from_snapshot(snapshot)
         if not endpoint_payloads:
-            return {"inserted_events": 0, "duplicate_events": 0, "status": "no_payloads"}
+            return {
+                "inserted_events": 0,
+                "overwritten_events": 0,
+                "unchanged_events": 0,
+                "series_raw_rows_written": 0,
+                "series_latest_rows_upserted": 0,
+                "status": "no_payloads",
+            }
 
         effective_map = self._resolve_effective_dates(endpoint_payloads, observed_dt)
 
         inserted_events = 0
-        duplicate_events = 0
-        factor_rows_written = 0
-        series_rows_written = 0
+        overwritten_events = 0
+        unchanged_events = 0
+        series_raw_rows_written = 0
+        series_latest_rows_upserted = 0
         per_endpoint = {}
 
-        for endpoint, payload in endpoint_payloads.items():
-            effective_at, effective_source = effective_map[endpoint]
-            result = self.persist_endpoint_payload(
-                conid=conid,
-                endpoint=endpoint,
-                payload=payload,
-                observed_at=observed_at,
-                effective_at=effective_at,
-                effective_source=effective_source,
-                source_file=source_file,
-            )
+        with self._get_conn() as conn:
+            for endpoint, payload in endpoint_payloads.items():
+                effective_at, effective_source = effective_map[endpoint]
+                result = self._persist_endpoint(
+                    conn=conn,
+                    conid=conid,
+                    endpoint=endpoint,
+                    payload=payload,
+                    observed_at=observed_at,
+                    effective_at=effective_at,
+                    effective_source=effective_source,
+                    source_file=source_file,
+                )
 
-            if result.get("duplicate"):
-                duplicate_events += 1
-            else:
-                inserted_events += 1
+                state = result["state"]
+                if state == "inserted":
+                    inserted_events += 1
+                elif state == "overwritten":
+                    overwritten_events += 1
+                else:
+                    unchanged_events += 1
 
-            factor_rows_written += int(result.get("factor_rows_written", 0))
-            series_rows_written += int(result.get("series_rows_written", 0))
-            per_endpoint[endpoint] = result
+                series_raw_rows_written += int(result.get("series_raw_rows_written", 0))
+                series_latest_rows_upserted += int(result.get("series_latest_rows_upserted", 0))
+                per_endpoint[endpoint] = result
+
+            conn.commit()
 
         if refresh_duckdb:
             self.refresh_duckdb_views()
 
         return {
             "inserted_events": inserted_events,
-            "duplicate_events": duplicate_events,
-            "factor_rows_written": factor_rows_written,
-            "series_rows_written": series_rows_written,
+            "overwritten_events": overwritten_events,
+            "unchanged_events": unchanged_events,
+            "series_raw_rows_written": series_raw_rows_written,
+            "series_latest_rows_upserted": series_latest_rows_upserted,
             "status": "ok",
             "per_endpoint": per_endpoint,
         }
 
-    def _create_empty_endpoint_events_view(self, db):
-        db.execute(
-            """
-            CREATE OR REPLACE VIEW endpoint_events_all AS
-            SELECT
-                CAST(NULL AS BIGINT) AS event_id,
-                CAST(NULL AS VARCHAR) AS conid,
-                CAST(NULL AS VARCHAR) AS endpoint,
-                CAST(NULL AS VARCHAR) AS endpoint_slug,
-                CAST(NULL AS VARCHAR) AS observed_at,
-                CAST(NULL AS VARCHAR) AS effective_at,
-                CAST(NULL AS VARCHAR) AS effective_source,
-                CAST(NULL AS VARCHAR) AS payload_hash,
-                CAST(NULL AS VARCHAR) AS blob_path,
-                CAST(NULL AS BIGINT) AS payload_size_raw,
-                CAST(NULL AS BIGINT) AS payload_size_compressed,
-                CAST(NULL AS VARCHAR) AS source_file,
-                CAST(NULL AS VARCHAR) AS inserted_at
-            WHERE FALSE
-            """
-        )
+    def persist_ingest_run(self, run_stats, endpoint_summary):
+        run_stats = run_stats or {}
+        endpoint_summary = endpoint_summary or []
 
-    def _create_empty_factor_features_view(self, db):
-        db.execute(
-            """
-            CREATE OR REPLACE VIEW factor_features_all AS
-            SELECT
-                CAST(NULL AS BIGINT) AS endpoint_event_id,
-                CAST(NULL AS VARCHAR) AS endpoint,
-                CAST(NULL AS VARCHAR) AS conid,
-                CAST(NULL AS VARCHAR) AS observed_at,
-                CAST(NULL AS VARCHAR) AS effective_at,
-                CAST(NULL AS VARCHAR) AS payload_hash,
-                CAST(NULL AS VARCHAR) AS feature_name,
-                CAST(NULL AS VARCHAR) AS feature_group,
-                CAST(NULL AS DOUBLE) AS feature_value,
-                CAST(NULL AS VARCHAR) AS feature_source,
-                CAST(NULL AS VARCHAR) AS source_file,
-                CAST(NULL AS VARCHAR) AS inserted_at,
-                CAST(NULL AS VARCHAR) AS row_key
-            WHERE FALSE
-            """
-        )
-
-    def _create_empty_price_series_view(self, db):
-        db.execute(
-            """
-            CREATE OR REPLACE VIEW price_chart_series_all AS
-            SELECT
-                CAST(NULL AS BIGINT) AS endpoint_event_id,
-                CAST(NULL AS VARCHAR) AS endpoint,
-                CAST(NULL AS VARCHAR) AS conid,
-                CAST(NULL AS VARCHAR) AS observed_at,
-                CAST(NULL AS VARCHAR) AS effective_at,
-                CAST(NULL AS VARCHAR) AS payload_hash,
-                CAST(NULL AS VARCHAR) AS source_file,
-                CAST(NULL AS VARCHAR) AS inserted_at,
-                CAST(NULL AS VARCHAR) AS trade_date,
-                CAST(NULL AS BIGINT) AS timestamp_ms,
-                CAST(NULL AS DOUBLE) AS price,
-                CAST(NULL AS DOUBLE) AS open,
-                CAST(NULL AS DOUBLE) AS high,
-                CAST(NULL AS DOUBLE) AS low,
-                CAST(NULL AS DOUBLE) AS close,
-                CAST(NULL AS BIGINT) AS debug_y,
-                CAST(NULL AS VARCHAR) AS row_key
-            WHERE FALSE
-            """
-        )
-
-    def _create_empty_sentiment_series_view(self, db):
-        db.execute(
-            """
-            CREATE OR REPLACE VIEW sentiment_search_series_all AS
-            SELECT
-                CAST(NULL AS BIGINT) AS endpoint_event_id,
-                CAST(NULL AS VARCHAR) AS endpoint,
-                CAST(NULL AS VARCHAR) AS conid,
-                CAST(NULL AS VARCHAR) AS observed_at,
-                CAST(NULL AS VARCHAR) AS effective_at,
-                CAST(NULL AS VARCHAR) AS payload_hash,
-                CAST(NULL AS VARCHAR) AS source_file,
-                CAST(NULL AS VARCHAR) AS inserted_at,
-                CAST(NULL AS VARCHAR) AS trade_date,
-                CAST(NULL AS BIGINT) AS datetime_ms,
-                CAST(NULL AS VARCHAR) AS row_key
-            WHERE FALSE
-            """
-        )
-
-    def _create_empty_ownership_trade_log_view(self, db):
-        db.execute(
-            """
-            CREATE OR REPLACE VIEW ownership_trade_log_series_all AS
-            SELECT
-                CAST(NULL AS BIGINT) AS endpoint_event_id,
-                CAST(NULL AS VARCHAR) AS endpoint,
-                CAST(NULL AS VARCHAR) AS conid,
-                CAST(NULL AS VARCHAR) AS observed_at,
-                CAST(NULL AS VARCHAR) AS effective_at,
-                CAST(NULL AS VARCHAR) AS payload_hash,
-                CAST(NULL AS VARCHAR) AS source_file,
-                CAST(NULL AS VARCHAR) AS inserted_at,
-                CAST(NULL AS VARCHAR) AS trade_date,
-                CAST(NULL AS VARCHAR) AS action,
-                CAST(NULL AS DOUBLE) AS shares,
-                CAST(NULL AS DOUBLE) AS value,
-                CAST(NULL AS DOUBLE) AS holding,
-                CAST(NULL AS VARCHAR) AS party,
-                CAST(NULL AS VARCHAR) AS source,
-                CAST(NULL AS VARCHAR) AS insider,
-                CAST(NULL AS VARCHAR) AS row_key
-            WHERE FALSE
-            """
-        )
-
-    def _create_empty_dividends_events_view(self, db):
-        db.execute(
-            """
-            CREATE OR REPLACE VIEW dividends_events_series_all AS
-            SELECT
-                CAST(NULL AS BIGINT) AS endpoint_event_id,
-                CAST(NULL AS VARCHAR) AS endpoint,
-                CAST(NULL AS VARCHAR) AS conid,
-                CAST(NULL AS VARCHAR) AS observed_at,
-                CAST(NULL AS VARCHAR) AS effective_at,
-                CAST(NULL AS VARCHAR) AS payload_hash,
-                CAST(NULL AS VARCHAR) AS source_file,
-                CAST(NULL AS VARCHAR) AS inserted_at,
-                CAST(NULL AS VARCHAR) AS trade_date,
-                CAST(NULL AS VARCHAR) AS event_date,
-                CAST(NULL AS DOUBLE) AS amount,
-                CAST(NULL AS VARCHAR) AS currency,
-                CAST(NULL AS VARCHAR) AS description,
-                CAST(NULL AS VARCHAR) AS event_type,
-                CAST(NULL AS VARCHAR) AS declaration_date,
-                CAST(NULL AS VARCHAR) AS record_date,
-                CAST(NULL AS VARCHAR) AS payment_date,
-                CAST(NULL AS VARCHAR) AS row_key
-            WHERE FALSE
-            """
-        )
-
-    def refresh_duckdb_views(self):
-        endpoint_slugs = []
         with self._get_conn() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT endpoint_slug FROM endpoint_events ORDER BY endpoint_slug")
-            endpoint_slugs = [row[0] for row in cur.fetchall()]
-
-        endpoint_files = list(self.parquet_dir.glob("endpoint=*/year=*/month=*/*.parquet"))
-        factor_feature_files = list(self.factor_features_parquet_dir.glob("endpoint=*/conid=*/*.parquet"))
-        price_chart_files = list(self.price_chart_parquet_dir.glob("conid=*/*.parquet"))
-        sentiment_search_files = list(self.sentiment_search_parquet_dir.glob("conid=*/*.parquet"))
-        ownership_trade_files = list(self.ownership_trade_log_parquet_dir.glob("conid=*/*.parquet"))
-        dividends_events_files = list(self.dividends_events_parquet_dir.glob("conid=*/*.parquet"))
-
-        db = duckdb.connect(str(self.duckdb_path))
-        try:
-            # Retire legacy analytics views from previous schema versions.
-            legacy_views = db.execute(
+            cur.execute(
                 """
-                SELECT table_name
-                FROM information_schema.views
-                WHERE table_schema = 'main'
-                  AND (
-                      table_name = 'analytics_rows_all'
-                      OR table_name = 'analytics_catalog'
-                      OR table_name LIKE 'analytics_%'
-                  )
-                """
-            ).fetchall()
-            for (view_name,) in legacy_views:
-                safe_name = str(view_name).replace('"', "")
-                db.execute(f'DROP VIEW IF EXISTS "{safe_name}"')
+                INSERT INTO ingest_runs (
+                    run_started_at,
+                    run_finished_at,
+                    total_targeted_conids,
+                    processed_conids,
+                    saved_snapshots,
+                    inserted_events,
+                    overwritten_events,
+                    unchanged_events,
+                    series_raw_rows_written,
+                    series_latest_rows_upserted,
+                    auth_retries,
+                    aborted
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    run_stats.get("run_started_at") or datetime.now(timezone.utc).isoformat(),
+                    run_stats.get("run_finished_at") or datetime.now(timezone.utc).isoformat(),
+                    int(run_stats.get("total_targeted_conids", 0)),
+                    int(run_stats.get("processed_conids", 0)),
+                    int(run_stats.get("saved_snapshots", 0)),
+                    int(run_stats.get("inserted_events", 0)),
+                    int(run_stats.get("overwritten_events", 0)),
+                    int(run_stats.get("unchanged_events", 0)),
+                    int(run_stats.get("series_raw_rows_written", 0)),
+                    int(run_stats.get("series_latest_rows_upserted", 0)),
+                    int(run_stats.get("auth_retries", 0)),
+                    1 if bool(run_stats.get("aborted", False)) else 0,
+                ],
+            )
+            run_id = int(cur.lastrowid)
 
-            if endpoint_files:
-                all_pattern = f"{self.parquet_dir.as_posix()}/endpoint=*/year=*/month=*/*.parquet"
-                db.execute(
-                    f"""
-                    CREATE OR REPLACE VIEW endpoint_events_all AS
-                    SELECT * FROM read_parquet('{all_pattern}', union_by_name=true)
+            for row in endpoint_summary:
+                endpoint = str(row.get("endpoint") or "")
+                if not endpoint:
+                    continue
+                call_count = int(row.get("call_count", 0))
+                useful_payload_count = int(row.get("useful_payload_count", 0))
+                useful_payload_rate = float(row.get("useful_payload_rate", 0.0)) if call_count else 0.0
+                status_codes = row.get("status_codes") or {}
+
+                status_2xx = 0
+                status_4xx = 0
+                status_5xx = 0
+                status_other = 0
+                for code, count in status_codes.items():
+                    try:
+                        code_int = int(code)
+                    except Exception:
+                        status_other += int(count)
+                        continue
+
+                    if 200 <= code_int < 300:
+                        status_2xx += int(count)
+                    elif 400 <= code_int < 500:
+                        status_4xx += int(count)
+                    elif 500 <= code_int < 600:
+                        status_5xx += int(count)
+                    else:
+                        status_other += int(count)
+
+                conn.execute(
                     """
+                    INSERT INTO ingest_run_endpoint_rollups (
+                        run_id,
+                        endpoint,
+                        call_count,
+                        useful_payload_count,
+                        useful_payload_rate,
+                        status_2xx,
+                        status_4xx,
+                        status_5xx,
+                        status_other
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        run_id,
+                        endpoint,
+                        call_count,
+                        useful_payload_count,
+                        useful_payload_rate,
+                        status_2xx,
+                        status_4xx,
+                        status_5xx,
+                        status_other,
+                    ],
                 )
-            else:
-                self._create_empty_endpoint_events_view(db)
 
-            for slug in endpoint_slugs:
-                view_name = f"endpoint_{slug}"
-                pattern_path = self.parquet_dir / f"endpoint={slug}"
-                if list(pattern_path.glob("year=*/month=*/*.parquet")):
-                    pattern = f"{self.parquet_dir.as_posix()}/endpoint={slug}/year=*/month=*/*.parquet"
-                    db.execute(
-                        f"""
-                        CREATE OR REPLACE VIEW {view_name} AS
-                        SELECT * FROM read_parquet('{pattern}', union_by_name=true)
-                        """
-                    )
-                else:
-                    db.execute(
-                        f"""
-                        CREATE OR REPLACE VIEW {view_name} AS
-                        SELECT * FROM endpoint_events_all WHERE FALSE
-                        """
-                    )
+            conn.commit()
+            return run_id
 
-            db.execute(
-                """
-                CREATE OR REPLACE VIEW endpoint_catalog AS
-                SELECT endpoint, endpoint_slug, COUNT(*) AS n_events,
-                       MIN(effective_at) AS min_effective_at,
-                       MAX(effective_at) AS max_effective_at
-                FROM endpoint_events_all
-                GROUP BY endpoint, endpoint_slug
-                ORDER BY endpoint
-                """
-            )
+    def refresh_duckdb_views(self):
+        with self._get_conn() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("VACUUM")
 
-            if factor_feature_files:
-                factor_pattern = f"{self.factor_features_parquet_dir.as_posix()}/endpoint=*/conid=*/*.parquet"
-                db.execute(
-                    f"""
-                    CREATE OR REPLACE VIEW factor_features_all AS
-                    SELECT * REPLACE (CAST(conid AS VARCHAR) AS conid)
-                    FROM read_parquet('{factor_pattern}', union_by_name=true)
-                    """
-                )
-            else:
-                self._create_empty_factor_features_view(db)
+            tables = [
+                "products",
+                "raw_payload_blobs",
+                "landing_snapshots",
+                "profile_fees_snapshots",
+                "holdings_snapshots",
+                "ratios_snapshots",
+                "lipper_ratings_snapshots",
+                "dividends_snapshots",
+                "morningstar_snapshots",
+                "performance_snapshots",
+                "ownership_snapshots",
+                "esg_snapshots",
+                "price_chart_snapshots",
+                "sentiment_search_snapshots",
+                "price_chart_series_raw",
+                "price_chart_series_latest",
+                "sentiment_search_series_raw",
+                "sentiment_search_series_latest",
+                "ownership_trade_log_series_raw",
+                "ownership_trade_log_series_latest",
+                "dividends_events_series_raw",
+                "dividends_events_series_latest",
+            ]
 
-            db.execute(
-                """
-                CREATE OR REPLACE VIEW factor_features_catalog AS
-                SELECT
-                    feature_group,
-                    feature_name,
-                    COUNT(*) AS n_rows,
-                    COUNT(DISTINCT conid) AS n_conids,
-                    MIN(effective_at) AS min_effective_at,
-                    MAX(effective_at) AS max_effective_at
-                FROM factor_features_all
-                GROUP BY feature_group, feature_name
-                ORDER BY feature_group, feature_name
-                """
-            )
+            counts = {}
+            for table in tables:
+                row = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
+                counts[table] = int(row["n"])
 
-            db.execute(
-                """
-                CREATE OR REPLACE VIEW factor_features_latest AS
-                SELECT * EXCLUDE (rn)
-                FROM (
-                    SELECT
-                        *,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY conid, feature_name
-                            ORDER BY TRY_CAST(effective_at AS DATE) DESC,
-                                     TRY_CAST(observed_at AS TIMESTAMP) DESC,
-                                     endpoint_event_id DESC
-                        ) AS rn
-                    FROM factor_features_all
-                )
-                WHERE rn = 1
-                """
-            )
+            return {
+                "sqlite_path": str(self.sqlite_path),
+                "vacuumed": True,
+                "table_counts": counts,
+            }
 
-            if price_chart_files:
-                price_pattern = f"{self.price_chart_parquet_dir.as_posix()}/conid=*/*.parquet"
-                db.execute(
-                    f"""
-                    CREATE OR REPLACE VIEW price_chart_series_all AS
-                    SELECT * REPLACE (CAST(conid AS VARCHAR) AS conid)
-                    FROM read_parquet('{price_pattern}', union_by_name=true)
-                    """
-                )
-            else:
-                self._create_empty_price_series_view(db)
-
-            db.execute(
-                """
-                CREATE OR REPLACE VIEW price_chart_series_catalog AS
-                SELECT conid, COUNT(*) AS n_rows,
-                       MIN(trade_date) AS min_trade_date,
-                       MAX(trade_date) AS max_trade_date
-                FROM price_chart_series_all
-                GROUP BY conid
-                ORDER BY conid
-                """
-            )
-
-            if sentiment_search_files:
-                sentiment_pattern = f"{self.sentiment_search_parquet_dir.as_posix()}/conid=*/*.parquet"
-                db.execute(
-                    f"""
-                    CREATE OR REPLACE VIEW sentiment_search_series_all AS
-                    SELECT * REPLACE (CAST(conid AS VARCHAR) AS conid)
-                    FROM read_parquet('{sentiment_pattern}', union_by_name=true)
-                    """
-                )
-            else:
-                self._create_empty_sentiment_series_view(db)
-
-            db.execute(
-                """
-                CREATE OR REPLACE VIEW sentiment_search_series_catalog AS
-                WITH endpoint_conids AS (
-                    SELECT conid, COUNT(*) AS n_events, MAX(observed_at) AS last_observed_at
-                    FROM endpoint_events_all
-                    WHERE endpoint = 'sentiment_search'
-                    GROUP BY conid
-                ),
-                series_rollup AS (
-                    SELECT conid, COUNT(*) AS n_rows,
-                           MIN(trade_date) AS min_trade_date,
-                           MAX(trade_date) AS max_trade_date
-                    FROM sentiment_search_series_all
-                    GROUP BY conid
-                )
-                SELECT
-                    e.conid,
-                    COALESCE(s.n_rows, 0) AS n_rows,
-                    s.min_trade_date,
-                    s.max_trade_date,
-                    e.n_events,
-                    e.last_observed_at
-                FROM endpoint_conids e
-                LEFT JOIN series_rollup s
-                    ON s.conid = e.conid
-                ORDER BY e.conid
-                """
-            )
-
-            if ownership_trade_files:
-                ownership_pattern = f"{self.ownership_trade_log_parquet_dir.as_posix()}/conid=*/*.parquet"
-                db.execute(
-                    f"""
-                    CREATE OR REPLACE VIEW ownership_trade_log_series_all AS
-                    SELECT * REPLACE (CAST(conid AS VARCHAR) AS conid)
-                    FROM read_parquet('{ownership_pattern}', union_by_name=true)
-                    """
-                )
-            else:
-                self._create_empty_ownership_trade_log_view(db)
-
-            db.execute(
-                """
-                CREATE OR REPLACE VIEW ownership_trade_log_series_catalog AS
-                WITH endpoint_conids AS (
-                    SELECT conid, COUNT(*) AS n_events, MAX(observed_at) AS last_observed_at
-                    FROM endpoint_events_all
-                    WHERE endpoint = 'ownership'
-                    GROUP BY conid
-                ),
-                series_rollup AS (
-                    SELECT conid, COUNT(*) AS n_rows,
-                           MIN(trade_date) AS min_trade_date,
-                           MAX(trade_date) AS max_trade_date
-                    FROM ownership_trade_log_series_all
-                    GROUP BY conid
-                )
-                SELECT
-                    e.conid,
-                    COALESCE(s.n_rows, 0) AS n_rows,
-                    s.min_trade_date,
-                    s.max_trade_date,
-                    e.n_events,
-                    e.last_observed_at
-                FROM endpoint_conids e
-                LEFT JOIN series_rollup s
-                    ON s.conid = e.conid
-                ORDER BY e.conid
-                """
-            )
-
-            if dividends_events_files:
-                dividends_pattern = f"{self.dividends_events_parquet_dir.as_posix()}/conid=*/*.parquet"
-                db.execute(
-                    f"""
-                    CREATE OR REPLACE VIEW dividends_events_series_all AS
-                    SELECT * REPLACE (CAST(conid AS VARCHAR) AS conid)
-                    FROM read_parquet('{dividends_pattern}', union_by_name=true)
-                    """
-                )
-            else:
-                self._create_empty_dividends_events_view(db)
-
-            db.execute(
-                """
-                CREATE OR REPLACE VIEW dividends_events_series_catalog AS
-                WITH endpoint_conids AS (
-                    SELECT conid, COUNT(*) AS n_events, MAX(observed_at) AS last_observed_at
-                    FROM endpoint_events_all
-                    WHERE endpoint = 'dividends'
-                    GROUP BY conid
-                ),
-                series_rollup AS (
-                    SELECT conid, COUNT(*) AS n_rows,
-                           MIN(trade_date) AS min_trade_date,
-                           MAX(trade_date) AS max_trade_date
-                    FROM dividends_events_series_all
-                    GROUP BY conid
-                )
-                SELECT
-                    e.conid,
-                    COALESCE(s.n_rows, 0) AS n_rows,
-                    s.min_trade_date,
-                    s.max_trade_date,
-                    e.n_events,
-                    e.last_observed_at
-                FROM endpoint_conids e
-                LEFT JOIN series_rollup s
-                    ON s.conid = e.conid
-                ORDER BY e.conid
-                """
-            )
-
-            db.execute(
-                """
-                CREATE OR REPLACE VIEW price_features_daily AS
-                WITH dedup AS (
-                    SELECT
-                        conid,
-                        TRY_CAST(trade_date AS DATE) AS trade_date,
-                        COALESCE(close, price) AS close_price,
-                        endpoint_event_id,
-                        observed_at,
-                        effective_at
-                    FROM price_chart_series_all
-                    WHERE trade_date IS NOT NULL
-                      AND COALESCE(close, price) IS NOT NULL
-                ),
-                latest_daily AS (
-                    SELECT * EXCLUDE (rn)
-                    FROM (
-                        SELECT
-                            *,
-                            ROW_NUMBER() OVER (
-                                PARTITION BY conid, trade_date
-                                ORDER BY TRY_CAST(effective_at AS DATE) DESC,
-                                         TRY_CAST(observed_at AS TIMESTAMP) DESC,
-                                         endpoint_event_id DESC
-                            ) AS rn
-                        FROM dedup
-                        WHERE trade_date IS NOT NULL
-                    )
-                    WHERE rn = 1
-                ),
-                returns AS (
-                    SELECT
-                        conid,
-                        trade_date,
-                        close_price,
-                        close_price / NULLIF(LAG(close_price) OVER (PARTITION BY conid ORDER BY trade_date), 0) - 1 AS pct_change
-                    FROM latest_daily
-                )
-                SELECT
-                    conid,
-                    trade_date,
-                    close_price,
-                    pct_change,
-                    AVG(pct_change) OVER (
-                        PARTITION BY conid ORDER BY trade_date
-                        ROWS BETWEEN 62 PRECEDING AND CURRENT ROW
-                    ) AS momentum_3mo,
-                    AVG(pct_change) OVER (
-                        PARTITION BY conid ORDER BY trade_date
-                        ROWS BETWEEN 125 PRECEDING AND CURRENT ROW
-                    ) AS momentum_6mo,
-                    AVG(pct_change) OVER (
-                        PARTITION BY conid ORDER BY trade_date
-                        ROWS BETWEEN 251 PRECEDING AND CURRENT ROW
-                    ) AS momentum_1y,
-                    EXP(SUM(CASE WHEN pct_change IS NULL OR pct_change <= -0.999999 THEN NULL ELSE LN(1 + pct_change) END) OVER (
-                        PARTITION BY conid ORDER BY trade_date
-                        ROWS BETWEEN 62 PRECEDING AND CURRENT ROW
-                    )) - 1 AS rs_3mo,
-                    EXP(SUM(CASE WHEN pct_change IS NULL OR pct_change <= -0.999999 THEN NULL ELSE LN(1 + pct_change) END) OVER (
-                        PARTITION BY conid ORDER BY trade_date
-                        ROWS BETWEEN 125 PRECEDING AND CURRENT ROW
-                    )) - 1 AS rs_6mo,
-                    EXP(SUM(CASE WHEN pct_change IS NULL OR pct_change <= -0.999999 THEN NULL ELSE LN(1 + pct_change) END) OVER (
-                        PARTITION BY conid ORDER BY trade_date
-                        ROWS BETWEEN 251 PRECEDING AND CURRENT ROW
-                    )) - 1 AS rs_1y
-                FROM returns
-                """
-            )
-
-            db.execute(
-                """
-                CREATE OR REPLACE VIEW price_features_long_daily AS
-                SELECT
-                    conid,
-                    trade_date,
-                    'price_pct_change' AS feature_name,
-                    'price' AS feature_group,
-                    pct_change AS feature_value,
-                    'price_features_daily:pct_change' AS feature_source,
-                    CAST(NULL AS BIGINT) AS endpoint_event_id,
-                    'price_chart' AS endpoint,
-                    CAST(trade_date AS VARCHAR) AS effective_at,
-                    CAST(NULL AS VARCHAR) AS observed_at,
-                    CAST(NULL AS VARCHAR) AS payload_hash
-                FROM price_features_daily
-                WHERE pct_change IS NOT NULL
-
-                UNION ALL
-
-                SELECT
-                    conid,
-                    trade_date,
-                    'momentum_3mo' AS feature_name,
-                    'price' AS feature_group,
-                    momentum_3mo AS feature_value,
-                    'price_features_daily:momentum_3mo' AS feature_source,
-                    CAST(NULL AS BIGINT) AS endpoint_event_id,
-                    'price_chart' AS endpoint,
-                    CAST(trade_date AS VARCHAR) AS effective_at,
-                    CAST(NULL AS VARCHAR) AS observed_at,
-                    CAST(NULL AS VARCHAR) AS payload_hash
-                FROM price_features_daily
-                WHERE momentum_3mo IS NOT NULL
-
-                UNION ALL
-
-                SELECT
-                    conid,
-                    trade_date,
-                    'momentum_6mo' AS feature_name,
-                    'price' AS feature_group,
-                    momentum_6mo AS feature_value,
-                    'price_features_daily:momentum_6mo' AS feature_source,
-                    CAST(NULL AS BIGINT) AS endpoint_event_id,
-                    'price_chart' AS endpoint,
-                    CAST(trade_date AS VARCHAR) AS effective_at,
-                    CAST(NULL AS VARCHAR) AS observed_at,
-                    CAST(NULL AS VARCHAR) AS payload_hash
-                FROM price_features_daily
-                WHERE momentum_6mo IS NOT NULL
-
-                UNION ALL
-
-                SELECT
-                    conid,
-                    trade_date,
-                    'momentum_1y' AS feature_name,
-                    'price' AS feature_group,
-                    momentum_1y AS feature_value,
-                    'price_features_daily:momentum_1y' AS feature_source,
-                    CAST(NULL AS BIGINT) AS endpoint_event_id,
-                    'price_chart' AS endpoint,
-                    CAST(trade_date AS VARCHAR) AS effective_at,
-                    CAST(NULL AS VARCHAR) AS observed_at,
-                    CAST(NULL AS VARCHAR) AS payload_hash
-                FROM price_features_daily
-                WHERE momentum_1y IS NOT NULL
-
-                UNION ALL
-
-                SELECT
-                    conid,
-                    trade_date,
-                    'rs_3mo' AS feature_name,
-                    'price' AS feature_group,
-                    rs_3mo AS feature_value,
-                    'price_features_daily:rs_3mo' AS feature_source,
-                    CAST(NULL AS BIGINT) AS endpoint_event_id,
-                    'price_chart' AS endpoint,
-                    CAST(trade_date AS VARCHAR) AS effective_at,
-                    CAST(NULL AS VARCHAR) AS observed_at,
-                    CAST(NULL AS VARCHAR) AS payload_hash
-                FROM price_features_daily
-                WHERE rs_3mo IS NOT NULL
-
-                UNION ALL
-
-                SELECT
-                    conid,
-                    trade_date,
-                    'rs_6mo' AS feature_name,
-                    'price' AS feature_group,
-                    rs_6mo AS feature_value,
-                    'price_features_daily:rs_6mo' AS feature_source,
-                    CAST(NULL AS BIGINT) AS endpoint_event_id,
-                    'price_chart' AS endpoint,
-                    CAST(trade_date AS VARCHAR) AS effective_at,
-                    CAST(NULL AS VARCHAR) AS observed_at,
-                    CAST(NULL AS VARCHAR) AS payload_hash
-                FROM price_features_daily
-                WHERE rs_6mo IS NOT NULL
-
-                UNION ALL
-
-                SELECT
-                    conid,
-                    trade_date,
-                    'rs_1y' AS feature_name,
-                    'price' AS feature_group,
-                    rs_1y AS feature_value,
-                    'price_features_daily:rs_1y' AS feature_source,
-                    CAST(NULL AS BIGINT) AS endpoint_event_id,
-                    'price_chart' AS endpoint,
-                    CAST(trade_date AS VARCHAR) AS effective_at,
-                    CAST(NULL AS VARCHAR) AS observed_at,
-                    CAST(NULL AS VARCHAR) AS payload_hash
-                FROM price_features_daily
-                WHERE rs_1y IS NOT NULL
-                """
-            )
-
-            db.execute(
-                """
-                CREATE OR REPLACE VIEW factor_panel_long_daily AS
-                WITH calendar AS (
-                    SELECT DISTINCT conid, trade_date
-                    FROM price_features_daily
-                    WHERE trade_date IS NOT NULL
-                ),
-                ranked_asof AS (
-                    SELECT
-                        c.conid,
-                        c.trade_date,
-                        f.feature_name,
-                        f.feature_group,
-                        f.feature_value,
-                        f.feature_source,
-                        f.endpoint_event_id,
-                        f.endpoint,
-                        f.effective_at,
-                        f.observed_at,
-                        f.payload_hash,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY c.conid, c.trade_date, f.feature_name
-                            ORDER BY TRY_CAST(f.effective_at AS DATE) DESC,
-                                     TRY_CAST(f.observed_at AS TIMESTAMP) DESC,
-                                     f.endpoint_event_id DESC
-                        ) AS rn
-                    FROM calendar c
-                    JOIN factor_features_all f
-                      ON f.conid = c.conid
-                     AND TRY_CAST(f.effective_at AS DATE) <= c.trade_date
-                )
-                SELECT
-                    conid,
-                    trade_date,
-                    feature_name,
-                    feature_group,
-                    feature_value,
-                    feature_source,
-                    endpoint,
-                    endpoint_event_id,
-                    effective_at,
-                    observed_at,
-                    payload_hash
-                FROM ranked_asof
-                WHERE rn = 1
-
-                UNION ALL
-
-                SELECT
-                    conid,
-                    trade_date,
-                    feature_name,
-                    feature_group,
-                    feature_value,
-                    feature_source,
-                    endpoint,
-                    endpoint_event_id,
-                    effective_at,
-                    observed_at,
-                    payload_hash
-                FROM price_features_long_daily
-                """
-            )
-        finally:
-            db.close()
-
-        return {
-            "endpoint_views": len(endpoint_slugs),
-            "factor_views": 4,
-            "price_chart_views": 2,
-            "sentiment_search_views": 2,
-            "ownership_trade_log_views": 2,
-            "dividends_events_views": 2,
-            "duckdb_path": str(self.duckdb_path),
-        }
 
 def refresh_views():
     store = FundamentalsStore()
     result = store.refresh_duckdb_views()
-    for k, v in result.items():
-        print(f"{k}: {v}")
+    for key, value in result.items():
+        print(f"{key}: {value}")
     return result
 
 

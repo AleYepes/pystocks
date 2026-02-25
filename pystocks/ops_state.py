@@ -1,56 +1,54 @@
 from datetime import datetime, timezone
+import sqlite3
 
-import duckdb
 import pandas as pd
 
-from .config import FUNDAMENTALS_DUCKDB_PATH
+from .config import SQLITE_DB_PATH
 
 
-DB_PATH = FUNDAMENTALS_DUCKDB_PATH
+DB_PATH = SQLITE_DB_PATH
 _INITIALIZED_DB_PATH = None
 
 
+def _connect():
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA temp_store=MEMORY;")
+    return conn
+
+
 def get_connection():
-    return duckdb.connect(str(DB_PATH))
+    return _connect()
 
 
 def init_db():
-    """Initializes operational tables inside DuckDB."""
     global _INITIALIZED_DB_PATH
     db_path = str(DB_PATH)
     if _INITIALIZED_DB_PATH == db_path:
         return
 
-    con = get_connection()
+    conn = _connect()
     try:
-        con.execute(
+        conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS instruments (
-                conid VARCHAR PRIMARY KEY,
-                symbol VARCHAR,
-                exchange VARCHAR,
-                isin VARCHAR,
-                currency VARCHAR,
-                name VARCHAR,
-                last_scraped_fundamentals DATE,
-                last_status_fundamentals VARCHAR,
-                updated_at TIMESTAMP
+            CREATE TABLE IF NOT EXISTS products (
+                conid TEXT PRIMARY KEY,
+                symbol TEXT,
+                exchange TEXT,
+                isin TEXT,
+                currency TEXT,
+                name TEXT,
+                last_scraped_fundamentals TEXT,
+                last_status_fundamentals TEXT,
+                updated_at TEXT
             )
             """
         )
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS scraper_logs (
-                logged_at TIMESTAMP,
-                conid VARCHAR,
-                endpoint VARCHAR,
-                status_code INTEGER,
-                error_message VARCHAR
-            )
-            """
-        )
+        conn.commit()
     finally:
-        con.close()
+        conn.close()
     _INITIALIZED_DB_PATH = db_path
 
 
@@ -63,10 +61,6 @@ def _series_or_default(df, column, default=""):
 
 
 def upsert_instruments_from_products(products_df):
-    """
-    Upserts product metadata into instruments from the IB products scrape payload.
-    Returns number of unique conids processed.
-    """
     if products_df is None or products_df.empty:
         return 0
 
@@ -97,22 +91,11 @@ def upsert_instruments_from_products(products_df):
 
     now_iso = datetime.now(timezone.utc).isoformat()
     init_db()
-    con = get_connection()
+    conn = _connect()
     try:
-        con.register("products_df", normalized)
-        con.execute(
+        conn.executemany(
             """
-            MERGE INTO instruments AS t
-            USING products_df AS s
-              ON t.conid = s.conid
-            WHEN MATCHED THEN UPDATE SET
-                symbol = s.symbol,
-                exchange = s.exchange,
-                isin = s.isin,
-                currency = s.currency,
-                name = s.name,
-                updated_at = ?
-            WHEN NOT MATCHED THEN INSERT (
+            INSERT INTO products (
                 conid,
                 symbol,
                 exchange,
@@ -120,31 +103,42 @@ def upsert_instruments_from_products(products_df):
                 currency,
                 name,
                 updated_at
-            ) VALUES (
-                s.conid,
-                s.symbol,
-                s.exchange,
-                s.isin,
-                s.currency,
-                s.name,
-                ?
-            )
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(conid) DO UPDATE SET
+                symbol=excluded.symbol,
+                exchange=excluded.exchange,
+                isin=excluded.isin,
+                currency=excluded.currency,
+                name=excluded.name,
+                updated_at=excluded.updated_at
             """,
-            [now_iso, now_iso],
+            [
+                (
+                    str(row.conid),
+                    str(row.symbol),
+                    str(row.exchange),
+                    str(row.isin),
+                    str(row.currency),
+                    str(row.name),
+                    now_iso,
+                )
+                for row in normalized.itertuples(index=False)
+            ],
         )
+        conn.commit()
         return int(len(normalized))
     finally:
-        con.close()
+        conn.close()
 
 
 def get_all_instrument_conids():
     init_db()
-    con = get_connection()
+    conn = _connect()
     try:
-        rows = con.execute(
+        rows = conn.execute(
             """
             SELECT conid
-            FROM instruments
+            FROM products
             WHERE conid IS NOT NULL
               AND TRIM(conid) <> ''
             ORDER BY conid
@@ -152,19 +146,19 @@ def get_all_instrument_conids():
         ).fetchall()
         return [str(r[0]) for r in rows]
     finally:
-        con.close()
+        conn.close()
 
 
 def get_scraped_conids(today=None):
     init_db()
     if today is None:
         today = datetime.now().strftime("%Y-%m-%d")
-    con = get_connection()
+    conn = _connect()
     try:
-        rows = con.execute(
+        rows = conn.execute(
             """
             SELECT conid
-            FROM instruments
+            FROM products
             WHERE last_scraped_fundamentals = ?
               AND conid IS NOT NULL
             """,
@@ -172,58 +166,53 @@ def get_scraped_conids(today=None):
         ).fetchall()
         return [str(r[0]) for r in rows]
     finally:
-        con.close()
+        conn.close()
 
 
 def log_scrape(conid, endpoint, status_code, error_message=None):
-    con = get_connection()
-    try:
-        con.execute(
-            """
-            INSERT INTO scraper_logs (logged_at, conid, endpoint, status_code, error_message)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            [
-                datetime.now(timezone.utc).isoformat(),
-                str(conid),
-                str(endpoint),
-                int(status_code),
-                error_message,
-            ],
-        )
-    finally:
-        con.close()
+    return None
 
 
 def update_instrument_fundamentals_status(conid, status, mark_scraped=False):
-    """
-    Updates per-conid fundamentals scrape status.
-    `mark_scraped=True` marks the conid as successfully scraped today.
-    """
-    con = get_connection()
+    init_db()
+    conid = str(conid)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn = _connect()
     try:
+        conn.execute(
+            """
+            INSERT INTO products (conid, updated_at)
+            VALUES (?, ?)
+            ON CONFLICT(conid) DO NOTHING
+            """,
+            [conid, now_iso],
+        )
         if mark_scraped:
-            con.execute(
+            conn.execute(
                 """
-                UPDATE instruments
-                SET last_scraped_fundamentals = ?, last_status_fundamentals = ?, updated_at = ?
+                UPDATE products
+                SET last_scraped_fundamentals = ?,
+                    last_status_fundamentals = ?,
+                    updated_at = ?
                 WHERE conid = ?
                 """,
                 [
                     datetime.now().strftime("%Y-%m-%d"),
                     str(status),
-                    datetime.now(timezone.utc).isoformat(),
-                    str(conid),
+                    now_iso,
+                    conid,
                 ],
             )
         else:
-            con.execute(
+            conn.execute(
                 """
-                UPDATE instruments
-                SET last_status_fundamentals = ?, updated_at = ?
+                UPDATE products
+                SET last_status_fundamentals = ?,
+                    updated_at = ?
                 WHERE conid = ?
                 """,
-                [str(status), datetime.now(timezone.utc).isoformat(), str(conid)],
+                [str(status), now_iso, conid],
             )
+        conn.commit()
     finally:
-        con.close()
+        conn.close()

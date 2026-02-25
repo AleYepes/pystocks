@@ -23,6 +23,7 @@ RESEARCH_DIR = DATA_DIR / "research"
 
 # File Paths
 SESSION_STATE_PATH = DATA_DIR / "auth_state.json"
+SQLITE_DB_PATH = DATA_DIR / "pystocks.sqlite"
 FUNDAMENTALS_EVENTS_DB_PATH = FUNDAMENTALS_DIR / "events.db"
 FUNDAMENTALS_DUCKDB_PATH = FUNDAMENTALS_DIR / "fundamentals.duckdb"
 
