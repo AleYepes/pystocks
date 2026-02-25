@@ -24,34 +24,17 @@ class PyStocksCLI:
                 verbose=verbose,
                 force=force,
                 conids_file=conids_file,
-                refresh_duckdb_at_end=refresh_views_at_end,
+                refresh_views_at_end=refresh_views_at_end,
             )
         )
 
     def refresh_fundamentals_views(self):
         """Run SQLite maintenance and return table counts."""
         store = FundamentalsStore()
-        result = store.refresh_duckdb_views()
+        result = store.refresh_sqlite_views()
         print(result)
         return result
 
-    def preprocess_prices(self):
-        """Deferred until SQLite postprocessing refactor lands."""
-        result = {
-            "status": "deferred",
-            "message": "price_preprocess is deferred in SQLite-first refactor.",
-        }
-        print(result)
-        return result
-
-    def run_analysis(self):
-        """Deferred until SQLite postprocessing refactor lands."""
-        result = {
-            "status": "deferred",
-            "message": "analysis is deferred in SQLite-first refactor.",
-        }
-        print(result)
-        return result
 
     def run_pipeline(self, limit=100, verbose=False, force=False, conids_file=None):
         """Run ingestion pipeline: products -> fundamentals."""

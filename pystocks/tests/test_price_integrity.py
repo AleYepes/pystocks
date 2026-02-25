@@ -44,7 +44,7 @@ class PriceIntegrityTests(unittest.TestCase):
             },
         }
 
-        self.store.persist_combined_snapshot(snapshot, refresh_duckdb=False)
+        self.store.persist_combined_snapshot(snapshot, refresh_views=False)
 
         con = self._conn()
         try:
@@ -85,7 +85,7 @@ class PriceIntegrityTests(unittest.TestCase):
             },
         }
 
-        self.store.persist_combined_snapshot(snapshot, refresh_duckdb=False)
+        self.store.persist_combined_snapshot(snapshot, refresh_views=False)
 
         con = self._conn()
         try:

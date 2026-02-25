@@ -2898,7 +2898,7 @@ class FundamentalsStore:
             "series_latest_rows_upserted": int(series_latest_rows_upserted),
         }
 
-    def persist_combined_snapshot(self, snapshot, source_file=None, refresh_duckdb=False):
+    def persist_combined_snapshot(self, snapshot, source_file=None, refresh_views=False):
         if not isinstance(snapshot, dict):
             return {
                 "inserted_events": 0,
@@ -2977,8 +2977,8 @@ class FundamentalsStore:
 
             conn.commit()
 
-        if refresh_duckdb:
-            self.refresh_duckdb_views()
+        if refresh_views:
+            self.refresh_sqlite_views()
 
         return {
             "inserted_events": inserted_events,
@@ -3089,7 +3089,7 @@ class FundamentalsStore:
             conn.commit()
             return run_id
 
-    def refresh_duckdb_views(self):
+    def refresh_sqlite_views(self):
         with self._get_conn() as conn:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             conn.execute("VACUUM")
@@ -3133,7 +3133,7 @@ class FundamentalsStore:
 
 def refresh_views():
     store = FundamentalsStore()
-    result = store.refresh_duckdb_views()
+    result = store.refresh_sqlite_views()
     for key, value in result.items():
         print(f"{key}: {value}")
     return result
