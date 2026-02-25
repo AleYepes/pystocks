@@ -11,7 +11,6 @@ from .config import RESEARCH_DIR
 from .session import IBKRSession
 from .ops_state import (
     init_db,
-    log_scrape,
     get_all_instrument_conids,
     get_scraped_conids,
     update_instrument_fundamentals_status,
@@ -109,7 +108,7 @@ class FundamentalScraper:
         family = self._endpoint_family(endpoint)
         self.telemetry["endpoint_useful_payloads"][family] += 1
         
-    async def fetch_endpoint(self, client, endpoint, conid):
+    async def fetch_endpoint(self, client, endpoint):
         """Fetches data from a specific endpoint and logs it."""
         # Check if endpoint starts with fundamentals/ or mstar/ or sma/
         # If not, default to fundamentals/
@@ -117,7 +116,6 @@ class FundamentalScraper:
         url = f"/tws.proxy/{path_prefix}{endpoint}"
         try:
             response = await client.get(url)
-            log_scrape(conid, endpoint, response.status_code)
             self._record_endpoint_status(endpoint, response.status_code)
             
             if response.status_code == 200:
@@ -129,7 +127,6 @@ class FundamentalScraper:
                 return None
         except Exception as e:
             logger.error(f"Error fetching {url}: {e}")
-            log_scrape(conid, endpoint, 0, str(e))
             self._record_endpoint_status(endpoint, 0)
             return None
 
@@ -223,7 +220,7 @@ class FundamentalScraper:
         """
         for period in self.PERIODS_DESC:
             endpoint = f"mf_performance/{conid}?risk_period={period}&statistic_period={period}"
-            data = await self.fetch_endpoint(client, endpoint, conid)
+            data = await self.fetch_endpoint(client, endpoint)
             if data == "__AUTH_ERROR__":
                 return "__AUTH_ERROR__", None
             if self._has_payload_data(data, "perf"):
@@ -234,7 +231,7 @@ class FundamentalScraper:
         """Scrapes fundamental data for a given conid."""
         widgets = "objective,mstar,lipper_ratings,mf_key_ratios,risk_and_statistics,holdings,performance_and_peers,keyProfile,ownership,dividends,tear_sheet,news,fund_mstar,mf_esg,social_sentiment,securities_lending,sv,short_sale,ukuser"
 
-        landing_data = await self.fetch_endpoint(client, f"landing/{conid}?widgets={widgets}", conid)
+        landing_data = await self.fetch_endpoint(client, f"landing/{conid}?widgets={widgets}")
         if landing_data == "__AUTH_ERROR__":
             return "__AUTH_ERROR__"
         if not isinstance(landing_data, dict):
@@ -254,16 +251,16 @@ class FundamentalScraper:
             return combined_data
 
         fixed_task_items = [
-            ("profile_and_fees", self.fetch_endpoint(client, f"mf_profile_and_fees/{conid}?sustainability=UK&lang=en", conid)),
-            ("holdings", self.fetch_endpoint(client, f"mf_holdings/{conid}", conid)),
-            ("ratios", self.fetch_endpoint(client, f"mf_ratios_fundamentals/{conid}", conid)),
-            ("lipper_ratings", self.fetch_endpoint(client, f"mf_lip_ratings/{conid}", conid)),
-            ("dividends", self.fetch_endpoint(client, f"dividends/{conid}", conid)),
-            ("morningstar", self.fetch_endpoint(client, f"mstar/fund/detail?conid={conid}", conid)),
-            ("price_chart", self.fetch_endpoint(client, self._build_price_chart_endpoint(conid), conid)),
-            ("sentiment_search", self.fetch_endpoint(client, self._build_sma_search_endpoint(conid), conid)),
-            ("ownership", self.fetch_endpoint(client, f"ownership/{conid}", conid)),
-            ("esg", self.fetch_endpoint(client, self._build_esg_endpoint(conid), conid)),
+            ("profile_and_fees", self.fetch_endpoint(client, f"mf_profile_and_fees/{conid}?sustainability=UK&lang=en")),
+            ("holdings", self.fetch_endpoint(client, f"mf_holdings/{conid}")),
+            ("ratios", self.fetch_endpoint(client, f"mf_ratios_fundamentals/{conid}")),
+            ("lipper_ratings", self.fetch_endpoint(client, f"mf_lip_ratings/{conid}")),
+            ("dividends", self.fetch_endpoint(client, f"dividends/{conid}")),
+            ("morningstar", self.fetch_endpoint(client, f"mstar/fund/detail?conid={conid}")),
+            ("price_chart", self.fetch_endpoint(client, self._build_price_chart_endpoint(conid))),
+            ("sentiment_search", self.fetch_endpoint(client, self._build_sma_search_endpoint(conid))),
+            ("ownership", self.fetch_endpoint(client, f"ownership/{conid}")),
+            ("esg", self.fetch_endpoint(client, self._build_esg_endpoint(conid))),
         ]
         period_task_items = [
             ("performance", self.fetch_performance_with_period_fallback(client, conid)),

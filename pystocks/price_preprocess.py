@@ -83,7 +83,3 @@ def _compute_eligibility(df, config: PricePreprocessConfig):
         )
 
     return pd.DataFrame(rows).sort_values("conid").reset_index(drop=True)
-
-
-if __name__ == "__main__":
-    print(run())

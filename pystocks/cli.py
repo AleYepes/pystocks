@@ -35,6 +35,14 @@ class PyStocksCLI:
         print(result)
         return result
 
+    def preprocess_prices(self):
+        """Deferred until price ingestion/materialization is finalized."""
+        return {"status": "deferred", "step": "price_preprocess"}
+
+    def run_analysis(self):
+        """Deferred until factor analysis pipeline is finalized."""
+        return {"status": "deferred", "step": "analysis"}
+
 
     def run_pipeline(self, limit=100, verbose=False, force=False, conids_file=None):
         """Run ingestion pipeline: products -> fundamentals."""

@@ -76,7 +76,7 @@ class FundamentalScraperLandingFilterTests(unittest.IsolatedAsyncioTestCase):
             }
         }
 
-        async def fake_fetch_endpoint(_client, endpoint, _conid):
+        async def fake_fetch_endpoint(_client, endpoint):
             if endpoint.startswith("landing/"):
                 return landing_payload
             return {}

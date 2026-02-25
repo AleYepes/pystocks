@@ -48,8 +48,7 @@ class DatabaseStatusTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_endpoint_log_does_not_mark_conid_as_scraped(self):
-        database.log_scrape("123", "holdings/123", 200)
+    def test_instrument_starts_unscraped(self):
         last_scraped, status = self._instrument_state()
         self.assertIsNone(last_scraped)
         self.assertIsNone(status)

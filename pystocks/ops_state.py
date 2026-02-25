@@ -169,10 +169,6 @@ def get_scraped_conids(today=None):
         conn.close()
 
 
-def log_scrape(conid, endpoint, status_code, error_message=None):
-    return None
-
-
 def update_instrument_fundamentals_status(conid, status, mark_scraped=False):
     init_db()
     conid = str(conid)
