@@ -2094,13 +2094,16 @@ class FundamentalsStore:
             for item in values:
                 if not isinstance(item, dict):
                     continue
+                holder_type = item.get("type")
+                if isinstance(holder_type, dict):
+                    holder_type = holder_type.get("type") or holder_type.get("display_type")
                 holder_rows.append(
                     {
                         "conid": str(conid),
                         "effective_at": str(effective_at),
                         "holder_group": holder_group,
                         "holder_name": item.get("name"),
-                        "holder_type": item.get("type"),
+                        "holder_type": holder_type,
                         "display_value": item.get("display_value"),
                         "display_shares": item.get("display_shares"),
                         "display_pct": item.get("display_pct"),

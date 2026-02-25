@@ -13,6 +13,7 @@ class PyStocksCLI:
         limit=None,
         verbose=False,
         force=False,
+        conids_file=None,
         refresh_views_at_end=True,
     ):
         """Scrape fundamental data for ETFs using the web portal proxy."""
@@ -22,6 +23,7 @@ class PyStocksCLI:
                 limit=limit,
                 verbose=verbose,
                 force=force,
+                conids_file=conids_file,
                 refresh_duckdb_at_end=refresh_views_at_end,
             )
         )
@@ -51,7 +53,7 @@ class PyStocksCLI:
         print(result)
         return result
 
-    def run_pipeline(self, limit=100, verbose=False, force=False):
+    def run_pipeline(self, limit=100, verbose=False, force=False, conids_file=None):
         """Run ingestion pipeline: products -> fundamentals."""
         print("Starting full pipeline...")
         result = {}
@@ -64,6 +66,7 @@ class PyStocksCLI:
             limit=limit,
             verbose=verbose,
             force=force,
+            conids_file=conids_file,
             refresh_views_at_end=True,
         )
 

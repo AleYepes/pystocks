@@ -267,6 +267,48 @@ class FundamentalsStoreSqliteTests(unittest.TestCase):
         finally:
             con.close()
 
+    def test_ownership_holders_accept_dict_type(self):
+        snapshot = {
+            "conid": "owner_123",
+            "scraped_at": "2026-02-23T12:00:00+00:00",
+            "ownership": {
+                "owners_types": [],
+                "institutional_owners": [
+                    {
+                        "name": "Test Inst",
+                        "type": {"type": "Institutional", "display_type": "Institutional Owner"},
+                        "display_value": "1.0M",
+                        "display_shares": "10K",
+                        "display_pct": "1.2%",
+                    }
+                ],
+                "insider_owners": [],
+                "trade_log": [],
+                "institutional_total": {"display_value": "1.0M", "display_shares": "10K", "display_pct": "1.2%"},
+                "insider_total": {"display_value": "0", "display_shares": "0", "display_pct": "0%"},
+                "ownership_history": {},
+            },
+        }
+
+        result = self.store.persist_combined_snapshot(snapshot)
+        self.assertEqual(result["status"], "ok")
+
+        con = self._conn()
+        try:
+            row = con.execute(
+                """
+                SELECT holder_type
+                FROM ownership_holders
+                WHERE conid = ?
+                LIMIT 1
+                """,
+                ["owner_123"],
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], "Institutional")
+        finally:
+            con.close()
+
 
 if __name__ == "__main__":
     unittest.main()

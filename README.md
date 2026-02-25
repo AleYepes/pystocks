@@ -18,6 +18,11 @@ python -m pystocks.cli refresh_fundamentals_views
 python -m pystocks.cli run_pipeline --limit 100
 ```
 
+```
+python3 -m pystocks.cli scrape_fundamentals --conids_file=docs/sample_conids.txt
+python3 -m pystocks.cli run_pipeline --conids_file=docs/sample_conids.txt --limit=100
+```
+
 `run_pipeline` now executes only:
 1. `scrape_products`
 2. `scrape_fundamentals`

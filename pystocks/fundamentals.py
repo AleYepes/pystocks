@@ -20,6 +20,22 @@ from .fundamentals_store import FundamentalsStore
 
 logger = logging.getLogger(__name__)
 
+
+def _load_conids_from_file(path):
+    if path is None:
+        return None
+
+    lines = Path(path).read_text().splitlines()
+    out = []
+    seen = set()
+    for line in lines:
+        value = str(line).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
 class FundamentalScraper:
     """Scrapes fundamental data from IBKR Portal API."""
     PERIODS_DESC = ["10Y", "5Y", "3Y", "1Y", "6M"]
@@ -364,6 +380,7 @@ class FundamentalScraper:
 async def main(
     limit=None,
     start_index=0,
+    conids_file=None,
     force=False,
     max_auth_retries=2,
     reauth_headless=False,
@@ -383,15 +400,24 @@ async def main(
     scraped_today = [] if force else get_scraped_conids()
     logger.info(f"Skipping {len(scraped_today)} instruments already scraped today.")
 
-    all_conids = get_all_instrument_conids()
-    if not all_conids:
-        logger.error(
-            "No products found in SQLite products table. "
-            "Run `python -m pystocks.cli scrape_products` first."
-        )
-        return
-
-    conids_to_scrape = [c for c in all_conids if c not in scraped_today]
+    selected_conids = _load_conids_from_file(conids_file)
+    if selected_conids is not None:
+        if not selected_conids:
+            logger.error(f"No conids found in file: {conids_file}")
+            return
+        conids_to_scrape = selected_conids
+        if not force:
+            conids_to_scrape = [c for c in conids_to_scrape if c not in scraped_today]
+        logger.info(f"Using explicit conid target list: {len(conids_to_scrape)} items.")
+    else:
+        all_conids = get_all_instrument_conids()
+        if not all_conids:
+            logger.error(
+                "No products found in SQLite products table. "
+                "Run `python -m pystocks.cli scrape_products` first."
+            )
+            return
+        conids_to_scrape = [c for c in all_conids if c not in scraped_today]
     
     if limit:
         conids_to_scrape = conids_to_scrape[start_index:start_index + limit]
@@ -455,7 +481,7 @@ async def main(
                 logger.warning(str(e))
                 needs_reauth = True
             except Exception as e:
-                logger.error(f"Unexpected error: {e}")
+                logger.exception(f"Unexpected error: {e}")
                 aborted = True
                 break
 

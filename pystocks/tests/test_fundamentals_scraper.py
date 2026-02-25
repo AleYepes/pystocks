@@ -1,8 +1,10 @@
 import unittest
 from collections import Counter, defaultdict
+from pathlib import Path
+import tempfile
 from unittest.mock import AsyncMock
 
-from pystocks.fundamentals import FundamentalScraper
+from pystocks.fundamentals import FundamentalScraper, _load_conids_from_file
 
 
 class FundamentalScraperLandingFilterTests(unittest.IsolatedAsyncioTestCase):
@@ -91,3 +93,11 @@ class FundamentalScraperLandingFilterTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConidFileParsingTests(unittest.TestCase):
+    def test_load_conids_from_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "conids.txt"
+            path.write_text("123\n456\n123\n\n0051\n")
+            self.assertEqual(_load_conids_from_file(path), ["123", "456", "0051"])
