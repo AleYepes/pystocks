@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 
 ENDPOINT_KEYS = [
-    "landing",
     "profile_and_fees",
     "holdings",
     "ratios",
@@ -79,6 +78,59 @@ _MONTH_MAP = {
 
 _DATE_IN_TEXT_RE = re.compile(r"(?<!\d)(\d{4}[/-]\d{2}[/-]\d{2})(?!\d)")
 _NUM_WITH_SUFFIX_RE = re.compile(r"^[\s\$€£¥]*([+-]?\d+(?:\.\d+)?)\s*([KMBT])?\b", re.IGNORECASE)
+_TOTAL_NET_ASSETS_DATE_BLOCK_RE = re.compile(r"\(\s*\d{4}[/-]\d{2}[/-]\d{2}\s*[\)\.]?\s*")
+
+_PROFILE_FEES_FIELD_COLUMN_TYPES = {
+    "Asset Type": ("asset_type", "text"),
+    "Classification": ("classification", "text"),
+    "Distribution Details": ("distribution_details", "text"),
+    "Domicile": ("domicile", "text"),
+    "Fiscal Date": ("fiscal_date", "text"),
+    "Fund Category": ("fund_category", "text"),
+    "Fund Management Company": ("fund_management_company", "text"),
+    "Fund Manager Benchmark": ("fund_manager_benchmark", "text"),
+    "Fund Market Cap Focus": ("fund_market_cap_focus", "text"),
+    "Geographical Focus": ("geographical_focus", "text"),
+    "Inception Date": ("inception_date", "date"),
+    "Launch Opening Price": ("inception_date", "date"),
+    "Management Approach": ("management_approach", "text"),
+    "Management Expenses": ("management_expenses", "percent"),
+    "Manager Tenure": ("manager_tenure", "date"),
+    "Maturity Date": ("maturity_date", "date"),
+    "Objective Type": ("objective_type", "text"),
+    "Portfolio Manager": ("portfolio_manager", "text"),
+    "Redemption Charge Actual": ("redemption_charge_actual", "percent"),
+    "Redemption Charge Max": ("redemption_charge_max", "percent"),
+    "Scheme": ("scheme", "text"),
+    "Total Expense Ratio": ("total_expense_ratio", "percent"),
+    "Total Net Assets (Month End)": ("total_net_assets_value", "text"),
+}
+
+_PROFILE_FEES_PIVOT_COLUMNS = [
+    "asset_type",
+    "classification",
+    "distribution_details",
+    "domicile",
+    "fiscal_date",
+    "fund_category",
+    "fund_management_company",
+    "fund_manager_benchmark",
+    "fund_market_cap_focus",
+    "geographical_focus",
+    "inception_date",
+    "management_approach",
+    "management_expenses",
+    "manager_tenure",
+    "maturity_date",
+    "objective_type",
+    "portfolio_manager",
+    "redemption_charge_actual",
+    "redemption_charge_max",
+    "scheme",
+    "total_expense_ratio",
+    "total_net_assets_value",
+    "total_net_assets_date",
+]
 
 
 def _sanitize_segment(value):
@@ -145,6 +197,27 @@ def _parse_ymd_text(value):
     if not m:
         return None
     return _parse_date_candidate(m.group(1))
+
+
+def _split_total_net_assets_value(value):
+    if value is None:
+        return None, None
+
+    raw_text = str(value).strip()
+    if not raw_text:
+        return None, None
+
+    parsed_date = _parse_ymd_text(raw_text)
+    date_iso = parsed_date.isoformat() if parsed_date is not None else None
+
+    clean_text = _TOTAL_NET_ASSETS_DATE_BLOCK_RE.sub("", raw_text)
+    clean_text = _DATE_IN_TEXT_RE.sub("", clean_text)
+    clean_text = clean_text.replace("()", "").strip()
+    clean_text = re.sub(r"\s+", " ", clean_text).strip(" .,\t\r\n()")
+    if not clean_text:
+        clean_text = None
+
+    return clean_text, date_iso
 
 
 def _to_iso_date(value):
@@ -562,70 +635,6 @@ class FundamentalsStore:
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
-                CREATE TABLE IF NOT EXISTS landing_snapshots (
-                    conid TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    observed_at TEXT NOT NULL,
-                    payload_hash TEXT NOT NULL,
-                    source_file TEXT,
-                    inserted_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    total_net_assets_text TEXT,
-                    has_mstar INTEGER,
-                    has_ownership INTEGER,
-                    has_mf_esg INTEGER,
-                    PRIMARY KEY (conid, effective_at),
-                    FOREIGN KEY (conid) REFERENCES products(conid),
-                    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
-                );
-
-                CREATE TABLE IF NOT EXISTS landing_key_profile_fields (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conid TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    field_key TEXT NOT NULL,
-                    field_value_text TEXT,
-                    field_value_num REAL,
-                    FOREIGN KEY (conid) REFERENCES products(conid)
-                );
-
-                CREATE TABLE IF NOT EXISTS landing_section_metrics (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conid TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    section_name TEXT NOT NULL,
-                    metric_key TEXT NOT NULL,
-                    metric_name TEXT,
-                    value_num REAL,
-                    vs_num REAL,
-                    rank_num REAL,
-                    value_text TEXT,
-                    value_fmt TEXT,
-                    annualized INTEGER,
-                    FOREIGN KEY (conid) REFERENCES products(conid)
-                );
-
-                CREATE TABLE IF NOT EXISTS landing_top10_holdings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conid TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    rank_num INTEGER,
-                    name TEXT,
-                    ticker TEXT,
-                    assets_pct_text TEXT,
-                    assets_pct_num REAL,
-                    FOREIGN KEY (conid) REFERENCES products(conid)
-                );
-
-                CREATE TABLE IF NOT EXISTS landing_top10_holding_conids (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conid TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    parent_rank INTEGER,
-                    holding_conid TEXT,
-                    FOREIGN KEY (conid) REFERENCES products(conid)
-                );
-
                 CREATE TABLE IF NOT EXISTS profile_fees_snapshots (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
@@ -643,14 +652,32 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS profile_fees_fund_profile_fields (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    field_name TEXT,
-                    name_tag TEXT,
-                    value_text TEXT,
-                    value_num REAL,
-                    value_date TEXT,
+                    asset_type TEXT,
+                    classification TEXT,
+                    distribution_details TEXT,
+                    domicile TEXT,
+                    fiscal_date TEXT,
+                    fund_category TEXT,
+                    fund_management_company TEXT,
+                    fund_manager_benchmark TEXT,
+                    fund_market_cap_focus TEXT,
+                    geographical_focus TEXT,
+                    inception_date TEXT,
+                    management_approach TEXT,
+                    management_expenses REAL,
+                    manager_tenure TEXT,
+                    maturity_date TEXT,
+                    objective_type TEXT,
+                    portfolio_manager TEXT,
+                    redemption_charge_actual REAL,
+                    redemption_charge_max REAL,
+                    scheme TEXT,
+                    total_expense_ratio REAL,
+                    total_net_assets_value TEXT,
+                    total_net_assets_date TEXT,
+                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -1210,7 +1237,6 @@ class FundamentalsStore:
 
             conn.executescript(
                 """
-                CREATE INDEX IF NOT EXISTS idx_landing_snapshots_hash ON landing_snapshots(payload_hash);
                 CREATE INDEX IF NOT EXISTS idx_profile_fees_snapshots_hash ON profile_fees_snapshots(payload_hash);
                 CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_hash ON holdings_snapshots(payload_hash);
                 CREATE INDEX IF NOT EXISTS idx_ratios_snapshots_hash ON ratios_snapshots(payload_hash);
@@ -1358,7 +1384,6 @@ class FundamentalsStore:
 
     def _main_table_for_endpoint(self, endpoint):
         return {
-            "landing": "landing_snapshots",
             "profile_and_fees": "profile_fees_snapshots",
             "holdings": "holdings_snapshots",
             "ratios": "ratios_snapshots",
@@ -1418,6 +1443,21 @@ class FundamentalsStore:
                 [str(conid), str(effective_at)],
             )
 
+    def _upsert_row(self, conn, table, row, primary_keys):
+        cols = list(row.keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        update_cols = [c for c in cols if c not in set(primary_keys)]
+        update_sql = ", ".join([f"{c}=excluded.{c}" for c in update_cols])
+        conn.execute(
+            f"""
+            INSERT INTO {table} ({", ".join(cols)})
+            VALUES ({placeholders})
+            ON CONFLICT({", ".join(primary_keys)}) DO UPDATE SET
+                {update_sql}
+            """,
+            [row.get(c) for c in cols],
+        )
+
     def _insert_rows(self, conn, table, rows):
         if not rows:
             return
@@ -1457,123 +1497,6 @@ class FundamentalsStore:
 
         self._insert_rows(conn, "endpoint_scalar_extras", rows)
 
-    def _upsert_landing(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
-        key_profile = payload.get("key_profile") or payload.get("keyProfile") or {}
-        key_profile_data = key_profile.get("data") if isinstance(key_profile, dict) else {}
-        total_net_assets_text = None
-        if isinstance(key_profile_data, dict):
-            total_net_assets_text = key_profile_data.get("total_net_assets")
-
-        self._upsert_snapshot_row(
-            conn,
-            "landing_snapshots",
-            conid,
-            effective_at,
-            observed_at,
-            payload_hash,
-            source_file,
-            now_iso,
-            {
-                "total_net_assets_text": total_net_assets_text,
-                "has_mstar": 1 if bool(payload.get("mstar")) else 0,
-                "has_ownership": 1 if bool(payload.get("ownership")) else 0,
-                "has_mf_esg": 1 if bool(payload.get("mf_esg")) else 0,
-            },
-        )
-
-        self._delete_children(
-            conn,
-            [
-                "landing_key_profile_fields",
-                "landing_section_metrics",
-                "landing_top10_holdings",
-                "landing_top10_holding_conids",
-            ],
-            conid,
-            effective_at,
-        )
-
-        key_profile_rows = []
-        if isinstance(key_profile_data, dict):
-            for key, value in key_profile_data.items():
-                if isinstance(value, (dict, list)):
-                    continue
-                key_profile_rows.append(
-                    {
-                        "conid": str(conid),
-                        "effective_at": str(effective_at),
-                        "field_key": _sanitize_segment(key),
-                        "field_value_text": str(value) if value is not None else None,
-                        "field_value_num": _parse_number(value),
-                    }
-                )
-        self._insert_rows(conn, "landing_key_profile_fields", key_profile_rows)
-
-        section_rows = []
-        for section_name, section_payload in payload.items():
-            if not isinstance(section_payload, dict):
-                continue
-            data = section_payload.get("data")
-            if not isinstance(data, list):
-                continue
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                metric_key = _sanitize_segment(item.get("name_tag") or item.get("id") or item.get("name"))
-                section_rows.append(
-                    {
-                        "conid": str(conid),
-                        "effective_at": str(effective_at),
-                        "section_name": _sanitize_segment(section_name),
-                        "metric_key": metric_key,
-                        "metric_name": item.get("name"),
-                        "value_num": _parse_number(item.get("value")),
-                        "vs_num": _parse_number(item.get("vs_value") if "vs_value" in item else item.get("vs")),
-                        "rank_num": _parse_number(item.get("rank")),
-                        "value_text": str(item.get("value")) if item.get("value") is not None else None,
-                        "value_fmt": item.get("value_fmt"),
-                        "annualized": _to_int_bool(item.get("annualized")),
-                    }
-                )
-        self._insert_rows(conn, "landing_section_metrics", section_rows)
-
-        top10_rows = []
-        top10_conids_rows = []
-        top10 = (
-            payload.get("top10", {})
-            .get("data", {})
-            .get("top10", [])
-            if isinstance(payload.get("top10"), dict)
-            else []
-        )
-        if isinstance(top10, list):
-            for idx, item in enumerate(top10):
-                if not isinstance(item, dict):
-                    continue
-                rank_num = int(_parse_number(item.get("rank")) or (idx + 1))
-                top10_rows.append(
-                    {
-                        "conid": str(conid),
-                        "effective_at": str(effective_at),
-                        "rank_num": rank_num,
-                        "name": item.get("name"),
-                        "ticker": item.get("ticker"),
-                        "assets_pct_text": item.get("assets_pct"),
-                        "assets_pct_num": _to_fraction_weight(item.get("assets_pct")),
-                    }
-                )
-                for c in item.get("conids", []) if isinstance(item.get("conids"), list) else []:
-                    top10_conids_rows.append(
-                        {
-                            "conid": str(conid),
-                            "effective_at": str(effective_at),
-                            "parent_rank": rank_num,
-                            "holding_conid": str(c),
-                        }
-                    )
-        self._insert_rows(conn, "landing_top10_holdings", top10_rows)
-        self._insert_rows(conn, "landing_top10_holding_conids", top10_conids_rows)
-
     def _upsert_profile_fees(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
         self._upsert_snapshot_row(
             conn,
@@ -1603,23 +1526,39 @@ class FundamentalsStore:
             effective_at,
         )
 
-        profile_rows = []
+        profile_row = {
+            "conid": str(conid),
+            "effective_at": str(effective_at),
+            **{col: None for col in _PROFILE_FEES_PIVOT_COLUMNS},
+        }
         for item in payload.get("fund_and_profile", []) if isinstance(payload.get("fund_and_profile"), list) else []:
             if not isinstance(item, dict):
                 continue
+            field_name = item.get("name")
+            if field_name not in _PROFILE_FEES_FIELD_COLUMN_TYPES:
+                continue
             value = item.get("value")
-            profile_rows.append(
-                {
-                    "conid": str(conid),
-                    "effective_at": str(effective_at),
-                    "field_name": item.get("name"),
-                    "name_tag": item.get("name_tag"),
-                    "value_text": str(value) if value is not None else None,
-                    "value_num": _parse_number(value, percent_as_fraction=True),
-                    "value_date": _to_iso_date(value),
-                }
-            )
-        self._insert_rows(conn, "profile_fees_fund_profile_fields", profile_rows)
+            column_name, value_type = _PROFILE_FEES_FIELD_COLUMN_TYPES[field_name]
+
+            if field_name == "Total Net Assets (Month End)":
+                net_assets_value, net_assets_date = _split_total_net_assets_value(value)
+                profile_row["total_net_assets_value"] = net_assets_value
+                profile_row["total_net_assets_date"] = net_assets_date
+                continue
+
+            if value_type == "text":
+                profile_row[column_name] = str(value) if value is not None else None
+            elif value_type == "percent":
+                profile_row[column_name] = _parse_number(value, percent_as_fraction=True)
+            elif value_type == "date":
+                parsed_date = _to_iso_date(value)
+                if field_name == "Launch Opening Price":
+                    if profile_row.get("inception_date") is None and parsed_date is not None:
+                        profile_row["inception_date"] = parsed_date
+                else:
+                    profile_row[column_name] = parsed_date
+
+        self._upsert_row(conn, "profile_fees_fund_profile_fields", profile_row, ["conid", "effective_at"])
 
         report_rows = []
         for report in payload.get("reports", []) if isinstance(payload.get("reports"), list) else []:
@@ -2848,7 +2787,6 @@ class FundamentalsStore:
             }
 
         handlers = {
-            "landing": self._upsert_landing,
             "profile_and_fees": self._upsert_profile_fees,
             "holdings": self._upsert_holdings,
             "ratios": self._upsert_ratios,
@@ -3097,7 +3035,6 @@ class FundamentalsStore:
             tables = [
                 "products",
                 "raw_payload_blobs",
-                "landing_snapshots",
                 "profile_fees_snapshots",
                 "holdings_snapshots",
                 "ratios_snapshots",

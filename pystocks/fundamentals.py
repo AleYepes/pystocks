@@ -236,19 +236,16 @@ class FundamentalScraper:
             return "__AUTH_ERROR__"
         if not isinstance(landing_data, dict):
             return None
-        if self._has_any_value(landing_data):
-            self._record_useful_payload("landing")
 
         combined_data = {
             "conid": conid,
             "scraped_at": datetime.now().isoformat(),
-            "landing": landing_data,
         }
 
         skip, reason = self._should_skip_fanout(landing_data)
         if skip:
             logger.info("Skipping fanout for conid=%s: %s", conid, reason)
-            return combined_data
+            return None
 
         fixed_task_items = [
             ("profile_and_fees", self.fetch_endpoint(client, f"mf_profile_and_fees/{conid}?sustainability=UK&lang=en")),
