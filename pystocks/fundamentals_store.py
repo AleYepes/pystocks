@@ -758,7 +758,6 @@ class FundamentalsStore:
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     as_of_date TEXT,
-                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid),
                     FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
                 );
@@ -770,12 +769,10 @@ class FundamentalsStore:
                     cash REAL,
                     fixed_income REAL,
                     other REAL,
-                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
                 CREATE TABLE IF NOT EXISTS holdings_industry (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     industry TEXT,
@@ -785,7 +782,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS holdings_currency (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     currency TEXT,
@@ -796,7 +792,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS holdings_investor_country (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     country TEXT,
@@ -807,7 +802,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS holdings_debt_type (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     debt_type TEXT,
@@ -843,7 +837,6 @@ class FundamentalsStore:
                     quality_not_rated_industry_avg REAL,
                     quality_not_available REAL,
                     quality_not_available_industry_avg REAL,
-                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -866,12 +859,10 @@ class FundamentalsStore:
                     maturity_greater_than_30_years_industry_avg REAL,
                     maturity_other REAL,
                     maturity_other_industry_avg REAL,
-                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
                 CREATE TABLE IF NOT EXISTS holdings_top10 (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     name TEXT,
@@ -882,7 +873,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS holdings_geographic_weights (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     region TEXT,
@@ -1743,19 +1733,27 @@ class FundamentalsStore:
 
     def _upsert_holdings(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
         as_of_date = _extract_as_of_date(payload)
-        self._upsert_snapshot_row(
+        conn.execute(
+            """
+            DELETE FROM holdings_snapshots
+            WHERE conid = ? AND effective_at = ?
+            """,
+            [str(conid), str(effective_at)],
+        )
+        self._insert_rows(
             conn,
             "holdings_snapshots",
-            conid,
-            effective_at,
-            observed_at,
-            payload_hash,
-            source_file,
-            now_iso,
-            {
-                "as_of_date": as_of_date.isoformat() if as_of_date is not None else None,
-            },
-            include_source_file=False,
+            [
+                {
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "observed_at": str(observed_at),
+                    "payload_hash": str(payload_hash),
+                    "inserted_at": now_iso,
+                    "updated_at": now_iso,
+                    "as_of_date": as_of_date.isoformat() if as_of_date is not None else None,
+                }
+            ],
         )
 
         self._delete_children(
@@ -1812,7 +1810,7 @@ class FundamentalsStore:
             else:
                 asset_type_row[column] += parsed_weight
         if any(asset_type_row[col] is not None for col in _HOLDINGS_ASSET_TYPE_COLUMNS):
-            self._upsert_row(conn, "holdings_asset_type", asset_type_row, ["conid", "effective_at"])
+            self._insert_rows(conn, "holdings_asset_type", [asset_type_row])
 
         section_table_specs = [
             ("industry", "holdings_industry", "industry", None),
@@ -1875,7 +1873,7 @@ class FundamentalsStore:
             debtor_quality_row[column] = _to_fraction_weight(weight_value)
             debtor_quality_row[f"{column}_industry_avg"] = _to_fraction_percent(item.get("vs"))
         if any(debtor_quality_row[col] is not None for col in _HOLDINGS_DEBTOR_QUALITY_COLUMNS):
-            self._upsert_row(conn, "holdings_debtor_quality", debtor_quality_row, ["conid", "effective_at"])
+            self._insert_rows(conn, "holdings_debtor_quality", [debtor_quality_row])
 
         maturity_row = {
             "conid": str(conid),
@@ -1905,7 +1903,7 @@ class FundamentalsStore:
             maturity_row[column] = _to_fraction_weight(weight_value)
             maturity_row[f"{column}_industry_avg"] = _to_fraction_percent(item.get("vs"))
         if any(maturity_row[col] is not None for col in _HOLDINGS_MATURITY_COLUMNS):
-            self._upsert_row(conn, "holdings_maturity", maturity_row, ["conid", "effective_at"])
+            self._insert_rows(conn, "holdings_maturity", [maturity_row])
 
         geographic_rows = []
         geographic = payload.get("geographic") if isinstance(payload.get("geographic"), dict) else {}
@@ -2959,10 +2957,16 @@ class FundamentalsStore:
         payload_hash = blob_info["hash"]
 
         table = self._main_table_for_endpoint(endpoint)
-        existing = conn.execute(
-            f"SELECT payload_hash FROM {table} WHERE conid = ? AND effective_at = ?",
-            [str(conid), str(effective_at)],
-        ).fetchone()
+        if endpoint == "holdings":
+            existing = conn.execute(
+                f"SELECT payload_hash FROM {table} WHERE conid = ? AND effective_at = ? ORDER BY rowid DESC LIMIT 1",
+                [str(conid), str(effective_at)],
+            ).fetchone()
+        else:
+            existing = conn.execute(
+                f"SELECT payload_hash FROM {table} WHERE conid = ? AND effective_at = ?",
+                [str(conid), str(effective_at)],
+            ).fetchone()
 
         if existing is None:
             state = "inserted"

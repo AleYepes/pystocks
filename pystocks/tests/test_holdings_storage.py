@@ -18,6 +18,10 @@ def _table_columns(con, table):
     return [r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()]
 
 
+def _table_pk_columns(con, table):
+    return [r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall() if int(r[5]) > 0]
+
+
 def test_holdings_schema_uses_new_table_layout():
     tmp, db_path, store = _make_store()
     try:
@@ -59,6 +63,20 @@ def test_holdings_schema_uses_new_table_layout():
             assert "holdings_geographic_weights" in table_names
             assert "holdings_bucket_weights" not in table_names
             assert "holdings_top10_conids" not in table_names
+
+            for table in [
+                "holdings_snapshots",
+                "holdings_asset_type",
+                "holdings_industry",
+                "holdings_currency",
+                "holdings_investor_country",
+                "holdings_debt_type",
+                "holdings_debtor_quality",
+                "holdings_maturity",
+                "holdings_top10",
+                "holdings_geographic_weights",
+            ]:
+                assert _table_pk_columns(con, table) == []
         finally:
             con.close()
     finally:

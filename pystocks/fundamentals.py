@@ -162,7 +162,15 @@ class FundamentalScraper:
                 "geographic",
                 "top_10_weight",
             ],
-            "ratios": ["ratios", "zscore"],
+            "ratios": [
+                "as_of_date",
+                "asOfDate",
+                "ratios",
+                "financials",
+                "fixed_income",
+                "dividend",
+                "zscore",
+            ],
             "lipper": ["universes"],
             "esg": ["content"],
             # Keep both short and long dividends payload families.
