@@ -175,6 +175,16 @@ _PROFILE_AND_FEES_STYLEBOX_COORD_COLUMNS = {
     for yi, y in enumerate(_PROFILE_AND_FEES_STYLEBOX_Y)
 }
 
+_HOLDINGS_SPLIT_TABLES = [
+    "holdings_asset_type",
+    "holdings_industry",
+    "holdings_currency",
+    "holdings_investor_country",
+    "holdings_debt_type",
+    "holdings_debtor",
+    "holdings_maturity",
+]
+
 
 def _sanitize_segment(value):
     segment = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
@@ -778,28 +788,80 @@ class FundamentalsStore:
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    source_file TEXT,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     as_of_date TEXT,
-                    top_10_weight REAL,
                     PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid),
                     FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
                 );
 
-                CREATE TABLE IF NOT EXISTS holdings_bucket_weights (
+                CREATE TABLE IF NOT EXISTS holdings_asset_type (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    PRIMARY KEY (conid, effective_at),
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_industry (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    bucket_type TEXT NOT NULL,
-                    name TEXT,
+                    industry TEXT,
+                    value_num REAL,
+                    industry_avg REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_currency (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    currency TEXT,
                     code TEXT,
+                    value_num REAL,
+                    industry_avg REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_investor_country (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    country TEXT,
                     country_code TEXT,
-                    rank_num REAL,
-                    weight_num REAL,
-                    vs_num REAL,
-                    formatted_weight TEXT,
+                    value_num REAL,
+                    industry_avg REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_debt_type (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    debt_type TEXT,
+                    value_num REAL,
+                    industry_avg REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_debtor (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    debtor TEXT,
+                    value_num REAL,
+                    industry_avg REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_maturity (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    maturity TEXT,
+                    value_num REAL,
+                    industry_avg REAL,
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -807,20 +869,10 @@ class FundamentalsStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    rank_num INTEGER,
                     name TEXT,
                     ticker TEXT,
-                    assets_pct_text TEXT,
-                    assets_pct_num REAL,
-                    FOREIGN KEY (conid) REFERENCES products(conid)
-                );
-
-                CREATE TABLE IF NOT EXISTS holdings_top10_conids (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conid TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    parent_rank INTEGER,
-                    holding_conid TEXT,
+                    holding_weight_num REAL,
+                    holding_conids TEXT,
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -829,7 +881,7 @@ class FundamentalsStore:
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     region TEXT,
-                    weight_num REAL,
+                    value_num REAL,
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -1531,6 +1583,39 @@ class FundamentalsStore:
             [[row.get(c) for c in cols] for row in rows],
         )
 
+    def _table_column_names(self, conn, table):
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return {str(row["name"]) for row in rows}
+
+    def _ensure_table_columns(self, conn, table, dynamic_column_types):
+        if not dynamic_column_types:
+            return
+        existing = self._table_column_names(conn, table)
+        for column_name, sql_type in dynamic_column_types.items():
+            if column_name in existing:
+                continue
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_name} {sql_type}")
+            existing.add(column_name)
+
+    def _holdings_dynamic_column(self, raw_value, fixed_columns, assigned_columns):
+        text = str(raw_value).strip() if raw_value is not None else ""
+        column_name = _sanitize_segment(text)
+        if column_name[:1].isdigit() or column_name in fixed_columns:
+            column_name = f"field_{column_name}"
+
+        existing = assigned_columns.get(column_name)
+        if existing is None or existing == text:
+            assigned_columns[column_name] = text
+            return column_name
+
+        suffix = hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+        candidate = f"{column_name}_{suffix}"
+        while candidate in assigned_columns and assigned_columns[candidate] != text:
+            suffix = hashlib.sha1(f"{text}:{candidate}".encode("utf-8")).hexdigest()[:8]
+            candidate = f"{column_name}_{suffix}"
+        assigned_columns[candidate] = text
+        return candidate
+
     def _store_endpoint_scalar_extras(self, conn, endpoint, conid, effective_at, payload):
         conn.execute(
             """
@@ -1712,88 +1797,95 @@ class FundamentalsStore:
             now_iso,
             {
                 "as_of_date": _to_iso_date(payload.get("as_of_date")),
-                "top_10_weight": _to_fraction_weight(payload.get("top_10_weight")),
             },
+            include_source_file=False,
         )
 
         self._delete_children(
             conn,
-            [
-                "holdings_bucket_weights",
-                "holdings_top10",
-                "holdings_top10_conids",
-                "holdings_geographic_weights",
-            ],
+            ["holdings_top10", *_HOLDINGS_SPLIT_TABLES, "holdings_geographic_weights"],
             conid,
             effective_at,
         )
 
-        bucket_rows = []
-        sections = [
-            "allocation_self",
-            "industry",
-            "currency",
-            "investor_country",
-            "debt_type",
-            "debtor",
-            "maturity",
+        top10_rows = []
+        for item in payload.get("top_10", []) if isinstance(payload.get("top_10"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            conids = item.get("conids", [])
+            conid_list = conids if isinstance(conids, list) else []
+            conid_text = ",".join(str(value) for value in conid_list if value is not None)
+            top10_rows.append(
+                {
+                    "conid": str(conid),
+                    "effective_at": str(effective_at),
+                    "name": item.get("name"),
+                    "ticker": item.get("ticker"),
+                    "holding_weight_num": _to_fraction_weight(item.get("assets_pct")),
+                    "holding_conids": conid_text or None,
+                }
+            )
+        self._insert_rows(conn, "holdings_top10", top10_rows)
+
+        fixed_columns = {"conid", "effective_at"}
+        asset_type_row = {
+            "conid": str(conid),
+            "effective_at": str(effective_at),
+        }
+        asset_type_column_types = {}
+        assigned_asset_columns = {}
+        for item in payload.get("allocation_self", []) if isinstance(payload.get("allocation_self"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("type")
+            if name is None:
+                continue
+            column = self._holdings_dynamic_column(name, fixed_columns, assigned_asset_columns)
+            weight_value = item.get("weight")
+            if weight_value is None:
+                weight_value = item.get("assets_pct")
+            if weight_value is None:
+                weight_value = item.get("formatted_weight")
+            asset_type_row[column] = _to_fraction_weight(weight_value)
+            asset_type_column_types[column] = "REAL"
+        if asset_type_column_types:
+            self._ensure_table_columns(conn, "holdings_asset_type", asset_type_column_types)
+            self._upsert_row(conn, "holdings_asset_type", asset_type_row, ["conid", "effective_at"])
+
+        section_table_specs = [
+            ("industry", "holdings_industry", "industry", None),
+            ("currency", "holdings_currency", "currency", "code"),
+            ("investor_country", "holdings_investor_country", "country", "country_code"),
+            ("debt_type", "holdings_debt_type", "debt_type", None),
+            ("debtor", "holdings_debtor", "debtor", None),
+            ("maturity", "holdings_maturity", "maturity", None),
         ]
-        for section in sections:
+        for section, table_name, name_column, extra_column in section_table_specs:
+            rows = []
             values = payload.get(section, []) if isinstance(payload.get(section), list) else []
             for item in values:
                 if not isinstance(item, dict):
+                    continue
+                name = item.get("name") or item.get("type")
+                if name is None:
                     continue
                 weight_value = item.get("weight")
                 if weight_value is None:
                     weight_value = item.get("assets_pct")
                 if weight_value is None:
                     weight_value = item.get("formatted_weight")
-
-                bucket_rows.append(
-                    {
-                        "conid": str(conid),
-                        "effective_at": str(effective_at),
-                        "bucket_type": section,
-                        "name": item.get("name") or item.get("type"),
-                        "code": item.get("code"),
-                        "country_code": item.get("country_code"),
-                        "rank_num": _parse_number(item.get("rank")),
-                        "weight_num": _to_fraction_weight(weight_value),
-                        "vs_num": _parse_number(item.get("vs"), percent_as_fraction=True),
-                        "formatted_weight": item.get("formatted_weight"),
-                    }
-                )
-        self._insert_rows(conn, "holdings_bucket_weights", bucket_rows)
-
-        top10_rows = []
-        top10_conids_rows = []
-        for idx, item in enumerate(payload.get("top_10", []) if isinstance(payload.get("top_10"), list) else []):
-            if not isinstance(item, dict):
-                continue
-            rank_num = int(_parse_number(item.get("rank")) or (idx + 1))
-            top10_rows.append(
-                {
+                row = {
                     "conid": str(conid),
                     "effective_at": str(effective_at),
-                    "rank_num": rank_num,
-                    "name": item.get("name"),
-                    "ticker": item.get("ticker"),
-                    "assets_pct_text": item.get("assets_pct"),
-                    "assets_pct_num": _to_fraction_weight(item.get("assets_pct")),
+                    name_column: str(name),
+                    "value_num": _to_fraction_weight(weight_value),
+                    "industry_avg": _parse_number(item.get("vs"), percent_as_fraction=True),
                 }
-            )
-
-            for c in item.get("conids", []) if isinstance(item.get("conids"), list) else []:
-                top10_conids_rows.append(
-                    {
-                        "conid": str(conid),
-                        "effective_at": str(effective_at),
-                        "parent_rank": rank_num,
-                        "holding_conid": str(c),
-                    }
-                )
-        self._insert_rows(conn, "holdings_top10", top10_rows)
-        self._insert_rows(conn, "holdings_top10_conids", top10_conids_rows)
+                if extra_column:
+                    extra_value = item.get(extra_column)
+                    row[extra_column] = str(extra_value) if extra_value is not None else None
+                rows.append(row)
+            self._insert_rows(conn, table_name, rows)
 
         geographic_rows = []
         geographic = payload.get("geographic") if isinstance(payload.get("geographic"), dict) else {}
@@ -1805,7 +1897,7 @@ class FundamentalsStore:
                     "conid": str(conid),
                     "effective_at": str(effective_at),
                     "region": _sanitize_segment(key),
-                    "weight_num": _to_fraction_weight(value),
+                    "value_num": _to_fraction_weight(value),
                 }
             )
         self._insert_rows(conn, "holdings_geographic_weights", geographic_rows)
