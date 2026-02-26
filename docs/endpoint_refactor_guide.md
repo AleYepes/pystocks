@@ -54,17 +54,16 @@ Using `profile_and_fees` as the model, the refactor followed this structure:
 
 Dates appear in multiple places and may conflict. Do not remove date fields without explicit justification.
 
-Use the following policy per endpoint:
+Use the following canonical policy:
 
-1. Keep at least these date classes:
+1. Resolve one canonical `effective_at` per scraped snapshot batch:
+- Use only `ratios.as_of_date` (or `ratios.asOfDate`).
+- If ratios date is missing/invalid, skip persisting that snapshot batch.
+
+2. Keep at least these date classes:
 - `effective_at`: endpoint-level partition key currently used by storage logic.
 - `observed_at`: ingestion observation timestamp.
 - source business dates from payload (for example `as_of_date`, publish dates, embedded dates).
-
-2. Define precedence for resolving `effective_at` and document it.
-- Prefer endpoint-specific business date when available.
-- Else use documented fallback sequence.
-- Keep both the chosen canonical date and key alternate dates when useful.
 
 3. If multiple dates disagree, keep both when feasible.
 - Example: keep `effective_at` in snapshots and `report_as_of_date` in reports.
@@ -74,6 +73,14 @@ Use the following policy per endpoint:
 - Positive case for preferred source date.
 - Fallback case when preferred date is missing/invalid.
 - Edge case for malformed date formats.
+
+## Holdings Mapping Note
+
+- Keep high-cardinality sections in long tables (`industry`, `currency`, `investor_country`, instrument-level `debt_type`).
+- Keep low-cardinality fixed buckets in wide tables (`asset_type`, credit-quality buckets from `debtor`, `maturity`).
+- IBKR naming is confusing for fixed-income:
+  - Payload `debt_type` is instrument/issuer taxonomy and maps to long table `holdings_debt_type`.
+  - Payload `debtor` carries `% Quality/...` buckets and maps to wide table `holdings_debtor_quality`.
 
 ## Inclusion/Exclusion Rules Template
 

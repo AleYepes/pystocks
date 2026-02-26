@@ -4,7 +4,6 @@ import logging
 import math
 import re
 import sqlite3
-from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,17 +34,6 @@ ENDPOINT_KEYS = [
     "ownership",
     "esg",
 ]
-
-DISCRETE_ENDPOINTS = {
-    "profile_and_fees",
-    "holdings",
-    "ratios",
-    "lipper_ratings",
-    "dividends",
-    "morningstar",
-    "ownership",
-    "esg",
-}
 
 SERIES_ENDPOINTS = {"price_chart", "sentiment_search", "ownership", "dividends"}
 
@@ -181,7 +169,7 @@ _HOLDINGS_SPLIT_TABLES = [
     "holdings_currency",
     "holdings_investor_country",
     "holdings_debt_type",
-    "holdings_debtor",
+    "holdings_debtor_quality",
     "holdings_maturity",
 ]
 
@@ -193,7 +181,7 @@ _HOLDINGS_ASSET_TYPE_SOURCE_TO_COLUMN = {
 }
 _HOLDINGS_ASSET_TYPE_COLUMNS = tuple(_HOLDINGS_ASSET_TYPE_SOURCE_TO_COLUMN.values())
 
-_HOLDINGS_DEBT_TYPE_SOURCE_TO_COLUMN = {
+_HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN = {
     "quality_aaa": "quality_aaa",
     "quality_aa": "quality_aa",
     "quality_a": "quality_a",
@@ -207,7 +195,7 @@ _HOLDINGS_DEBT_TYPE_SOURCE_TO_COLUMN = {
     "quality_not_rated": "quality_not_rated",
     "quality_not_available": "quality_not_available",
 }
-_HOLDINGS_DEBT_TYPE_COLUMNS = tuple(_HOLDINGS_DEBT_TYPE_SOURCE_TO_COLUMN.values())
+_HOLDINGS_DEBTOR_QUALITY_COLUMNS = tuple(_HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN.values())
 
 _HOLDINGS_MATURITY_SOURCE_TO_COLUMN = {
     "maturity_less_than_1_year": "maturity_less_than_1_year",
@@ -448,87 +436,6 @@ def _extract_as_of_date(payload):
             parsed = _parse_date_candidate(payload.get(key))
             if parsed:
                 return parsed
-    return None
-
-
-def _collect_nested_as_of_dates(payload):
-    dates = []
-
-    def walk(node):
-        if isinstance(node, dict):
-            for key in ("as_of_date", "asOfDate"):
-                if key in node:
-                    parsed = _parse_date_candidate(node.get(key))
-                    if parsed is not None:
-                        dates.append(parsed)
-            for value in node.values():
-                walk(value)
-            return
-        if isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    walk(payload)
-    return dates
-
-
-def _extract_profile_embedded_dates(payload):
-    if not isinstance(payload, dict):
-        return []
-    out = []
-    for row in payload.get("fund_and_profile", []) or []:
-        if not isinstance(row, dict):
-            continue
-        parsed = _parse_ymd_text(row.get("value"))
-        if parsed is not None:
-            out.append(parsed)
-    return out
-
-
-def _extract_morningstar_publish_dates(payload):
-    out = []
-
-    def walk(node):
-        if isinstance(node, dict):
-            for key in ("publish_date", "publishDate"):
-                if key in node:
-                    parsed = _parse_date_candidate(node.get(key))
-                    if parsed is not None:
-                        out.append(parsed)
-            for value in node.values():
-                walk(value)
-            return
-        if isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    walk(payload)
-    return out
-
-
-def _extract_endpoint_effective_date(endpoint, payload):
-    if not isinstance(payload, (dict, list)):
-        return None
-
-    if endpoint == "morningstar" and isinstance(payload, dict):
-        publish_dates = _extract_morningstar_publish_dates(payload)
-        if publish_dates:
-            return max(publish_dates)
-
-    if isinstance(payload, dict):
-        direct = _extract_as_of_date(payload)
-        if direct is not None:
-            return direct
-
-    nested_as_of = _collect_nested_as_of_dates(payload)
-    candidates = list(nested_as_of)
-
-    if endpoint == "profile_and_fees":
-        candidates.extend(_extract_profile_embedded_dates(payload))
-
-    if candidates:
-        return max(candidates)
-
     return None
 
 
@@ -900,6 +807,16 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS holdings_debt_type (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    debt_type TEXT,
+                    value_num REAL,
+                    industry_avg REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS holdings_debtor_quality (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     quality_aaa REAL,
@@ -927,16 +844,6 @@ class FundamentalsStore:
                     quality_not_available REAL,
                     quality_not_available_industry_avg REAL,
                     PRIMARY KEY (conid, effective_at),
-                    FOREIGN KEY (conid) REFERENCES products(conid)
-                );
-
-                CREATE TABLE IF NOT EXISTS holdings_debtor (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conid TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    debtor TEXT,
-                    value_num REAL,
-                    industry_avg REAL,
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -1550,38 +1457,22 @@ class FundamentalsStore:
             raw = self._decompressor.decompress(row["payload_blob"])
             return json.loads(raw.decode("utf-8"))
 
-    def _resolve_effective_dates(self, endpoint_payloads, observed_at):
-        discrete_dates = {}
-        for endpoint in DISCRETE_ENDPOINTS:
-            payload = endpoint_payloads.get(endpoint)
-            if payload is None:
-                continue
-            date_value = _extract_endpoint_effective_date(endpoint, payload)
-            if date_value is not None:
-                discrete_dates[endpoint] = date_value
+    def _resolve_effective_dates(self, endpoint_payloads, _observed_at):
+        ratios_payload = endpoint_payloads.get("ratios")
 
-        ratios_date = discrete_dates.get("ratios")
-        modal_discrete = None
-        if discrete_dates:
-            counts = Counter(discrete_dates.values())
-            top_n = max(counts.values())
-            modal_discrete = max(d for d, c in counts.items() if c == top_n)
+        ratios_date = _extract_as_of_date(ratios_payload) if isinstance(ratios_payload, dict) else None
 
-        resolved = {}
-        for endpoint in endpoint_payloads.keys():
-            own = discrete_dates.get(endpoint)
-            if own is not None:
-                resolved[endpoint] = (own.isoformat(), f"{endpoint}.own_date")
-                continue
-            if ratios_date is not None:
-                resolved[endpoint] = (ratios_date.isoformat(), "ratios.as_of_date_fallback")
-                continue
-            if modal_discrete is not None:
-                resolved[endpoint] = (modal_discrete.isoformat(), "modal_discrete_as_of_fallback")
-                continue
-            resolved[endpoint] = (observed_at.date().isoformat(), "observed_at_fallback")
+        if ratios_date is not None:
+            effective_at = ratios_date.isoformat()
+            effective_source = "ratios.as_of_date_anchor"
+        else:
+            effective_at = None
+            effective_source = "ratios.as_of_date_missing"
 
-        return resolved
+        return {
+            endpoint: (effective_at, effective_source)
+            for endpoint in endpoint_payloads.keys()
+        }
 
     def _endpoint_payloads_from_snapshot(self, snapshot):
         payloads = {}
@@ -1851,6 +1742,7 @@ class FundamentalsStore:
             self._upsert_row(conn, "profile_and_fees_stylebox", stylebox_row, ["conid", "effective_at"])
 
     def _upsert_holdings(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+        as_of_date = _extract_as_of_date(payload)
         self._upsert_snapshot_row(
             conn,
             "holdings_snapshots",
@@ -1861,7 +1753,7 @@ class FundamentalsStore:
             source_file,
             now_iso,
             {
-                "as_of_date": _to_iso_date(payload.get("as_of_date")),
+                "as_of_date": as_of_date.isoformat() if as_of_date is not None else None,
             },
             include_source_file=False,
         )
@@ -1926,7 +1818,7 @@ class FundamentalsStore:
             ("industry", "holdings_industry", "industry", None),
             ("currency", "holdings_currency", "currency", "code"),
             ("investor_country", "holdings_investor_country", "country", "country_code"),
-            ("debt_type", "holdings_debtor", "debtor", None),
+            ("debt_type", "holdings_debt_type", "debt_type", None),
         ]
         for section, table_name, name_column, extra_column in section_table_specs:
             rows = []
@@ -1955,14 +1847,14 @@ class FundamentalsStore:
                 rows.append(row)
             self._insert_rows(conn, table_name, rows)
 
-        debt_type_row = {
+        debtor_quality_row = {
             "conid": str(conid),
             "effective_at": str(effective_at),
             **{
                 column_name: None
                 for column_name in (
-                    * _HOLDINGS_DEBT_TYPE_COLUMNS,
-                    *[f"{col}_industry_avg" for col in _HOLDINGS_DEBT_TYPE_COLUMNS],
+                    *_HOLDINGS_DEBTOR_QUALITY_COLUMNS,
+                    *[f"{col}_industry_avg" for col in _HOLDINGS_DEBTOR_QUALITY_COLUMNS],
                 )
             },
         }
@@ -1972,7 +1864,7 @@ class FundamentalsStore:
             name = item.get("name") or item.get("type")
             if name is None:
                 continue
-            column = _HOLDINGS_DEBT_TYPE_SOURCE_TO_COLUMN.get(_sanitize_segment(name))
+            column = _HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN.get(_sanitize_segment(name))
             if column is None:
                 continue
             weight_value = item.get("weight")
@@ -1980,10 +1872,10 @@ class FundamentalsStore:
                 weight_value = item.get("assets_pct")
             if weight_value is None:
                 weight_value = item.get("formatted_weight")
-            debt_type_row[column] = _to_fraction_weight(weight_value)
-            debt_type_row[f"{column}_industry_avg"] = _to_fraction_percent(item.get("vs"))
-        if any(debt_type_row[col] is not None for col in _HOLDINGS_DEBT_TYPE_COLUMNS):
-            self._upsert_row(conn, "holdings_debt_type", debt_type_row, ["conid", "effective_at"])
+            debtor_quality_row[column] = _to_fraction_weight(weight_value)
+            debtor_quality_row[f"{column}_industry_avg"] = _to_fraction_percent(item.get("vs"))
+        if any(debtor_quality_row[col] is not None for col in _HOLDINGS_DEBTOR_QUALITY_COLUMNS):
+            self._upsert_row(conn, "holdings_debtor_quality", debtor_quality_row, ["conid", "effective_at"])
 
         maturity_row = {
             "conid": str(conid),
@@ -3190,8 +3082,18 @@ class FundamentalsStore:
         per_endpoint = {}
 
         with self._get_conn() as conn:
+            saved_any_endpoint = False
             for endpoint, payload in endpoint_payloads.items():
                 effective_at, effective_source = effective_map[endpoint]
+                if effective_at is None:
+                    per_endpoint[endpoint] = {
+                        "endpoint": endpoint,
+                        "state": "skipped_missing_effective_at",
+                        "effective_source": effective_source,
+                        "series_raw_rows_written": 0,
+                        "series_latest_rows_upserted": 0,
+                    }
+                    continue
                 result = self._persist_endpoint(
                     conn=conn,
                     conid=conid,
@@ -3214,16 +3116,19 @@ class FundamentalsStore:
                 series_raw_rows_written += int(result.get("series_raw_rows_written", 0))
                 series_latest_rows_upserted += int(result.get("series_latest_rows_upserted", 0))
                 per_endpoint[endpoint] = result
+                saved_any_endpoint = True
 
-            conn.commit()
+            if saved_any_endpoint:
+                conn.commit()
 
+        status = "ok" if saved_any_endpoint else "missing_ratios_effective_at"
         return {
             "inserted_events": inserted_events,
             "overwritten_events": overwritten_events,
             "unchanged_events": unchanged_events,
             "series_raw_rows_written": series_raw_rows_written,
             "series_latest_rows_upserted": series_latest_rows_upserted,
-            "status": "ok",
+            "status": status,
             "per_endpoint": per_endpoint,
         }
 

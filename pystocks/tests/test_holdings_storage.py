@@ -24,6 +24,9 @@ def test_holdings_schema_uses_new_table_layout():
         snapshot = {
             "conid": "holdings_schema_1",
             "scraped_at": "2026-02-24T12:00:00+00:00",
+            "ratios": {
+                "as_of_date": "2026-02-24",
+            },
             "holdings": {
                 "as_of_date": "2026-02-24",
                 "top_10_weight": "38.39%",
@@ -50,7 +53,7 @@ def test_holdings_schema_uses_new_table_layout():
             assert "holdings_currency" in table_names
             assert "holdings_investor_country" in table_names
             assert "holdings_debt_type" in table_names
-            assert "holdings_debtor" in table_names
+            assert "holdings_debtor_quality" in table_names
             assert "holdings_maturity" in table_names
             assert "holdings_top10" in table_names
             assert "holdings_geographic_weights" in table_names
@@ -68,6 +71,9 @@ def test_holdings_top10_stores_weight_and_conids_in_single_table():
         snapshot = {
             "conid": "holdings_top10_1",
             "scraped_at": "2026-02-24T12:00:00+00:00",
+            "ratios": {
+                "as_of_date": "2026-02-24",
+            },
             "holdings": {
                 "as_of_date": "2026-02-24",
                 "top_10": [
@@ -111,12 +117,15 @@ def test_holdings_top10_stores_weight_and_conids_in_single_table():
         tmp.cleanup()
 
 
-def test_holdings_debt_maturity_asset_type_use_static_columns_and_swapped_mapping():
+def test_holdings_debt_maturity_asset_type_use_static_columns_with_direct_mapping():
     tmp, db_path, store = _make_store()
     try:
         snapshot_1 = {
             "conid": "holdings_pivot_1",
             "scraped_at": "2026-02-24T12:00:00+00:00",
+            "ratios": {
+                "as_of_date": "2026-02-24",
+            },
             "holdings": {
                 "as_of_date": "2026-02-24",
                 "allocation_self": [
@@ -155,6 +164,9 @@ def test_holdings_debt_maturity_asset_type_use_static_columns_and_swapped_mappin
         snapshot_2 = {
             "conid": "holdings_pivot_1",
             "scraped_at": "2026-02-25T12:00:00+00:00",
+            "ratios": {
+                "as_of_date": "2026-02-25",
+            },
             "holdings": {
                 "as_of_date": "2026-02-25",
                 "currency": [
@@ -206,18 +218,18 @@ def test_holdings_debt_maturity_asset_type_use_static_columns_and_swapped_mappin
             assert "ireland" not in investor_cols
 
             debt_type_cols = _table_columns(con, "holdings_debt_type")
-            assert "quality_aa" in debt_type_cols
-            assert "quality_aa_industry_avg" in debt_type_cols
-            assert "quality_bbb" in debt_type_cols
-            assert "quality_not_rated" in debt_type_cols
-            assert "debt_type" not in debt_type_cols
-            assert "value_num" not in debt_type_cols
+            assert "debt_type" in debt_type_cols
+            assert "value_num" in debt_type_cols
+            assert "industry_avg" in debt_type_cols
+            assert "quality_aa" not in debt_type_cols
 
-            debtor_cols = _table_columns(con, "holdings_debtor")
-            assert "debtor" in debtor_cols
-            assert "value_num" in debtor_cols
-            assert "industry_avg" in debtor_cols
-            assert "quality_aa" not in debtor_cols
+            debtor_quality_cols = _table_columns(con, "holdings_debtor_quality")
+            assert "quality_aa" in debtor_quality_cols
+            assert "quality_aa_industry_avg" in debtor_quality_cols
+            assert "quality_bbb" in debtor_quality_cols
+            assert "quality_not_rated" in debtor_quality_cols
+            assert "debtor" not in debtor_quality_cols
+            assert "value_num" not in debtor_quality_cols
 
             maturity_cols = _table_columns(con, "holdings_maturity")
             assert "maturity_1_to_3_years" in maturity_cols
@@ -248,31 +260,31 @@ def test_holdings_debt_maturity_asset_type_use_static_columns_and_swapped_mappin
 
             debt_type_row = con.execute(
                 """
-                SELECT quality_aa, quality_aa_industry_avg, quality_bbb, quality_bbb_industry_avg,
-                       quality_not_rated, quality_not_rated_industry_avg
+                SELECT debt_type, value_num, industry_avg
                 FROM holdings_debt_type
                 WHERE conid = ? AND effective_at = ?
                 """,
                 ["holdings_pivot_1", "2026-02-24"],
             ).fetchone()
-            assert debt_type_row[0] == pytest.approx(0.15)
-            assert debt_type_row[1] == pytest.approx(0.144)
-            assert debt_type_row[2] == pytest.approx(0.08)
-            assert debt_type_row[3] == pytest.approx(0.091)
-            assert debt_type_row[4] == pytest.approx(0.02)
-            assert debt_type_row[5] == pytest.approx(0.033)
+            assert debt_type_row[0] == "Sovereign Bond"
+            assert debt_type_row[1] == pytest.approx(0.2)
+            assert debt_type_row[2] == pytest.approx(0.195)
 
-            debtor_row = con.execute(
+            debtor_quality_row = con.execute(
                 """
-                SELECT debtor, value_num, industry_avg
-                FROM holdings_debtor
+                SELECT quality_aa, quality_aa_industry_avg, quality_bbb, quality_bbb_industry_avg,
+                       quality_not_rated, quality_not_rated_industry_avg
+                FROM holdings_debtor_quality
                 WHERE conid = ? AND effective_at = ?
                 """,
                 ["holdings_pivot_1", "2026-02-24"],
             ).fetchone()
-            assert debtor_row[0] == "Sovereign Bond"
-            assert debtor_row[1] == pytest.approx(0.2)
-            assert debtor_row[2] == pytest.approx(0.195)
+            assert debtor_quality_row[0] == pytest.approx(0.15)
+            assert debtor_quality_row[1] == pytest.approx(0.144)
+            assert debtor_quality_row[2] == pytest.approx(0.08)
+            assert debtor_quality_row[3] == pytest.approx(0.091)
+            assert debtor_quality_row[4] == pytest.approx(0.02)
+            assert debtor_quality_row[5] == pytest.approx(0.033)
 
             maturity_row = con.execute(
                 """
@@ -327,6 +339,43 @@ def test_holdings_debt_maturity_asset_type_use_static_columns_and_swapped_mappin
             assert geographic_rows[0][1] == pytest.approx(0.0189)
             assert geographic_rows[1][0] == "us"
             assert geographic_rows[1][1] == pytest.approx(0.9734)
+        finally:
+            con.close()
+    finally:
+        tmp.cleanup()
+
+
+def test_holdings_snapshot_accepts_camel_case_as_of_date():
+    tmp, db_path, store = _make_store()
+    try:
+        snapshot = {
+            "conid": "holdings_asof_camel_1",
+            "scraped_at": "2026-02-26T12:00:00+00:00",
+            "ratios": {
+                "as_of_date": "2026-02-21",
+            },
+            "holdings": {
+                "asOfDate": "2026-02-20",
+                "currency": [
+                    {"name": "US Dollar", "weight": "100%", "vs": "95%", "code": "USD"},
+                ],
+            },
+        }
+        result = store.persist_combined_snapshot(snapshot)
+        assert result["status"] == "ok"
+
+        con = sqlite3.connect(db_path)
+        try:
+            row = con.execute(
+                """
+                SELECT effective_at, as_of_date
+                FROM holdings_snapshots
+                WHERE conid = ?
+                """,
+                ["holdings_asof_camel_1"],
+            ).fetchone()
+            assert row[0] == "2026-02-21"
+            assert row[1] == "2026-02-20"
         finally:
             con.close()
     finally:

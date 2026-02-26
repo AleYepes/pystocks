@@ -24,6 +24,9 @@ def test_profile_fees_merges_launch_opening_price_and_splits_total_net_assets():
         snapshot = {
             "conid": "profile_merge_1",
             "scraped_at": "2026-02-23T12:00:00+00:00",
+            "ratios": {
+                "as_of_date": "2026-02-23",
+            },
             "profile_and_fees": {
                 "objective": "Objective text",
                 "jap_fund_warning": False,
@@ -37,7 +40,7 @@ def test_profile_fees_merges_launch_opening_price_and_splits_total_net_assets():
 
         result = store.persist_combined_snapshot(snapshot)
         assert result["status"] == "ok"
-        assert result["inserted_events"] == 1
+        assert result["inserted_events"] == 2
 
         con = sqlite3.connect(db_path)
         try:
@@ -70,6 +73,9 @@ def test_profile_fees_prefers_inception_date_over_launch_opening_price():
         snapshot = {
             "conid": "profile_merge_2",
             "scraped_at": "2026-02-23T12:00:00+00:00",
+            "ratios": {
+                "as_of_date": "2026-02-23",
+            },
             "profile_and_fees": {
                 "fund_and_profile": [
                     {"name": "Inception Date", "value": "2010-01-02"},
@@ -105,6 +111,9 @@ def test_profile_fees_reports_are_pivoted_to_numeric_columns():
         snapshot = {
             "conid": "profile_report_1",
             "scraped_at": "2026-02-23T12:00:00+00:00",
+            "ratios": {
+                "as_of_date": "2026-02-23",
+            },
             "profile_and_fees": {
                 "reports": [
                     {
@@ -180,6 +189,9 @@ def test_profile_fees_snapshots_schema_and_legacy_tables_removed():
         snapshot = {
             "conid": "profile_snapshot_1",
             "scraped_at": "2026-02-23T12:00:00+00:00",
+            "ratios": {
+                "as_of_date": "2026-02-23",
+            },
             "profile_and_fees": {
                 "objective": "Objective text",
                 "symbol": "ABC",
@@ -234,6 +246,9 @@ def test_profile_fees_stylebox_maps_mstar_hist_to_boolean_cells():
         snapshot = {
             "conid": "profile_stylebox_1",
             "scraped_at": "2026-02-23T12:00:00+00:00",
+            "ratios": {
+                "as_of_date": "2026-02-23",
+            },
             "profile_and_fees": {
                 "mstar": {
                     "hist": [

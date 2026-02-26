@@ -148,7 +148,20 @@ class FundamentalScraper:
 
         checks = {
             "profile": ["fund_and_profile", "objective"],
-            "holdings": ["allocation_self", "top_10", "industry"],
+            "holdings": [
+                "as_of_date",
+                "asOfDate",
+                "allocation_self",
+                "top_10",
+                "industry",
+                "currency",
+                "investor_country",
+                "debt_type",
+                "debtor",
+                "maturity",
+                "geographic",
+                "top_10_weight",
+            ],
             "ratios": ["ratios", "zscore"],
             "lipper": ["universes"],
             "esg": ["content"],
