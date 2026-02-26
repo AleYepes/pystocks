@@ -185,6 +185,59 @@ _HOLDINGS_SPLIT_TABLES = [
     "holdings_maturity",
 ]
 
+_HOLDINGS_ASSET_TYPE_SOURCE_TO_COLUMN = {
+    "equity": "equity",
+    "cash": "cash",
+    "fixed_income": "fixed_income",
+    "other": "other",
+}
+_HOLDINGS_ASSET_TYPE_COLUMNS = tuple(_HOLDINGS_ASSET_TYPE_SOURCE_TO_COLUMN.values())
+
+_HOLDINGS_DEBT_TYPE_SOURCE_TO_COLUMN = {
+    "quality_aaa": "quality_aaa",
+    "quality_aa": "quality_aa",
+    "quality_a": "quality_a",
+    "quality_bbb": "quality_bbb",
+    "quality_bb": "quality_bb",
+    "quality_b": "quality_b",
+    "quality_ccc": "quality_ccc",
+    "quality_cc": "quality_cc",
+    "quality_c": "quality_c",
+    "quality_d": "quality_d",
+    "quality_not_rated": "quality_not_rated",
+    "quality_not_available": "quality_not_available",
+}
+_HOLDINGS_DEBT_TYPE_COLUMNS = tuple(_HOLDINGS_DEBT_TYPE_SOURCE_TO_COLUMN.values())
+
+_HOLDINGS_MATURITY_SOURCE_TO_COLUMN = {
+    "maturity_less_than_1_year": "maturity_less_than_1_year",
+    "maturity_1_to_3_years": "maturity_1_to_3_years",
+    "maturity_3_to_5_years": "maturity_3_to_5_years",
+    "maturity_5_to_10_years": "maturity_5_to_10_years",
+    "maturity_10_to_20_years": "maturity_10_to_20_years",
+    "maturity_20_to_30_years": "maturity_20_to_30_years",
+    "maturity_greater_than_30_years": "maturity_greater_than_30_years",
+    "maturity_other": "maturity_other",
+    "less_than_1_year": "maturity_less_than_1_year",
+    "1_to_3_years": "maturity_1_to_3_years",
+    "3_to_5_years": "maturity_3_to_5_years",
+    "5_to_10_years": "maturity_5_to_10_years",
+    "10_to_20_years": "maturity_10_to_20_years",
+    "20_to_30_years": "maturity_20_to_30_years",
+    "greater_than_30_years": "maturity_greater_than_30_years",
+    "other": "maturity_other",
+}
+_HOLDINGS_MATURITY_COLUMNS = (
+    "maturity_less_than_1_year",
+    "maturity_1_to_3_years",
+    "maturity_3_to_5_years",
+    "maturity_5_to_10_years",
+    "maturity_10_to_20_years",
+    "maturity_20_to_30_years",
+    "maturity_greater_than_30_years",
+    "maturity_other",
+)
+
 
 def _sanitize_segment(value):
     segment = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
@@ -369,6 +422,17 @@ def _to_fraction_weight(value):
     if abs(p) > 1.0:
         return p / 100.0
     return p
+
+
+def _to_fraction_percent(value):
+    if value is None:
+        return None
+    if isinstance(value, str) and "%" in value:
+        return _parse_number(value, percent_as_fraction=True)
+    parsed = _parse_number(value)
+    if parsed is None:
+        return None
+    return parsed / 100.0
 
 
 def _to_int_bool(value):
@@ -799,6 +863,10 @@ class FundamentalsStore:
                 CREATE TABLE IF NOT EXISTS holdings_asset_type (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
+                    equity REAL,
+                    cash REAL,
+                    fixed_income REAL,
+                    other REAL,
                     PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
@@ -836,12 +904,33 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS holdings_debt_type (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    debt_type TEXT,
-                    value_num REAL,
-                    industry_avg REAL,
+                    quality_aaa REAL,
+                    quality_aaa_industry_avg REAL,
+                    quality_aa REAL,
+                    quality_aa_industry_avg REAL,
+                    quality_a REAL,
+                    quality_a_industry_avg REAL,
+                    quality_bbb REAL,
+                    quality_bbb_industry_avg REAL,
+                    quality_bb REAL,
+                    quality_bb_industry_avg REAL,
+                    quality_b REAL,
+                    quality_b_industry_avg REAL,
+                    quality_ccc REAL,
+                    quality_ccc_industry_avg REAL,
+                    quality_cc REAL,
+                    quality_cc_industry_avg REAL,
+                    quality_c REAL,
+                    quality_c_industry_avg REAL,
+                    quality_d REAL,
+                    quality_d_industry_avg REAL,
+                    quality_not_rated REAL,
+                    quality_not_rated_industry_avg REAL,
+                    quality_not_available REAL,
+                    quality_not_available_industry_avg REAL,
+                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -856,12 +945,25 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS holdings_maturity (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    maturity TEXT,
-                    value_num REAL,
-                    industry_avg REAL,
+                    maturity_less_than_1_year REAL,
+                    maturity_less_than_1_year_industry_avg REAL,
+                    maturity_1_to_3_years REAL,
+                    maturity_1_to_3_years_industry_avg REAL,
+                    maturity_3_to_5_years REAL,
+                    maturity_3_to_5_years_industry_avg REAL,
+                    maturity_5_to_10_years REAL,
+                    maturity_5_to_10_years_industry_avg REAL,
+                    maturity_10_to_20_years REAL,
+                    maturity_10_to_20_years_industry_avg REAL,
+                    maturity_20_to_30_years REAL,
+                    maturity_20_to_30_years_industry_avg REAL,
+                    maturity_greater_than_30_years REAL,
+                    maturity_greater_than_30_years_industry_avg REAL,
+                    maturity_other REAL,
+                    maturity_other_industry_avg REAL,
+                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -1583,39 +1685,6 @@ class FundamentalsStore:
             [[row.get(c) for c in cols] for row in rows],
         )
 
-    def _table_column_names(self, conn, table):
-        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-        return {str(row["name"]) for row in rows}
-
-    def _ensure_table_columns(self, conn, table, dynamic_column_types):
-        if not dynamic_column_types:
-            return
-        existing = self._table_column_names(conn, table)
-        for column_name, sql_type in dynamic_column_types.items():
-            if column_name in existing:
-                continue
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_name} {sql_type}")
-            existing.add(column_name)
-
-    def _holdings_dynamic_column(self, raw_value, fixed_columns, assigned_columns):
-        text = str(raw_value).strip() if raw_value is not None else ""
-        column_name = _sanitize_segment(text)
-        if column_name[:1].isdigit() or column_name in fixed_columns:
-            column_name = f"field_{column_name}"
-
-        existing = assigned_columns.get(column_name)
-        if existing is None or existing == text:
-            assigned_columns[column_name] = text
-            return column_name
-
-        suffix = hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
-        candidate = f"{column_name}_{suffix}"
-        while candidate in assigned_columns and assigned_columns[candidate] != text:
-            suffix = hashlib.sha1(f"{text}:{candidate}".encode("utf-8")).hexdigest()[:8]
-            candidate = f"{column_name}_{suffix}"
-        assigned_columns[candidate] = text
-        return candidate
-
     def _store_endpoint_scalar_extras(self, conn, endpoint, conid, effective_at, payload):
         conn.execute(
             """
@@ -1827,38 +1896,41 @@ class FundamentalsStore:
             )
         self._insert_rows(conn, "holdings_top10", top10_rows)
 
-        fixed_columns = {"conid", "effective_at"}
         asset_type_row = {
             "conid": str(conid),
             "effective_at": str(effective_at),
+            **{col: None for col in _HOLDINGS_ASSET_TYPE_COLUMNS},
         }
-        asset_type_column_types = {}
-        assigned_asset_columns = {}
         for item in payload.get("allocation_self", []) if isinstance(payload.get("allocation_self"), list) else []:
             if not isinstance(item, dict):
                 continue
             name = item.get("name") or item.get("type")
             if name is None:
                 continue
-            column = self._holdings_dynamic_column(name, fixed_columns, assigned_asset_columns)
+            key = _sanitize_segment(name)
+            column = _HOLDINGS_ASSET_TYPE_SOURCE_TO_COLUMN.get(key)
+            if column is None:
+                column = "other"
             weight_value = item.get("weight")
             if weight_value is None:
                 weight_value = item.get("assets_pct")
             if weight_value is None:
                 weight_value = item.get("formatted_weight")
-            asset_type_row[column] = _to_fraction_weight(weight_value)
-            asset_type_column_types[column] = "REAL"
-        if asset_type_column_types:
-            self._ensure_table_columns(conn, "holdings_asset_type", asset_type_column_types)
+            parsed_weight = _to_fraction_weight(weight_value)
+            if parsed_weight is None:
+                continue
+            if asset_type_row[column] is None:
+                asset_type_row[column] = parsed_weight
+            else:
+                asset_type_row[column] += parsed_weight
+        if any(asset_type_row[col] is not None for col in _HOLDINGS_ASSET_TYPE_COLUMNS):
             self._upsert_row(conn, "holdings_asset_type", asset_type_row, ["conid", "effective_at"])
 
         section_table_specs = [
             ("industry", "holdings_industry", "industry", None),
             ("currency", "holdings_currency", "currency", "code"),
             ("investor_country", "holdings_investor_country", "country", "country_code"),
-            ("debt_type", "holdings_debt_type", "debt_type", None),
-            ("debtor", "holdings_debtor", "debtor", None),
-            ("maturity", "holdings_maturity", "maturity", None),
+            ("debt_type", "holdings_debtor", "debtor", None),
         ]
         for section, table_name, name_column, extra_column in section_table_specs:
             rows = []
@@ -1879,13 +1951,73 @@ class FundamentalsStore:
                     "effective_at": str(effective_at),
                     name_column: str(name),
                     "value_num": _to_fraction_weight(weight_value),
-                    "industry_avg": _parse_number(item.get("vs"), percent_as_fraction=True),
+                    "industry_avg": _to_fraction_percent(item.get("vs")),
                 }
                 if extra_column:
                     extra_value = item.get(extra_column)
                     row[extra_column] = str(extra_value) if extra_value is not None else None
                 rows.append(row)
             self._insert_rows(conn, table_name, rows)
+
+        debt_type_row = {
+            "conid": str(conid),
+            "effective_at": str(effective_at),
+            **{
+                column_name: None
+                for column_name in (
+                    * _HOLDINGS_DEBT_TYPE_COLUMNS,
+                    *[f"{col}_industry_avg" for col in _HOLDINGS_DEBT_TYPE_COLUMNS],
+                )
+            },
+        }
+        for item in payload.get("debtor", []) if isinstance(payload.get("debtor"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("type")
+            if name is None:
+                continue
+            column = _HOLDINGS_DEBT_TYPE_SOURCE_TO_COLUMN.get(_sanitize_segment(name))
+            if column is None:
+                continue
+            weight_value = item.get("weight")
+            if weight_value is None:
+                weight_value = item.get("assets_pct")
+            if weight_value is None:
+                weight_value = item.get("formatted_weight")
+            debt_type_row[column] = _to_fraction_weight(weight_value)
+            debt_type_row[f"{column}_industry_avg"] = _to_fraction_percent(item.get("vs"))
+        if any(debt_type_row[col] is not None for col in _HOLDINGS_DEBT_TYPE_COLUMNS):
+            self._upsert_row(conn, "holdings_debt_type", debt_type_row, ["conid", "effective_at"])
+
+        maturity_row = {
+            "conid": str(conid),
+            "effective_at": str(effective_at),
+            **{
+                column_name: None
+                for column_name in (
+                    * _HOLDINGS_MATURITY_COLUMNS,
+                    *[f"{col}_industry_avg" for col in _HOLDINGS_MATURITY_COLUMNS],
+                )
+            },
+        }
+        for item in payload.get("maturity", []) if isinstance(payload.get("maturity"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("type")
+            if name is None:
+                continue
+            column = _HOLDINGS_MATURITY_SOURCE_TO_COLUMN.get(_sanitize_segment(name))
+            if column is None:
+                continue
+            weight_value = item.get("weight")
+            if weight_value is None:
+                weight_value = item.get("assets_pct")
+            if weight_value is None:
+                weight_value = item.get("formatted_weight")
+            maturity_row[column] = _to_fraction_weight(weight_value)
+            maturity_row[f"{column}_industry_avg"] = _to_fraction_percent(item.get("vs"))
+        if any(maturity_row[col] is not None for col in _HOLDINGS_MATURITY_COLUMNS):
+            self._upsert_row(conn, "holdings_maturity", maturity_row, ["conid", "effective_at"])
 
         geographic_rows = []
         geographic = payload.get("geographic") if isinstance(payload.get("geographic"), dict) else {}

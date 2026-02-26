@@ -111,7 +111,7 @@ def test_holdings_top10_stores_weight_and_conids_in_single_table():
         tmp.cleanup()
 
 
-def test_holdings_split_tables_use_long_format_except_asset_type():
+def test_holdings_debt_maturity_asset_type_use_static_columns_and_swapped_mapping():
     tmp, db_path, store = _make_store()
     try:
         snapshot_1 = {
@@ -122,6 +122,8 @@ def test_holdings_split_tables_use_long_format_except_asset_type():
                 "allocation_self": [
                     {"name": "Equity", "weight": 99.9088},
                     {"name": "Cash", "formatted_weight": "0.05%"},
+                    {"name": "Fixed Income", "formatted_weight": "0.03%"},
+                    {"name": "Alternatives", "formatted_weight": "0.01%"},
                 ],
                 "industry": [
                     {"name": "Technology", "weight": 44.8681, "vs": 48.34125625},
@@ -133,13 +135,16 @@ def test_holdings_split_tables_use_long_format_except_asset_type():
                     {"name": "United States", "weight": 97.3418, "vs": 104.736089583333, "country_code": "US"},
                 ],
                 "debt_type": [
-                    {"name": "Government", "weight": "20%", "vs": "19.5%"},
+                    {"name": "Sovereign Bond", "weight": "20%", "vs": "19.5%"},
                 ],
                 "debtor": [
-                    {"name": "US Treasury", "weight": "15%", "vs": "14.4%"},
+                    {"name": "% Quality/AA", "weight": "15%", "vs": "14.4%"},
+                    {"name": "% Quality/BBB", "weight": "8%", "vs": "9.1%"},
+                    {"name": "% Quality Not Rated", "weight": "2%", "vs": "3.3%"},
                 ],
                 "maturity": [
-                    {"name": "1-3 Years", "weight": "12.5%", "vs": "11.3%"},
+                    {"name": "% Maturity 1 to 3 Years", "weight": "12.5%", "vs": "11.3%"},
+                    {"name": "% Maturity Less than 1 Year", "weight": "5.4%", "vs": "4.1%"},
                 ],
                 "geographic": {
                     "us": "97.34%",
@@ -174,6 +179,8 @@ def test_holdings_split_tables_use_long_format_except_asset_type():
             asset_cols = _table_columns(con, "holdings_asset_type")
             assert "equity" in asset_cols
             assert "cash" in asset_cols
+            assert "fixed_income" in asset_cols
+            assert "other" in asset_cols
             assert "equity_vs_num" not in asset_cols
 
             industry_cols = _table_columns(con, "holdings_industry")
@@ -198,17 +205,88 @@ def test_holdings_split_tables_use_long_format_except_asset_type():
             assert "united_states" not in investor_cols
             assert "ireland" not in investor_cols
 
+            debt_type_cols = _table_columns(con, "holdings_debt_type")
+            assert "quality_aa" in debt_type_cols
+            assert "quality_aa_industry_avg" in debt_type_cols
+            assert "quality_bbb" in debt_type_cols
+            assert "quality_not_rated" in debt_type_cols
+            assert "debt_type" not in debt_type_cols
+            assert "value_num" not in debt_type_cols
+
+            debtor_cols = _table_columns(con, "holdings_debtor")
+            assert "debtor" in debtor_cols
+            assert "value_num" in debtor_cols
+            assert "industry_avg" in debtor_cols
+            assert "quality_aa" not in debtor_cols
+
             maturity_cols = _table_columns(con, "holdings_maturity")
-            assert "maturity" in maturity_cols
-            assert "value_num" in maturity_cols
-            assert "industry_avg" in maturity_cols
-            assert "field_1_3_years" not in maturity_cols
+            assert "maturity_1_to_3_years" in maturity_cols
+            assert "maturity_1_to_3_years_industry_avg" in maturity_cols
+            assert "maturity_less_than_1_year" in maturity_cols
+            assert "maturity_other" in maturity_cols
+            assert "maturity" not in maturity_cols
+            assert "value_num" not in maturity_cols
 
             geographic_cols = _table_columns(con, "holdings_geographic_weights")
             assert "region" in geographic_cols
             assert "value_num" in geographic_cols
             assert "us" not in geographic_cols
             assert "apac" not in geographic_cols
+
+            asset_row = con.execute(
+                """
+                SELECT equity, cash, fixed_income, other
+                FROM holdings_asset_type
+                WHERE conid = ? AND effective_at = ?
+                """,
+                ["holdings_pivot_1", "2026-02-24"],
+            ).fetchone()
+            assert asset_row[0] == pytest.approx(0.999088)
+            assert asset_row[1] == pytest.approx(0.0005)
+            assert asset_row[2] == pytest.approx(0.0003)
+            assert asset_row[3] == pytest.approx(0.0001)
+
+            debt_type_row = con.execute(
+                """
+                SELECT quality_aa, quality_aa_industry_avg, quality_bbb, quality_bbb_industry_avg,
+                       quality_not_rated, quality_not_rated_industry_avg
+                FROM holdings_debt_type
+                WHERE conid = ? AND effective_at = ?
+                """,
+                ["holdings_pivot_1", "2026-02-24"],
+            ).fetchone()
+            assert debt_type_row[0] == pytest.approx(0.15)
+            assert debt_type_row[1] == pytest.approx(0.144)
+            assert debt_type_row[2] == pytest.approx(0.08)
+            assert debt_type_row[3] == pytest.approx(0.091)
+            assert debt_type_row[4] == pytest.approx(0.02)
+            assert debt_type_row[5] == pytest.approx(0.033)
+
+            debtor_row = con.execute(
+                """
+                SELECT debtor, value_num, industry_avg
+                FROM holdings_debtor
+                WHERE conid = ? AND effective_at = ?
+                """,
+                ["holdings_pivot_1", "2026-02-24"],
+            ).fetchone()
+            assert debtor_row[0] == "Sovereign Bond"
+            assert debtor_row[1] == pytest.approx(0.2)
+            assert debtor_row[2] == pytest.approx(0.195)
+
+            maturity_row = con.execute(
+                """
+                SELECT maturity_1_to_3_years, maturity_1_to_3_years_industry_avg,
+                       maturity_less_than_1_year, maturity_less_than_1_year_industry_avg
+                FROM holdings_maturity
+                WHERE conid = ? AND effective_at = ?
+                """,
+                ["holdings_pivot_1", "2026-02-24"],
+            ).fetchone()
+            assert maturity_row[0] == pytest.approx(0.125)
+            assert maturity_row[1] == pytest.approx(0.113)
+            assert maturity_row[2] == pytest.approx(0.054)
+            assert maturity_row[3] == pytest.approx(0.041)
 
             currency_row = con.execute(
                 """
@@ -220,7 +298,7 @@ def test_holdings_split_tables_use_long_format_except_asset_type():
             ).fetchone()
             assert currency_row[0] == "US Dollar"
             assert currency_row[1] == pytest.approx(0.999604)
-            assert currency_row[2] == pytest.approx(107.984995833333)
+            assert currency_row[2] == pytest.approx(1.07984995833333)
             assert currency_row[3] == "USD"
 
             currency_row_2 = con.execute(
