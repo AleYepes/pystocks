@@ -14,7 +14,6 @@ Postprocessing and analysis are intentionally deferred in this refactor.
 ```bash
 python -m pystocks.cli scrape_products
 python -m pystocks.cli scrape_fundamentals --limit 100
-python -m pystocks.cli refresh_fundamentals_views
 python -m pystocks.cli run_pipeline --limit 100
 ```
 

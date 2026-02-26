@@ -378,7 +378,6 @@ async def main(
     force=False,
     max_auth_retries=2,
     reauth_headless=False,
-    refresh_views_at_end=True,
     telemetry_output=None,
     verbose=False,
 ):
@@ -449,7 +448,6 @@ async def main(
                         if data:
                             store_result = scraper.store.persist_combined_snapshot(
                                 data,
-                                refresh_views=False,
                             )
                             inserted_events += int(store_result.get("inserted_events", 0))
                             overwritten_events += int(store_result.get("overwritten_events", 0))
@@ -496,12 +494,6 @@ async def main(
                 break
     finally:
         pbar.close()
-        if refresh_views_at_end:
-            try:
-                refresh_result = scraper.store.refresh_sqlite_views()
-                logger.info(f"Refreshed SQLite maintenance: {refresh_result}")
-            except Exception as e:
-                logger.error(f"Failed SQLite maintenance refresh: {e}")
 
         telemetry_path, latest_path = scraper.save_telemetry(
             total_targeted=total_targeted,

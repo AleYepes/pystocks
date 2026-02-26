@@ -31,11 +31,7 @@ PY
 ```bash
 ./venv/bin/python -m pystocks.cli scrape_fundamentals --limit 100 --verbose
 ```
-3. Run SQLite maintenance checkpoint/vacuum:
-```bash
-./venv/bin/python -m pystocks.cli refresh_fundamentals_views
-```
-4. Full ingestion pipeline:
+3. Full ingestion pipeline:
 ```bash
 ./venv/bin/python -m pystocks.cli run_pipeline --limit 100
 ```

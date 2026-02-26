@@ -33,7 +33,6 @@ Key table groups:
 ```bash
 ./venv/bin/python -m pystocks.cli scrape_products
 ./venv/bin/python -m pystocks.cli scrape_fundamentals --limit 100 --verbose
-./venv/bin/python -m pystocks.cli refresh_fundamentals_views
 ./venv/bin/python -m pystocks.cli run_pipeline --limit 100
 ```
 

@@ -1,6 +1,5 @@
 import fire
 import asyncio
-from .fundamentals_store import FundamentalsStore
 
 class PyStocksCLI:
     def scrape_products(self):
@@ -14,7 +13,6 @@ class PyStocksCLI:
         verbose=False,
         force=False,
         conids_file=None,
-        refresh_views_at_end=True,
     ):
         """Scrape fundamental data for ETFs using the web portal proxy."""
         from .fundamentals import run_fundamentals_update
@@ -24,16 +22,8 @@ class PyStocksCLI:
                 verbose=verbose,
                 force=force,
                 conids_file=conids_file,
-                refresh_views_at_end=refresh_views_at_end,
             )
         )
-
-    def refresh_fundamentals_views(self):
-        """Run SQLite maintenance and return table counts."""
-        store = FundamentalsStore()
-        result = store.refresh_sqlite_views()
-        print(result)
-        return result
 
     def preprocess_prices(self):
         """Deferred until price ingestion/materialization is finalized."""
@@ -57,7 +47,6 @@ class PyStocksCLI:
             verbose=verbose,
             force=force,
             conids_file=conids_file,
-            refresh_views_at_end=True,
         )
 
         print("Pipeline complete.")

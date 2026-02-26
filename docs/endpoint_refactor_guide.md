@@ -105,7 +105,6 @@ Before editing code, create a short endpoint contract:
 9. Add/adjust tests under `pystocks/tests/`.
 10. Run validation:
 - `./venv/bin/python -m pytest -q`
-- `./venv/bin/python -m pystocks.cli refresh_fundamentals_views`
 
 ## Why Explicit Schemas (vs Dynamic Creation)
 

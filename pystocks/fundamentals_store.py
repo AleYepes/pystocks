@@ -244,10 +244,6 @@ def _sanitize_segment(value):
     return segment or "field"
 
 
-def _slugify_endpoint(endpoint):
-    return _sanitize_segment(endpoint.replace("/", "_").replace("?", "_").replace("=", "_"))
-
-
 def _canonical_json_bytes(payload):
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
@@ -3142,7 +3138,7 @@ class FundamentalsStore:
             "series_latest_rows_upserted": int(series_latest_rows_upserted),
         }
 
-    def persist_combined_snapshot(self, snapshot, source_file=None, refresh_views=False):
+    def persist_combined_snapshot(self, snapshot, source_file=None):
         if not isinstance(snapshot, dict):
             return {
                 "inserted_events": 0,
@@ -3220,9 +3216,6 @@ class FundamentalsStore:
                 per_endpoint[endpoint] = result
 
             conn.commit()
-
-        if refresh_views:
-            self.refresh_sqlite_views()
 
         return {
             "inserted_events": inserted_events,
@@ -3332,62 +3325,3 @@ class FundamentalsStore:
 
             conn.commit()
             return run_id
-
-    def refresh_sqlite_views(self):
-        with self._get_conn() as conn:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            conn.execute("VACUUM")
-
-            tables = [
-                "products",
-                "raw_payload_blobs",
-                "profile_and_fees_snapshots",
-                "profile_and_fees_stylebox",
-                "holdings_snapshots",
-                "ratios_snapshots",
-                "lipper_ratings_snapshots",
-                "dividends_snapshots",
-                "morningstar_snapshots",
-                "performance_snapshots",
-                "ownership_snapshots",
-                "esg_snapshots",
-                "price_chart_snapshots",
-                "sentiment_search_snapshots",
-                "price_chart_series_raw",
-                "price_chart_series_latest",
-                "sentiment_search_series_raw",
-                "sentiment_search_series_latest",
-                "ownership_trade_log_series_raw",
-                "ownership_trade_log_series_latest",
-                "dividends_events_series_raw",
-                "dividends_events_series_latest",
-            ]
-
-            counts = {}
-            for table in tables:
-                row = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
-                counts[table] = int(row["n"])
-
-            return {
-                "sqlite_path": str(self.sqlite_path),
-                "vacuumed": True,
-                "table_counts": counts,
-            }
-
-
-def refresh_views():
-    store = FundamentalsStore()
-    result = store.refresh_sqlite_views()
-    for key, value in result.items():
-        print(f"{key}: {value}")
-    return result
-
-
-if __name__ == "__main__":
-    import fire
-
-    fire.Fire(
-        {
-            "refresh_views": refresh_views,
-        }
-    )
