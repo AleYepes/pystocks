@@ -1671,20 +1671,33 @@ class FundamentalsStore:
                 "effective_at": str(effective_at),
                 **{col: 0 for col in _PROFILE_AND_FEES_STYLEBOX_COLUMNS},
             }
+            # Bitmask: 1 = Historical, 2 = Current
             hist = mstar.get("hist")
             if isinstance(hist, list):
                 for pair in hist:
                     if not isinstance(pair, (list, tuple)) or len(pair) < 2:
                         continue
                     try:
-                        x_idx = int(pair[0])
-                        y_idx = int(pair[1])
-                    except Exception:
+                        x_idx, y_idx = int(pair[0]), int(pair[1])
+                    except (ValueError, TypeError):
                         continue
                     column_name = _PROFILE_AND_FEES_STYLEBOX_COORD_COLUMNS.get((x_idx, y_idx))
-                    if column_name is None:
+                    if column_name:
+                        stylebox_row[column_name] |= 1
+
+            selected = mstar.get("selected")
+            if isinstance(selected, list):
+                for pair in selected:
+                    if not isinstance(pair, (list, tuple)) or len(pair) < 2:
                         continue
-                    stylebox_row[column_name] = 1
+                    try:
+                        x_idx, y_idx = int(pair[0]), int(pair[1])
+                    except (ValueError, TypeError):
+                        continue
+                    column_name = _PROFILE_AND_FEES_STYLEBOX_COORD_COLUMNS.get((x_idx, y_idx))
+                    if column_name:
+                        stylebox_row[column_name] |= 2
+
             self._upsert_row(conn, "profile_and_fees_stylebox", stylebox_row, ["conid", "effective_at"])
 
     def _upsert_holdings(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
@@ -2846,7 +2859,7 @@ class FundamentalsStore:
         else:
             state = "overwritten"
 
-        if state == "unchanged":
+        if state == "unchanged" and endpoint in SERIES_ENDPOINTS:
             return {
                 "endpoint": endpoint,
                 "state": state,
