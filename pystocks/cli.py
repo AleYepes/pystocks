@@ -43,7 +43,6 @@ class PyStocksCLI:
         """Deferred until factor analysis pipeline is finalized."""
         return {"status": "deferred", "step": "analysis"}
 
-
     def run_pipeline(self, limit=100, verbose=False, force=False, conids_file=None):
         """Run ingestion pipeline: products -> fundamentals."""
         print("Starting full pipeline...")

@@ -80,7 +80,7 @@ _DATE_IN_TEXT_RE = re.compile(r"(?<!\d)(\d{4}[/-]\d{2}[/-]\d{2})(?!\d)")
 _NUM_WITH_SUFFIX_RE = re.compile(r"^[\s\$€£¥]*([+-]?\d+(?:\.\d+)?)\s*([KMBT])?\b", re.IGNORECASE)
 _TOTAL_NET_ASSETS_DATE_BLOCK_RE = re.compile(r"\(\s*\d{4}[/-]\d{2}[/-]\d{2}\s*[\)\.]?\s*")
 
-_PROFILE_FEES_FIELD_COLUMN_TYPES = {
+_PROFILE_AND_FEES_FIELD_COLUMN_TYPES = {
     "Asset Type": ("asset_type", "text"),
     "Classification": ("classification", "text"),
     "Distribution Details": ("distribution_details", "text"),
@@ -106,7 +106,7 @@ _PROFILE_FEES_FIELD_COLUMN_TYPES = {
     "Total Net Assets (Month End)": ("total_net_assets_value", "text"),
 }
 
-_PROFILE_FEES_PIVOT_COLUMNS = [
+_PROFILE_AND_FEES_PIVOT_COLUMNS = [
     "asset_type",
     "classification",
     "distribution_details",
@@ -130,7 +130,50 @@ _PROFILE_FEES_PIVOT_COLUMNS = [
     "total_expense_ratio",
     "total_net_assets_value",
     "total_net_assets_date",
+    "objective",
+    "jap_fund_warning",
+    "theme_name",
 ]
+
+_PROFILE_AND_FEES_REPORT_FIELD_COLUMN_TYPES = {
+    "Administrator Expenses": "administrator_expenses",
+    "Advisor Expenses": "advisor_expenses",
+    "Audit Expenses": "audit_expenses",
+    "Audit and Legal Expenses": "audit_and_legal_expenses",
+    "Custodian Expenses": "custodian_expenses",
+    "Director Expense": "director_expense",
+    "Management Fees": "management_fees",
+    "Misc. Expenses": "misc_expenses",
+    "Non-Management Expenses": "non_management_expenses",
+    "Other Expense": "other_expense",
+    "Other Non-Management Fees": "other_non_management_fees",
+    "Postage and Printing Expenses": "postage_and_printing_expenses",
+    "Prospectus Gross Expense Ratio": "prospectus_gross_expense_ratio",
+    "Prospectus Gross Management Fee Ratio": "prospectus_gross_management_fee_ratio",
+    "Prospectus Gross Other Expense Ratio": "prospectus_gross_other_expense_ratio",
+    "Prospectus Net Expense Ratio": "prospectus_net_expense_ratio",
+    "Prospectus Net Management Fee Ratio": "prospectus_net_management_fee_ratio",
+    "Prospectus Net Other Expense Ratio": "prospectus_net_other_expense_ratio",
+    "Registration Expenses": "registration_expenses",
+    "Total Expense": "total_expense",
+    "Total Gross Expense": "total_gross_expense",
+    "Total Net Expense": "total_net_expense",
+}
+
+_PROFILE_AND_FEES_REPORT_PIVOT_COLUMNS = sorted(
+    set(_PROFILE_AND_FEES_REPORT_FIELD_COLUMN_TYPES.values())
+)
+
+_PROFILE_AND_FEES_STYLEBOX_X = ("value", "core", "growth")
+_PROFILE_AND_FEES_STYLEBOX_Y = ("large", "multi", "mid", "small")
+_PROFILE_AND_FEES_STYLEBOX_COLUMNS = [
+    f"{x}_{y}" for x in _PROFILE_AND_FEES_STYLEBOX_X for y in _PROFILE_AND_FEES_STYLEBOX_Y
+]
+_PROFILE_AND_FEES_STYLEBOX_COORD_COLUMNS = {
+    (xi, yi): f"{x}_{y}"
+    for xi, x in enumerate(_PROFILE_AND_FEES_STYLEBOX_X)
+    for yi, y in enumerate(_PROFILE_AND_FEES_STYLEBOX_Y)
+}
 
 
 def _sanitize_segment(value):
@@ -635,23 +678,19 @@ class FundamentalsStore:
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
-                CREATE TABLE IF NOT EXISTS profile_fees_snapshots (
+                CREATE TABLE IF NOT EXISTS profile_and_fees_snapshots (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    source_file TEXT,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    symbol TEXT,
-                    objective TEXT,
-                    jap_fund_warning INTEGER,
                     PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid),
                     FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
                 );
 
-                CREATE TABLE IF NOT EXISTS profile_fees_fund_profile_fields (
+                CREATE TABLE IF NOT EXISTS profile_and_fees (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     asset_type TEXT,
@@ -677,38 +716,60 @@ class FundamentalsStore:
                     total_expense_ratio REAL,
                     total_net_assets_value TEXT,
                     total_net_assets_date TEXT,
+                    objective TEXT,
+                    jap_fund_warning INTEGER,
+                    theme_name TEXT,
                     PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
-                CREATE TABLE IF NOT EXISTS profile_fees_report_fields (
+                CREATE TABLE IF NOT EXISTS profile_and_fees_reports (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     report_name TEXT,
                     report_as_of_date TEXT,
-                    field_name TEXT,
-                    field_value_text TEXT,
-                    field_value_num REAL,
-                    is_summary INTEGER,
+                    administrator_expenses REAL,
+                    advisor_expenses REAL,
+                    audit_and_legal_expenses REAL,
+                    audit_expenses REAL,
+                    custodian_expenses REAL,
+                    director_expense REAL,
+                    management_fees REAL,
+                    misc_expenses REAL,
+                    non_management_expenses REAL,
+                    other_expense REAL,
+                    other_non_management_fees REAL,
+                    postage_and_printing_expenses REAL,
+                    prospectus_gross_expense_ratio REAL,
+                    prospectus_gross_management_fee_ratio REAL,
+                    prospectus_gross_other_expense_ratio REAL,
+                    prospectus_net_expense_ratio REAL,
+                    prospectus_net_management_fee_ratio REAL,
+                    prospectus_net_other_expense_ratio REAL,
+                    registration_expenses REAL,
+                    total_expense REAL,
+                    total_gross_expense REAL,
+                    total_net_expense REAL,
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
-                CREATE TABLE IF NOT EXISTS profile_fees_expense_allocations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                CREATE TABLE IF NOT EXISTS profile_and_fees_stylebox (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    expense_name TEXT,
-                    ratio_text TEXT,
-                    value_num REAL,
-                    FOREIGN KEY (conid) REFERENCES products(conid)
-                );
-
-                CREATE TABLE IF NOT EXISTS profile_fees_themes (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conid TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    theme_name TEXT,
+                    value_large INTEGER,
+                    value_multi INTEGER,
+                    value_mid INTEGER,
+                    value_small INTEGER,
+                    core_large INTEGER,
+                    core_multi INTEGER,
+                    core_mid INTEGER,
+                    core_small INTEGER,
+                    growth_large INTEGER,
+                    growth_multi INTEGER,
+                    growth_mid INTEGER,
+                    growth_small INTEGER,
+                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -1237,7 +1298,7 @@ class FundamentalsStore:
 
             conn.executescript(
                 """
-                CREATE INDEX IF NOT EXISTS idx_profile_fees_snapshots_hash ON profile_fees_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_profile_and_fees_snapshots_hash ON profile_and_fees_snapshots(payload_hash);
                 CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_hash ON holdings_snapshots(payload_hash);
                 CREATE INDEX IF NOT EXISTS idx_ratios_snapshots_hash ON ratios_snapshots(payload_hash);
                 CREATE INDEX IF NOT EXISTS idx_lipper_snapshots_hash ON lipper_ratings_snapshots(payload_hash);
@@ -1384,7 +1445,7 @@ class FundamentalsStore:
 
     def _main_table_for_endpoint(self, endpoint):
         return {
-            "profile_and_fees": "profile_fees_snapshots",
+            "profile_and_fees": "profile_and_fees_snapshots",
             "holdings": "holdings_snapshots",
             "ratios": "ratios_snapshots",
             "lipper_ratings": "lipper_ratings_snapshots",
@@ -1408,16 +1469,18 @@ class FundamentalsStore:
         source_file,
         now_iso,
         extra,
+        include_source_file=True,
     ):
         base = {
             "conid": str(conid),
             "effective_at": str(effective_at),
             "observed_at": str(observed_at),
             "payload_hash": str(payload_hash),
-            "source_file": source_file,
             "inserted_at": now_iso,
             "updated_at": now_iso,
         }
+        if include_source_file:
+            base["source_file"] = source_file
         row = dict(base)
         row.update(extra)
 
@@ -1500,45 +1563,57 @@ class FundamentalsStore:
     def _upsert_profile_fees(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
         self._upsert_snapshot_row(
             conn,
-            "profile_fees_snapshots",
+            "profile_and_fees_snapshots",
             conid,
             effective_at,
             observed_at,
             payload_hash,
             source_file,
             now_iso,
-            {
-                "symbol": payload.get("symbol"),
-                "objective": payload.get("objective"),
-                "jap_fund_warning": _to_int_bool(payload.get("jap_fund_warning")),
-            },
+            {},
+            include_source_file=False,
         )
 
         self._delete_children(
             conn,
             [
-                "profile_fees_fund_profile_fields",
-                "profile_fees_report_fields",
-                "profile_fees_expense_allocations",
-                "profile_fees_themes",
+                "profile_and_fees_reports",
+                "profile_and_fees_stylebox",
             ],
             conid,
             effective_at,
         )
 
+        themes = payload.get("themes", []) if isinstance(payload.get("themes"), list) else []
+        theme_names = []
+        for theme in themes:
+            if isinstance(theme, dict):
+                theme_name = theme.get("name") or theme.get("title") or theme.get("theme")
+            else:
+                theme_name = str(theme) if theme is not None else None
+            if theme_name is None:
+                continue
+            cleaned = str(theme_name).strip()
+            if cleaned:
+                theme_names.append(cleaned)
+
         profile_row = {
             "conid": str(conid),
             "effective_at": str(effective_at),
-            **{col: None for col in _PROFILE_FEES_PIVOT_COLUMNS},
+            **{col: None for col in _PROFILE_AND_FEES_PIVOT_COLUMNS},
         }
+        profile_row["objective"] = str(payload.get("objective")) if payload.get("objective") is not None else None
+        profile_row["jap_fund_warning"] = _to_int_bool(payload.get("jap_fund_warning"))
+        profile_row["theme_name"] = " | ".join(dict.fromkeys(theme_names)) if theme_names else None
+
         for item in payload.get("fund_and_profile", []) if isinstance(payload.get("fund_and_profile"), list) else []:
             if not isinstance(item, dict):
                 continue
             field_name = item.get("name")
-            if field_name not in _PROFILE_FEES_FIELD_COLUMN_TYPES:
+            if field_name not in _PROFILE_AND_FEES_FIELD_COLUMN_TYPES:
                 continue
             value = item.get("value")
-            column_name, value_type = _PROFILE_FEES_FIELD_COLUMN_TYPES[field_name]
+            column_name, value_type = _PROFILE_AND_FEES_FIELD_COLUMN_TYPES[field_name]
 
             if field_name == "Total Net Assets (Month End)":
                 net_assets_value, net_assets_date = _split_total_net_assets_value(value)
@@ -1558,65 +1633,59 @@ class FundamentalsStore:
                 else:
                     profile_row[column_name] = parsed_date
 
-        self._upsert_row(conn, "profile_fees_fund_profile_fields", profile_row, ["conid", "effective_at"])
+        self._upsert_row(conn, "profile_and_fees", profile_row, ["conid", "effective_at"])
 
         report_rows = []
         for report in payload.get("reports", []) if isinstance(payload.get("reports"), list) else []:
             if not isinstance(report, dict):
                 continue
-            report_name = report.get("name")
-            report_as_of = _to_iso_date(report.get("as_of_date"))
+            report_row = {
+                "conid": str(conid),
+                "effective_at": str(effective_at),
+                "report_name": report.get("name"),
+                "report_as_of_date": _to_iso_date(report.get("as_of_date")),
+                **{col: None for col in _PROFILE_AND_FEES_REPORT_PIVOT_COLUMNS},
+            }
             fields = report.get("fields", []) if isinstance(report.get("fields"), list) else []
             for field in fields:
                 if not isinstance(field, dict):
                     continue
-                value = field.get("value")
-                report_rows.append(
-                    {
-                        "conid": str(conid),
-                        "effective_at": str(effective_at),
-                        "report_name": report_name,
-                        "report_as_of_date": report_as_of,
-                        "field_name": field.get("name") or field.get("name_tag"),
-                        "field_value_text": str(value) if value is not None else None,
-                        "field_value_num": _parse_number(value, percent_as_fraction=True),
-                        "is_summary": _to_int_bool(field.get("is_summary")),
-                    }
-                )
-        self._insert_rows(conn, "profile_fees_report_fields", report_rows)
-
-        expense_rows = []
-        for item in payload.get("expenses_allocation", []) if isinstance(payload.get("expenses_allocation"), list) else []:
-            if not isinstance(item, dict):
+                field_name = field.get("name") or field.get("name_tag")
+                column_name = _PROFILE_AND_FEES_REPORT_FIELD_COLUMN_TYPES.get(field_name)
+                if column_name is None and field_name:
+                    normalized = _sanitize_segment(field_name)
+                    if normalized in _PROFILE_AND_FEES_REPORT_PIVOT_COLUMNS:
+                        column_name = normalized
+                if column_name is None:
+                    continue
+                report_row[column_name] = _parse_number(field.get("value"), percent_as_fraction=True)
+            if not any(report_row.get(col) is not None for col in _PROFILE_AND_FEES_REPORT_PIVOT_COLUMNS):
                 continue
-            expense_rows.append(
-                {
-                    "conid": str(conid),
-                    "effective_at": str(effective_at),
-                    "expense_name": item.get("name"),
-                    "ratio_text": str(item.get("ratio")) if item.get("ratio") is not None else None,
-                    "value_num": _parse_number(item.get("value"), percent_as_fraction=True),
-                }
-            )
-        self._insert_rows(conn, "profile_fees_expense_allocations", expense_rows)
+            report_rows.append(report_row)
+        self._insert_rows(conn, "profile_and_fees_reports", report_rows)
 
-        theme_rows = []
-        themes = payload.get("themes", []) if isinstance(payload.get("themes"), list) else []
-        for theme in themes:
-            if isinstance(theme, dict):
-                theme_name = theme.get("name") or theme.get("title") or theme.get("theme")
-            else:
-                theme_name = str(theme) if theme is not None else None
-            if not theme_name:
-                continue
-            theme_rows.append(
-                {
-                    "conid": str(conid),
-                    "effective_at": str(effective_at),
-                    "theme_name": theme_name,
-                }
-            )
-        self._insert_rows(conn, "profile_fees_themes", theme_rows)
+        mstar = payload.get("mstar")
+        if isinstance(mstar, dict):
+            stylebox_row = {
+                "conid": str(conid),
+                "effective_at": str(effective_at),
+                **{col: 0 for col in _PROFILE_AND_FEES_STYLEBOX_COLUMNS},
+            }
+            hist = mstar.get("hist")
+            if isinstance(hist, list):
+                for pair in hist:
+                    if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                        continue
+                    try:
+                        x_idx = int(pair[0])
+                        y_idx = int(pair[1])
+                    except Exception:
+                        continue
+                    column_name = _PROFILE_AND_FEES_STYLEBOX_COORD_COLUMNS.get((x_idx, y_idx))
+                    if column_name is None:
+                        continue
+                    stylebox_row[column_name] = 1
+            self._upsert_row(conn, "profile_and_fees_stylebox", stylebox_row, ["conid", "effective_at"])
 
     def _upsert_holdings(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
         self._upsert_snapshot_row(
@@ -3035,7 +3104,8 @@ class FundamentalsStore:
             tables = [
                 "products",
                 "raw_payload_blobs",
-                "profile_fees_snapshots",
+                "profile_and_fees_snapshots",
+                "profile_and_fees_stylebox",
                 "holdings_snapshots",
                 "ratios_snapshots",
                 "lipper_ratings_snapshots",
