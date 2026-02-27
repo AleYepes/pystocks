@@ -226,6 +226,28 @@ _HOLDINGS_MATURITY_COLUMNS = (
     "maturity_other",
 )
 
+_MORNINGSTAR_SUMMARY_COLUMNS = (
+    "medalist_rating",
+    "process",
+    "people",
+    "parent",
+    "morningstar_rating",
+    "sustainability_rating",
+    "category",
+    "category_index",
+)
+
+_MORNINGSTAR_SUMMARY_ID_TO_COLUMN = {
+    "medalist_rating": "medalist_rating",
+    "process": "process",
+    "people": "people",
+    "parent": "parent",
+    "morningstar_rating": "morningstar_rating",
+    "sustainability_rating": "sustainability_rating",
+    "category": "category",
+    "category_index": "category_index",
+}
+
 
 def _sanitize_segment(value):
     segment = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
@@ -704,7 +726,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS profile_and_fees_reports (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     report_name TEXT,
@@ -899,7 +920,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS ratios_metrics (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     section TEXT,
@@ -933,7 +953,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS lipper_ratings_values (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     period TEXT,
@@ -976,7 +995,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS dividends_industry_metrics (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     metric_id TEXT,
@@ -1001,28 +1019,26 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS morningstar_summary (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    metric_id TEXT,
-                    title TEXT,
-                    value_text TEXT,
-                    value_num REAL,
-                    publish_date TEXT,
-                    q INTEGER,
+                    medalist_rating TEXT,
+                    process TEXT,
+                    people TEXT,
+                    parent TEXT,
+                    morningstar_rating REAL,
+                    sustainability_rating TEXT,
+                    category TEXT,
+                    category_index TEXT,
+                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
                 CREATE TABLE IF NOT EXISTS morningstar_commentary (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     item_id TEXT,
-                    title TEXT,
-                    subtitle TEXT,
                     subsection_id TEXT,
                     publish_date TEXT,
-                    q INTEGER,
                     text TEXT,
                     author_name TEXT,
                     FOREIGN KEY (conid) REFERENCES products(conid)
@@ -1043,7 +1059,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS performance_metrics (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     section TEXT,
@@ -1092,7 +1107,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS ownership_owners_types (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     type TEXT,
@@ -1103,7 +1117,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS ownership_holders (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     holder_group TEXT,
@@ -1135,7 +1148,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS esg_nodes (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     node_path TEXT,
@@ -1190,7 +1202,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS sentiment_search_series_raw (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
@@ -1232,7 +1243,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS ownership_trade_log_series_raw (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
@@ -1270,7 +1280,6 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS dividends_events_series_raw (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
@@ -2075,40 +2084,45 @@ class FundamentalsStore:
 
         self._delete_children(conn, ["morningstar_summary", "morningstar_commentary"], conid, effective_at)
 
-        summary_rows = []
+        summary_row = {
+            "conid": str(conid),
+            "effective_at": str(effective_at),
+            **{col: None for col in _MORNINGSTAR_SUMMARY_COLUMNS},
+        }
         for item in payload.get("summary", []) if isinstance(payload.get("summary"), list) else []:
             if not isinstance(item, dict):
                 continue
-            summary_rows.append(
-                {
-                    "conid": str(conid),
-                    "effective_at": str(effective_at),
-                    "metric_id": _sanitize_segment(item.get("id") or item.get("title") or "metric"),
-                    "title": item.get("title"),
-                    "value_text": str(item.get("value")) if item.get("value") is not None else None,
-                    "value_num": _parse_number(item.get("value")),
-                    "publish_date": _to_iso_date(item.get("publish_date")),
-                    "q": _to_int_bool(item.get("q")),
-                }
-            )
-        self._insert_rows(conn, "morningstar_summary", summary_rows)
+            metric_id = _sanitize_segment(item.get("id") or item.get("title") or "metric")
+            column_name = _MORNINGSTAR_SUMMARY_ID_TO_COLUMN.get(metric_id)
+            if column_name is None:
+                continue
+            value = item.get("value")
+            if column_name == "morningstar_rating":
+                summary_row[column_name] = _parse_number(value)
+            else:
+                summary_row[column_name] = str(value) if value is not None else None
+        if any(summary_row.get(col) is not None for col in _MORNINGSTAR_SUMMARY_COLUMNS):
+            self._upsert_row(conn, "morningstar_summary", summary_row, ["conid", "effective_at"])
 
         commentary_rows = []
         for item in payload.get("commentary", []) if isinstance(payload.get("commentary"), list) else []:
             if not isinstance(item, dict):
                 continue
             author = item.get("author") if isinstance(item.get("author"), dict) else {}
+            text = item.get("text")
+            text = str(text) if text is not None else None
+            if text is not None:
+                text = text.strip()
+            if not text:
+                continue
             commentary_rows.append(
                 {
                     "conid": str(conid),
                     "effective_at": str(effective_at),
                     "item_id": item.get("id"),
-                    "title": item.get("title"),
-                    "subtitle": item.get("subtitle"),
                     "subsection_id": item.get("subsection_id"),
                     "publish_date": _to_iso_date(item.get("publish_date")),
-                    "q": _to_int_bool(item.get("q")),
-                    "text": item.get("text"),
+                    "text": text,
                     "author_name": author.get("name"),
                 }
             )
