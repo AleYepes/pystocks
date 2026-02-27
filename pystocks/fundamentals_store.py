@@ -943,7 +943,6 @@ class FundamentalsStore:
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    source_file TEXT,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     universe_count INTEGER,
@@ -1008,7 +1007,6 @@ class FundamentalsStore:
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    source_file TEXT,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     as_of_date TEXT,
@@ -1984,6 +1982,7 @@ class FundamentalsStore:
             {
                 "universe_count": len(universes),
             },
+            include_source_file=False,
         )
 
         self._delete_children(conn, ["lipper_ratings_values"], conid, effective_at)
@@ -2080,6 +2079,7 @@ class FundamentalsStore:
                 "as_of_date": _to_iso_date(payload.get("as_of_date") or payload.get("asOfDate")),
                 "q_full_report_id": payload.get("q_full_report_id"),
             },
+            include_source_file=False,
         )
 
         self._delete_children(conn, ["morningstar_summary", "morningstar_commentary"], conid, effective_at)

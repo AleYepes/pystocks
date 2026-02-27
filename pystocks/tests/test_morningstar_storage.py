@@ -83,6 +83,9 @@ def test_morningstar_summary_is_wide_and_commentary_is_filtered():
                 "Morningstar US Large-Mid TR USD",
             )
 
+            snapshot_cols = _table_columns(con, "morningstar_snapshots")
+            assert "source_file" not in snapshot_cols
+
             summary_cols = _table_columns(con, "morningstar_summary")
             assert "metric_id" not in summary_cols
             assert "title" not in summary_cols
@@ -128,8 +131,12 @@ def test_child_and_series_raw_tables_do_not_use_synthetic_id_columns():
         try:
             tables = [
                 "profile_and_fees_reports",
-                "ratios_metrics",
-                "lipper_ratings_values",
+                "ratios_ratios",
+                "ratios_financials",
+                "ratios_fixed_income",
+                "ratios_dividend",
+                "ratios_zscore",
+                "lipper_ratings",
                 "dividends_industry_metrics",
                 "morningstar_summary",
                 "morningstar_commentary",
@@ -143,7 +150,9 @@ def test_child_and_series_raw_tables_do_not_use_synthetic_id_columns():
                 "dividends_events_series_raw",
             ]
             for table in tables:
-                assert "id" not in _table_columns(con, table)
+                cols = _table_columns(con, table)
+                assert cols
+                assert "id" not in cols
         finally:
             con.close()
     finally:
