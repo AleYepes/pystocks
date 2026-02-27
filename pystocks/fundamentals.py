@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs
 from tqdm.asyncio import tqdm
@@ -38,6 +38,16 @@ def _load_conids_from_file(path):
 class FundamentalScraper:
     """Scrapes fundamental data from IBKR Portal API."""
     PERIODS_DESC = ["10Y", "5Y", "3Y", "1Y", "6M"]
+    PRICE_CHART_PERIOD_WINDOWS = [
+        ("1W", 14),
+        ("1M", 45),
+        ("3M", 120),
+        ("6M", 240),
+        ("1Y", 400),
+        ("3Y", 1200),
+        ("5Y", 2200),
+        ("10Y", 4000),
+    ]
     RESULT_ENDPOINT_FAMILIES = {
         "profile_and_fees": "mf_profile_and_fees",
         "holdings": "mf_holdings",
@@ -202,8 +212,29 @@ class FundamentalScraper:
         to_str = to_dt.strftime("%Y-%m-%d %H:%M")
         return f"sma/request?type=search&conid={conid}&from={from_str}&to={to_str}&bar_size=1D&tz=-60"
 
-    def _build_price_chart_endpoint(self, conid):
-        return f"mf_performance_chart/{conid}?chart_period=MAX"
+    def _select_price_chart_period(self, conid, as_of_date=None):
+        latest_effective_at = self.store.get_latest_price_series_effective_at(conid)
+        if latest_effective_at is None:
+            return "MAX"
+
+        as_of = as_of_date or datetime.now(timezone.utc).date()
+        if isinstance(as_of, datetime):
+            as_of = as_of.date()
+        if not isinstance(as_of, date):
+            as_of = datetime.now(timezone.utc).date()
+
+        missing_days = (as_of - latest_effective_at).days
+        if missing_days <= 0:
+            return "1W"
+
+        target_days = missing_days + 7
+        for period, max_days in self.PRICE_CHART_PERIOD_WINDOWS:
+            if target_days <= max_days:
+                return period
+        return "MAX"
+
+    def _build_price_chart_endpoint(self, conid, chart_period="MAX"):
+        return f"mf_performance_chart/{conid}?chart_period={chart_period}"
 
     def _build_esg_endpoint(self, conid):
         if self.esg_account_id:
@@ -268,6 +299,7 @@ class FundamentalScraper:
             logger.info("Skipping fanout for conid=%s: %s", conid, reason)
             return None
 
+        price_chart_period = self._select_price_chart_period(conid)
         fixed_task_items = [
             ("profile_and_fees", self.fetch_endpoint(client, f"mf_profile_and_fees/{conid}?sustainability=UK&lang=en")),
             ("holdings", self.fetch_endpoint(client, f"mf_holdings/{conid}")),
@@ -275,7 +307,7 @@ class FundamentalScraper:
             ("lipper_ratings", self.fetch_endpoint(client, f"mf_lip_ratings/{conid}")),
             ("dividends", self.fetch_endpoint(client, f"dividends/{conid}")),
             ("morningstar", self.fetch_endpoint(client, f"mstar/fund/detail?conid={conid}")),
-            ("price_chart", self.fetch_endpoint(client, self._build_price_chart_endpoint(conid))),
+            ("price_chart", self.fetch_endpoint(client, self._build_price_chart_endpoint(conid, chart_period=price_chart_period))),
             ("sentiment_search", self.fetch_endpoint(client, self._build_sma_search_endpoint(conid))),
             ("ownership", self.fetch_endpoint(client, f"ownership/{conid}")),
             ("esg", self.fetch_endpoint(client, self._build_esg_endpoint(conid))),
@@ -307,6 +339,8 @@ class FundamentalScraper:
             )
             if include_payload:
                 combined_data[name] = data
+                if name == "price_chart":
+                    combined_data["price_chart_period"] = price_chart_period
                 if has_payload:
                     self._record_useful_payload(self.RESULT_ENDPOINT_FAMILIES.get(name, name))
         

@@ -66,7 +66,6 @@ checks = [
     'price_chart_snapshots',
     'sentiment_search_snapshots',
     'price_chart_series_raw',
-    'price_chart_series_latest',
     'sentiment_search_series_raw',
     'sentiment_search_series_latest',
     'ownership_trade_log_series_raw',
@@ -89,11 +88,8 @@ print('ownership_no_change_latest', con.execute("""
 SELECT COUNT(*) FROM ownership_trade_log_series_latest
 WHERE upper(action) = 'NO CHANGE'
 """).fetchone()[0])
-print('price_raw_minus_latest', con.execute("""
-SELECT
-  (SELECT COUNT(*) FROM price_chart_series_raw)
-  -
-  (SELECT COUNT(*) FROM price_chart_series_latest)
+print('price_series_rows', con.execute("""
+SELECT COUNT(*) FROM price_chart_series_raw
 """).fetchone()[0])
 con.close()
 PY
@@ -101,7 +97,7 @@ PY
 
 Expected:
 - `ownership_no_change_latest = 0`
-- `price_raw_minus_latest >= 0`
+- `price_series_rows >= 0`
 
 ## 4) Recovery paths
 1. `No products found in SQLite products table`:

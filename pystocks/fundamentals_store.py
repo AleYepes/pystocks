@@ -501,21 +501,22 @@ def _extract_price_chart_rows(payload):
     for point in points:
         if not isinstance(point, dict):
             continue
-        trade_date = _parse_date_candidate(point.get("x"))
-        if trade_date is None:
-            trade_date = _parse_date_candidate(point.get("debugY"))
+        x_date = _parse_date_candidate(point.get("x"))
+        debug_date = _parse_date_candidate(point.get("debugY"))
+        trade_date = x_date or debug_date
 
         row = {
-            "trade_date": trade_date.isoformat() if trade_date is not None else None,
-            "timestamp_ms": point.get("x"),
+            "effective_at": trade_date.isoformat() if trade_date is not None else None,
             "price": point.get("y"),
             "open": point.get("open"),
             "high": point.get("high"),
             "low": point.get("low"),
             "close": point.get("close"),
-            "debug_y": point.get("debugY"),
         }
         if any(v is not None for v in row.values()):
+            row["debug_mismatch"] = int(
+                x_date is not None and debug_date is not None and x_date != debug_date
+            )
             rows.append(row)
 
     return rows
@@ -1148,7 +1149,6 @@ class FundamentalsStore:
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    source_file TEXT,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     points_count INTEGER,
@@ -1176,40 +1176,14 @@ class FundamentalsStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS price_chart_series_raw (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    observed_at TEXT NOT NULL,
-                    payload_hash TEXT NOT NULL,
-                    inserted_at TEXT NOT NULL,
-                    row_key TEXT NOT NULL,
-                    trade_date TEXT,
-                    timestamp_ms INTEGER,
                     price REAL,
                     open REAL,
                     high REAL,
                     low REAL,
                     close REAL,
-                    debug_y INTEGER,
-                    FOREIGN KEY (conid) REFERENCES products(conid)
-                );
-
-                CREATE TABLE IF NOT EXISTS price_chart_series_latest (
-                    conid TEXT NOT NULL,
-                    row_key TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    observed_at TEXT NOT NULL,
-                    payload_hash TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    trade_date TEXT,
-                    timestamp_ms INTEGER,
-                    price REAL,
-                    open REAL,
-                    high REAL,
-                    low REAL,
-                    close REAL,
-                    debug_y INTEGER,
-                    PRIMARY KEY (conid, row_key),
+                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -1357,7 +1331,7 @@ class FundamentalsStore:
                 CREATE INDEX IF NOT EXISTS idx_price_snapshots_hash ON price_chart_snapshots(payload_hash);
                 CREATE INDEX IF NOT EXISTS idx_sentiment_snapshots_hash ON sentiment_search_snapshots(payload_hash);
 
-                CREATE INDEX IF NOT EXISTS idx_price_latest_trade_date ON price_chart_series_latest(trade_date);
+                CREATE INDEX IF NOT EXISTS idx_price_series_raw_effective_at ON price_chart_series_raw(effective_at);
                 CREATE INDEX IF NOT EXISTS idx_sentiment_latest_trade_date ON sentiment_search_series_latest(trade_date);
                 CREATE INDEX IF NOT EXISTS idx_ownership_latest_trade_date ON ownership_trade_log_series_latest(trade_date);
                 CREATE INDEX IF NOT EXISTS idx_dividends_latest_trade_date ON dividends_events_series_latest(event_date);
@@ -1446,6 +1420,25 @@ class FundamentalsStore:
                 return None
             raw = self._decompressor.decompress(row["payload_blob"])
             return json.loads(raw.decode("utf-8"))
+
+    def get_latest_price_series_effective_at(self, conid):
+        try:
+            with self._get_conn() as conn:
+                row = conn.execute(
+                    """
+                    SELECT MAX(effective_at) AS max_effective_at
+                    FROM price_chart_series_raw
+                    WHERE conid = ?
+                    """,
+                    [str(conid)],
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+
+        if row is None:
+            return None
+        parsed = _parse_date_candidate(row["max_effective_at"])
+        return parsed
 
     def _resolve_effective_dates(self, endpoint_payloads, _observed_at):
         ratios_payload = endpoint_payloads.get("ratios")
@@ -2293,7 +2286,15 @@ class FundamentalsStore:
 
     def _upsert_price_chart_snapshot(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
         rows = _extract_price_chart_rows(payload)
-        dates = [r.get("trade_date") for r in rows if r.get("trade_date")]
+        dates = [r.get("effective_at") for r in rows if r.get("effective_at")]
+        debug_mismatch_count = sum(int(r.get("debug_mismatch") or 0) for r in rows)
+        if debug_mismatch_count > 0:
+            logger.warning(
+                "price_chart date mismatch between x and debugY: conid=%s effective_at=%s mismatches=%s",
+                str(conid),
+                str(effective_at),
+                int(debug_mismatch_count),
+            )
         min_date = min(dates) if dates else None
         max_date = max(dates) if dates else None
 
@@ -2311,6 +2312,7 @@ class FundamentalsStore:
                 "min_trade_date": min_date,
                 "max_trade_date": max_date,
             },
+            include_source_file=False,
         )
 
     def _upsert_sentiment_snapshot(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
@@ -2362,130 +2364,39 @@ class FundamentalsStore:
         latest_upserted = 0
 
         for row in rows:
-            row_key = row.get("trade_date") or row.get("timestamp_ms") or row.get("debug_y")
-            row_key = f"price_chart|{row_key}"
+            point_effective_at = row.get("effective_at")
+            if not point_effective_at:
+                continue
 
             conn.execute(
                 """
                 INSERT INTO price_chart_series_raw (
                     conid,
                     effective_at,
-                    observed_at,
-                    payload_hash,
-                    inserted_at,
-                    row_key,
-                    trade_date,
-                    timestamp_ms,
                     price,
                     open,
                     high,
                     low,
-                    close,
-                    debug_y
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    close
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(conid, effective_at) DO UPDATE SET
+                    price = excluded.price,
+                    open = excluded.open,
+                    high = excluded.high,
+                    low = excluded.low,
+                    close = excluded.close
                 """,
                 [
                     str(conid),
-                    str(effective_at),
-                    str(observed_at),
-                    str(payload_hash),
-                    inserted_at,
-                    str(row_key),
-                    row.get("trade_date"),
-                    row.get("timestamp_ms"),
+                    str(point_effective_at),
                     _parse_number(row.get("price")),
                     _parse_number(row.get("open")),
                     _parse_number(row.get("high")),
                     _parse_number(row.get("low")),
                     _parse_number(row.get("close")),
-                    int(row.get("debug_y")) if row.get("debug_y") is not None else None,
                 ],
             )
             raw_written += 1
-
-            existing = conn.execute(
-                """
-                SELECT effective_at, observed_at, payload_hash
-                FROM price_chart_series_latest
-                WHERE conid = ? AND row_key = ?
-                """,
-                [str(conid), str(row_key)],
-            ).fetchone()
-
-            if existing is None:
-                conn.execute(
-                    """
-                    INSERT INTO price_chart_series_latest (
-                        conid,
-                        row_key,
-                        effective_at,
-                        observed_at,
-                        payload_hash,
-                        updated_at,
-                        trade_date,
-                        timestamp_ms,
-                        price,
-                        open,
-                        high,
-                        low,
-                        close,
-                        debug_y
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        str(conid),
-                        str(row_key),
-                        str(effective_at),
-                        str(observed_at),
-                        str(payload_hash),
-                        inserted_at,
-                        row.get("trade_date"),
-                        row.get("timestamp_ms"),
-                        _parse_number(row.get("price")),
-                        _parse_number(row.get("open")),
-                        _parse_number(row.get("high")),
-                        _parse_number(row.get("low")),
-                        _parse_number(row.get("close")),
-                        int(row.get("debug_y")) if row.get("debug_y") is not None else None,
-                    ],
-                )
-                latest_upserted += 1
-            elif self._series_is_newer(effective_at, observed_at, payload_hash, existing):
-                conn.execute(
-                    """
-                    UPDATE price_chart_series_latest
-                    SET effective_at = ?,
-                        observed_at = ?,
-                        payload_hash = ?,
-                        updated_at = ?,
-                        trade_date = ?,
-                        timestamp_ms = ?,
-                        price = ?,
-                        open = ?,
-                        high = ?,
-                        low = ?,
-                        close = ?,
-                        debug_y = ?
-                    WHERE conid = ? AND row_key = ?
-                    """,
-                    [
-                        str(effective_at),
-                        str(observed_at),
-                        str(payload_hash),
-                        inserted_at,
-                        row.get("trade_date"),
-                        row.get("timestamp_ms"),
-                        _parse_number(row.get("price")),
-                        _parse_number(row.get("open")),
-                        _parse_number(row.get("high")),
-                        _parse_number(row.get("low")),
-                        _parse_number(row.get("close")),
-                        int(row.get("debug_y")) if row.get("debug_y") is not None else None,
-                        str(conid),
-                        str(row_key),
-                    ],
-                )
-                latest_upserted += 1
 
         return raw_written, latest_upserted
 
