@@ -515,7 +515,9 @@ def _extract_price_chart_rows(payload):
         }
         if any(v is not None for v in row.values()):
             row["debug_mismatch"] = int(
-                x_date is not None and debug_date is not None and x_date != debug_date
+                x_date is not None
+                and debug_date is not None
+                and abs((x_date - debug_date).days) > 1
             )
             rows.append(row)
 
