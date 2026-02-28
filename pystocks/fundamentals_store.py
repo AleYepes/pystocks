@@ -1099,29 +1099,21 @@ class FundamentalsStore:
                     payload_hash TEXT NOT NULL,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    title_vs TEXT,
                     PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid),
                     FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
                 );
 
-                CREATE TABLE IF NOT EXISTS performance_metrics (
+                CREATE TABLE IF NOT EXISTS performance (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     section TEXT,
                     metric_id TEXT,
-                    metric_name TEXT,
-                    name_tag_arg TEXT,
                     value_num REAL,
-                    value_fmt TEXT,
                     vs_num REAL,
                     min_num REAL,
                     max_num REAL,
                     avg_num REAL,
-                    percentile_num REAL,
-                    min_fmt TEXT,
-                    max_fmt TEXT,
-                    avg_fmt TEXT,
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -2176,12 +2168,10 @@ class FundamentalsStore:
             payload_hash,
             source_file,
             now_iso,
-            {
-                "title_vs": payload.get("title_vs"),
-            },
+            {},
         )
 
-        self._delete_children(conn, ["performance_metrics"], conid, effective_at)
+        self._delete_children(conn, ["performance"], conid, effective_at)
 
         rows = []
         for section in ("cumulative", "annualized", "yield", "risk", "statistic"):
@@ -2195,21 +2185,14 @@ class FundamentalsStore:
                         "effective_at": str(effective_at),
                         "section": section,
                         "metric_id": _sanitize_segment(item.get("name_tag") or item.get("id") or item.get("name")),
-                        "metric_name": item.get("name"),
-                        "name_tag_arg": str(item.get("name_tag_arg")) if item.get("name_tag_arg") is not None else None,
                         "value_num": _parse_number(item.get("value")),
-                        "value_fmt": item.get("value_fmt"),
                         "vs_num": _parse_number(item.get("vs")),
                         "min_num": _parse_number(item.get("min")),
                         "max_num": _parse_number(item.get("max")),
                         "avg_num": _parse_number(item.get("avg")),
-                        "percentile_num": _parse_number(item.get("percentile")),
-                        "min_fmt": item.get("min_fmt"),
-                        "max_fmt": item.get("max_fmt"),
-                        "avg_fmt": item.get("avg_fmt"),
                     }
                 )
-        self._insert_rows(conn, "performance_metrics", rows)
+        self._insert_rows(conn, "performance", rows)
 
     def _upsert_ownership(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
         snapshot = normalize_ownership_snapshot(payload)
