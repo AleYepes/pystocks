@@ -1,6 +1,6 @@
 # Pystocks
 
-This repository is an ETF ingestion and analysis pipeline.
+This repository is an ETF ingestion and factor analysis pipeline to calculate efficient frontier portfolios.
 
 ## Refactoring from the ground up
 - Use `pystocks/` modules as the new production source of truth.

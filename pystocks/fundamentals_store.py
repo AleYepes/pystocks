@@ -256,6 +256,27 @@ _MORNINGSTAR_SUMMARY_ID_TO_COLUMN = {
     "category_index": "category_index",
 }
 
+_ESG_CODE_TO_COLUMN = {
+    "TRESGS": "esg_overall_score",
+    "TRESGCS": "esg_combined_score",
+    "TRESGCCS": "esg_controversies_score",
+    "TRESGENS": "environmental_overall_score",
+    "TRESGENRRS": "environmental_resource_use_score",
+    "TRESGENERS": "environmental_emissions_score",
+    "TRESGENPIS": "environmental_innovation_score",
+    "TRESGSOS": "social_overall_score",
+    "TRESGSOWOS": "social_workforce_score",
+    "TRESGSOHRS": "social_human_rights_score",
+    "TRESGSOCOS": "social_community_score",
+    "TRESGSOPRS": "social_product_responsibility_score",
+    "TRESGCGS": "governance_overall_score",
+    "TRESGCGBDS": "governance_management_score",
+    "TRESGCGSRS": "governance_shareholders_score",
+    "TRESGCGVSS": "governance_csr_strategy_score",
+}
+
+_ESG_SCORE_COLUMNS = tuple(_ESG_CODE_TO_COLUMN.values())
+
 
 def _sanitize_segment(value):
     segment = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
@@ -1175,23 +1196,33 @@ class FundamentalsStore:
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     as_of_date TEXT,
-                    coverage REAL,
-                    source TEXT,
-                    symbol TEXT,
-                    no_settings INTEGER,
                     PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid),
                     FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
                 );
 
-                CREATE TABLE IF NOT EXISTS esg_nodes (
+                CREATE TABLE IF NOT EXISTS esg (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    node_path TEXT,
-                    parent_path TEXT,
-                    depth INTEGER,
-                    node_name TEXT,
-                    node_value REAL,
+                    coverage REAL,
+                    source TEXT,
+                    esg_overall_score REAL,
+                    esg_combined_score REAL,
+                    esg_controversies_score REAL,
+                    environmental_overall_score REAL,
+                    environmental_resource_use_score REAL,
+                    environmental_emissions_score REAL,
+                    environmental_innovation_score REAL,
+                    social_overall_score REAL,
+                    social_workforce_score REAL,
+                    social_human_rights_score REAL,
+                    social_community_score REAL,
+                    social_product_responsibility_score REAL,
+                    governance_overall_score REAL,
+                    governance_management_score REAL,
+                    governance_shareholders_score REAL,
+                    governance_csr_strategy_score REAL,
+                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -2285,41 +2316,33 @@ class FundamentalsStore:
             now_iso,
             {
                 "as_of_date": _to_iso_date(payload.get("as_of_date") or payload.get("asOfDate")),
-                "coverage": _parse_number(payload.get("coverage")),
-                "source": payload.get("source"),
-                "symbol": payload.get("symbol"),
-                "no_settings": _to_int_bool(payload.get("no_settings")),
             },
         )
 
-        self._delete_children(conn, ["esg_nodes"], conid, effective_at)
+        values_by_column = {column: None for column in _ESG_SCORE_COLUMNS}
 
-        rows = []
-
-        def walk(nodes, parent_path, depth):
+        def walk(nodes):
             if not isinstance(nodes, list):
                 return
-            for idx, node in enumerate(nodes):
+            for node in nodes:
                 if not isinstance(node, dict):
                     continue
-                name = str(node.get("name") or f"node_{idx}")
-                seg = f"{idx}_{_sanitize_segment(name)}"
-                node_path = f"{parent_path}/{seg}" if parent_path else seg
-                rows.append(
-                    {
-                        "conid": str(conid),
-                        "effective_at": str(effective_at),
-                        "node_path": node_path,
-                        "parent_path": parent_path if parent_path else None,
-                        "depth": depth,
-                        "node_name": name,
-                        "node_value": _parse_number(node.get("value")),
-                    }
-                )
-                walk(node.get("children"), node_path, depth + 1)
+                name = str(node.get("name") or "").strip()
+                target_column = _ESG_CODE_TO_COLUMN.get(name)
+                if target_column is not None:
+                    values_by_column[target_column] = _parse_number(node.get("value"))
+                walk(node.get("children"))
 
-        walk(payload.get("content"), "", 0)
-        self._insert_rows(conn, "esg_nodes", rows)
+        walk(payload.get("content"))
+
+        row = {
+            "conid": str(conid),
+            "effective_at": str(effective_at),
+            "coverage": _parse_number(payload.get("coverage")),
+            "source": payload.get("source"),
+        }
+        row.update(values_by_column)
+        self._upsert_row(conn, "esg", row, ["conid", "effective_at"])
 
     def _upsert_price_chart_snapshot(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
         rows = _extract_price_chart_rows(payload)

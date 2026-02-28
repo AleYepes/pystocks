@@ -143,7 +143,7 @@ def test_child_and_series_raw_tables_do_not_use_synthetic_id_columns():
                 "performance",
                 "ownership_owners_types",
                 "ownership_holders",
-                "esg_nodes",
+                "esg",
                 "price_chart_series_raw",
                 "sentiment_search_series_raw",
                 "ownership_trade_log_series_raw",
