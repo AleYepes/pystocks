@@ -102,13 +102,6 @@ class IBKRSession:
         self._save_login_config(entered_username, entered_password)
         return entered_username, entered_password
 
-    def ensure_login_credentials(self, force_prompt=False):
-        username, password = self._get_login_credentials(
-            prompt_if_missing=True,
-            force_prompt=force_prompt,
-        )
-        return bool(username and password)
-
     async def _dismiss_cookie_modal_if_present(self, page):
         for selector in ("#gdpr-reject-all", "#btn_accept_cookies"):
             try:
@@ -242,7 +235,7 @@ class IBKRSession:
 
             submitted = await self._submit_login_credentials(page, username, password)
             if not submitted:
-                return False, False
+                return False, None
 
             loop = asyncio.get_running_loop()
             deadline = loop.time() + (timeout_ms / 1000.0)
@@ -250,19 +243,18 @@ class IBKRSession:
             while loop.time() < deadline:
                 error_text = await self._login_error_text(page)
                 if error_text and _LOGIN_ERROR_TEXT_RE.search(error_text):
-                    logger.warning(f"IBKR login rejected credentials: {error_text}")
-                    return False, True
+                    return False, error_text
 
                 state = await context.storage_state()
                 is_valid = await self._validate_state_payload(state, timeout_s=10.0)
                 if is_valid:
                     await context.storage_state(path=self.state_path)
                     logger.info(f"Login successful. Session state saved to {self.state_path}")
-                    return True, False
+                    return True, None
                 await asyncio.sleep(2)
 
             logger.error("Login timed out before authenticated API state was detected.")
-            return False, False
+            return False, None
         finally:
             await browser.close()
 
@@ -297,7 +289,7 @@ class IBKRSession:
 
                 logger.info("Credential login submitted. Waiting for authenticated session state.")
                 try:
-                    success, credentials_rejected = await self._run_login_attempt(
+                    success, rejection_reason = await self._run_login_attempt(
                         p,
                         username=username,
                         password=password,
@@ -310,16 +302,18 @@ class IBKRSession:
 
                 if success:
                     return True
-                if not credentials_rejected:
+                if not rejection_reason:
                     return False
 
                 self._delete_login_config()
                 attempts_left -= 1
+                warning_message = f"IBKR login rejected credentials: {rejection_reason}"
                 if attempts_left <= 0:
+                    logger.warning(warning_message)
                     break
 
                 force_prompt = True
-                logger.warning("Stored IBKR credentials were rejected. Enter credentials again.")
+                logger.warning(f"{warning_message}. Enter credentials again.")
 
             return False
 
@@ -327,7 +321,7 @@ class IBKRSession:
         """
         Interactive reauth flow used by long-running scrapers after 401/403.
         """
-        logger.warning("Attempting reauthentication. Complete login in the browser window.")
+        logger.info("Attempting reauthentication. Complete login in the browser window.")
         return await self.login(headless=headless, timeout_ms=timeout_ms, force_browser=True)
 
     def get_client(self):

@@ -449,9 +449,14 @@ async def main(
     
     scraper = FundamentalScraper()
     has_valid_session = await scraper.session.validate_auth_state()
-    if not has_valid_session and not scraper.session.ensure_login_credentials():
-        logger.error("IBKR credentials are required to authenticate the scraping session.")
-        return
+    if not has_valid_session:
+        authenticated = await scraper.session.login(
+            headless=reauth_headless,
+            force_browser=True,
+        )
+        if not authenticated:
+            logger.error("Unable to authenticate IBKR session. Aborting fundamentals scrape.")
+            return
 
     scraped_today = [] if force else get_scraped_conids()
     logger.info(f"Skipping {len(scraped_today)} instruments already scraped today.")
