@@ -47,3 +47,23 @@ def test_ratios_payload_is_useful_when_only_as_of_date_is_present():
         "zscore": [],
     }
     assert scraper._has_payload_data(payload, "ratios")
+
+
+def test_esg_endpoint_reloads_account_id_from_session_state():
+    class DummySession:
+        def __init__(self):
+            self.account = None
+
+        def get_primary_account_id(self):
+            return self.account
+
+    scraper = _scraper()
+    scraper.session = DummySession()
+    scraper.esg_account_id = None
+
+    endpoint_without_account = scraper._build_esg_endpoint("564156940")
+    assert endpoint_without_account == "impact/esg/564156940"
+
+    scraper.session.account = "U19746488"
+    endpoint_with_account = scraper._build_esg_endpoint("564156940")
+    assert endpoint_with_account == "impact/esg/564156940?accounts=U19746488"

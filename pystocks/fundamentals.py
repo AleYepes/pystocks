@@ -237,6 +237,10 @@ class FundamentalScraper:
         return f"mf_performance_chart/{conid}?chart_period={chart_period}"
 
     def _build_esg_endpoint(self, conid):
+        account_id = self.session.get_primary_account_id()
+        if account_id:
+            self.esg_account_id = account_id
+
         if self.esg_account_id:
             return f"impact/esg/{conid}?accounts={self.esg_account_id}"
         return f"impact/esg/{conid}"
@@ -444,6 +448,10 @@ async def main(
     logger.setLevel(log_level)
     
     scraper = FundamentalScraper()
+    has_valid_session = await scraper.session.validate_auth_state()
+    if not has_valid_session and not scraper.session.ensure_login_credentials():
+        logger.error("IBKR credentials are required to authenticate the scraping session.")
+        return
 
     scraped_today = [] if force else get_scraped_conids()
     logger.info(f"Skipping {len(scraped_today)} instruments already scraped today.")
@@ -524,8 +532,7 @@ async def main(
                         processed_conids += 1
                         pbar.update(1)
                         await asyncio.sleep(0.1)
-            except FileNotFoundError as e:
-                logger.warning(str(e))
+            except FileNotFoundError:
                 needs_reauth = True
             except Exception as e:
                 logger.exception(f"Unexpected error: {e}")

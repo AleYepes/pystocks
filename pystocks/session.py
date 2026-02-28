@@ -1,21 +1,26 @@
 import asyncio
 import re
 import logging
+import getpass
 from playwright.async_api import async_playwright
 import httpx
 import json
+from pathlib import Path
 from .config import SESSION_STATE_PATH
 
 logger = logging.getLogger(__name__)
 
-_ACCOUNT_PATH_RE = re.compile(r"/portal\.proxy/v1/portal/(?:portfolio2|acesws)/([A-Za-z0-9]+)")
+_ACCOUNTS_ACESWS_PATH_RE = re.compile(r"/portal\.proxy/v1/portal/acesws/([^/?]+)")
+_ACCOUNTS_PORTFOLIO2_PATH_RE = re.compile(r"/portal\.proxy/v1/portal/portfolio2/([^/?]+)")
 _ACCOUNT_ID_RE = re.compile(r"^(?:U|DU|DF|F)?\d+$")
+_LOGIN_ERROR_TEXT_RE = re.compile(r"(invalid|incorrect|wrong|failed|error)", re.IGNORECASE)
 
 
 class IBKRSession:
     """Manages an authenticated session for the IBKR Client Portal."""
-    def __init__(self, state_path=SESSION_STATE_PATH):
-        self.state_path = state_path
+    def __init__(self, state_path=SESSION_STATE_PATH, credentials_path=None):
+        self.state_path = Path(state_path)
+        self.credentials_path = Path(credentials_path) if credentials_path else self.state_path.with_name("login_credentials.json")
         self.portal_url = "https://www.interactivebrokers.ie/portal/"
         self.base_url = "https://www.interactivebrokers.ie"
         self._headers = {
@@ -45,29 +50,142 @@ class IBKRSession:
                 cookies[name] = value
         return cookies
 
+    def _load_login_config(self):
+        if not self.credentials_path.exists():
+            return None
+        try:
+            with open(self.credentials_path, "r") as f:
+                payload = json.load(f)
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
+
+    def _save_login_config(self, username, password):
+        self.credentials_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "username": str(username),
+            "password": str(password),
+        }
+        with open(self.credentials_path, "w") as f:
+            json.dump(payload, f, indent=2)
+
+    def _delete_login_config(self):
+        try:
+            self.credentials_path.unlink()
+        except FileNotFoundError:
+            return
+
+    def _get_login_credentials(self, prompt_if_missing=True, force_prompt=False):
+        if not force_prompt:
+            config = self._load_login_config()
+            username = str((config or {}).get("username") or "").strip()
+            password = str((config or {}).get("password") or "").strip()
+            if username and password:
+                return username, password
+
+        if not prompt_if_missing:
+            return None, None
+
+        try:
+            entered_username = input("IBKR username: ").strip()
+            entered_password = getpass.getpass("IBKR password: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            logger.warning("Credential input interrupted.")
+            return None, None
+
+        if not entered_username or not entered_password:
+            logger.warning("Username/password missing.")
+            return None, None
+
+        self._save_login_config(entered_username, entered_password)
+        return entered_username, entered_password
+
+    def ensure_login_credentials(self, force_prompt=False):
+        username, password = self._get_login_credentials(
+            prompt_if_missing=True,
+            force_prompt=force_prompt,
+        )
+        return bool(username and password)
+
+    async def _dismiss_cookie_modal_if_present(self, page):
+        for selector in ("#gdpr-reject-all", "#btn_accept_cookies"):
+            try:
+                await page.wait_for_selector(selector, state="visible", timeout=3000)
+                await page.click(selector)
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                await page.wait_for_timeout(500)
+                return
+            except Exception:
+                continue
+
+    async def _login_error_text(self, page):
+        selectors = [
+            ".xyzblock-error .xyz-errormessage",
+            ".alert-danger",
+            ".invalid-feedback",
+        ]
+        for selector in selectors:
+            try:
+                matches = await page.query_selector_all(selector)
+            except Exception:
+                continue
+            for match in matches:
+                try:
+                    if not await match.is_visible():
+                        continue
+                    text = (await match.inner_text() or "").strip()
+                    if text:
+                        return text
+                except Exception:
+                    continue
+        return None
+
+    async def _submit_login_credentials(self, page, username, password):
+        try:
+            await self._dismiss_cookie_modal_if_present(page)
+            await page.wait_for_selector("input[name='username']", state="visible", timeout=30000)
+            await page.fill("input[name='username']", username)
+            await page.fill("input[name='password']", password)
+            await page.click("form.xyzform-username button[type='submit']")
+            return True
+        except Exception as e:
+            logger.warning(f"Automatic credential submit failed: {e}")
+            return False
+
     def get_primary_account_id(self):
         state = self._load_state()
         if not state:
             return None
 
-        candidates = []
+        acesws_candidates = []
+        portfolio2_candidates = []
         for cookie in state.get("cookies", []):
             path = cookie.get("path")
             if not isinstance(path, str):
                 continue
-            m = _ACCOUNT_PATH_RE.search(path)
-            if not m:
+            m_acesws = _ACCOUNTS_ACESWS_PATH_RE.search(path)
+            if m_acesws:
+                account_id = m_acesws.group(1)
+                if _ACCOUNT_ID_RE.match(account_id):
+                    acesws_candidates.append(account_id)
                 continue
-            account_id = m.group(1)
-            if _ACCOUNT_ID_RE.match(account_id):
-                candidates.append(account_id)
 
-        if not candidates:
-            return None
+            m_portfolio2 = _ACCOUNTS_PORTFOLIO2_PATH_RE.search(path)
+            if m_portfolio2:
+                account_id = m_portfolio2.group(1)
+                if _ACCOUNT_ID_RE.match(account_id):
+                    portfolio2_candidates.append(account_id)
 
-        unique = sorted(set(candidates))
-        unique.sort(key=lambda x: (0 if x.startswith("U") else 1, -len(x), x))
-        return unique[0]
+        def choose(candidates):
+            if not candidates:
+                return None
+            unique = sorted(set(candidates))
+            unique.sort(key=lambda x: (0 if x.startswith("U") else 1, -len(x), x))
+            return unique[0]
+
+        return choose(acesws_candidates) or choose(portfolio2_candidates)
 
     async def _validate_state_payload(self, state, timeout_s=20.0):
         """
@@ -115,10 +233,49 @@ class IBKRSession:
         state = self._load_state()
         return await self._validate_state_payload(state, timeout_s=timeout_s)
 
-    async def login(self, headless=False, timeout_ms=180000, force_browser=False):
+    async def _run_login_attempt(self, playwright, username, password, headless=False, timeout_ms=180000):
+        browser = await playwright.chromium.launch(headless=headless)
+        try:
+            context = await browser.new_context()
+            page = await context.new_page()
+            await page.goto(self.portal_url, wait_until="domcontentloaded")
+
+            submitted = await self._submit_login_credentials(page, username, password)
+            if not submitted:
+                return False, False
+
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + (timeout_ms / 1000.0)
+
+            while loop.time() < deadline:
+                error_text = await self._login_error_text(page)
+                if error_text and _LOGIN_ERROR_TEXT_RE.search(error_text):
+                    logger.warning(f"IBKR login rejected credentials: {error_text}")
+                    return False, True
+
+                state = await context.storage_state()
+                is_valid = await self._validate_state_payload(state, timeout_s=10.0)
+                if is_valid:
+                    await context.storage_state(path=self.state_path)
+                    logger.info(f"Login successful. Session state saved to {self.state_path}")
+                    return True, False
+                await asyncio.sleep(2)
+
+            logger.error("Login timed out before authenticated API state was detected.")
+            return False, False
+        finally:
+            await browser.close()
+
+    async def login(
+        self,
+        headless=False,
+        timeout_ms=180000,
+        force_browser=False,
+        max_credential_attempts=3,
+    ):
         """
-        Launches a browser and waits for the user to log in manually.
-        Once the portal home is reached, it saves the session state.
+        Launches a browser and performs credential login, including retries.
+        Once authenticated, it saves the session state.
         """
         if self.state_path.exists() and not force_browser:
             is_valid = await self.validate_auth_state()
@@ -127,34 +284,44 @@ class IBKRSession:
                 return True
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=headless)
-            # If state is stale, use a fresh context to avoid stale-cookie UI loops.
-            context = await browser.new_context()
+            force_prompt = False
+            attempts_left = max(1, int(max_credential_attempts))
+            while attempts_left > 0:
+                username, password = self._get_login_credentials(
+                    prompt_if_missing=True,
+                    force_prompt=force_prompt,
+                )
+                if not username or not password:
+                    logger.error("Missing IBKR credentials; login aborted.")
+                    return False
 
-            page = await context.new_page()
-            await page.goto(self.portal_url, wait_until="domcontentloaded")
-            logger.info("Browser opened. Complete login in the IBKR window.")
+                logger.info("Credential login submitted. Waiting for authenticated session state.")
+                try:
+                    success, credentials_rejected = await self._run_login_attempt(
+                        p,
+                        username=username,
+                        password=password,
+                        headless=headless,
+                        timeout_ms=timeout_ms,
+                    )
+                except Exception as e:
+                    logger.error(f"Login failed: {e}")
+                    return False
 
-            try:
-                loop = asyncio.get_running_loop()
-                deadline = loop.time() + (timeout_ms / 1000.0)
+                if success:
+                    return True
+                if not credentials_rejected:
+                    return False
 
-                while loop.time() < deadline:
-                    state = await context.storage_state()
-                    is_valid = await self._validate_state_payload(state, timeout_s=10.0)
-                    if is_valid:
-                        await context.storage_state(path=self.state_path)
-                        logger.info(f"Login successful. Session state saved to {self.state_path}")
-                        return True
-                    await asyncio.sleep(2)
+                self._delete_login_config()
+                attempts_left -= 1
+                if attempts_left <= 0:
+                    break
 
-                logger.error("Login timed out before authenticated API state was detected.")
-                return False
-            except Exception as e:
-                logger.error(f"Login failed or timed out: {e}")
-                return False
-            finally:
-                await browser.close()
+                force_prompt = True
+                logger.warning("Stored IBKR credentials were rejected. Enter credentials again.")
+
+            return False
 
     async def reauthenticate(self, headless=False, timeout_ms=180000):
         """
