@@ -576,3 +576,90 @@ Response:
 }
 ```
 
+Some look different if they contain bonds:
+```
+{
+  "as_of_date": 1769835600000,
+  "ratios": [],
+  "financials": [],
+  "fixed_income": [
+    {
+      "name": "Yield to Maturity",
+      "name_tag": "Yield_to_Maturity",
+      "value_fmt": "3.17",
+      "value": 3.1677887865,
+      "vs": 0.0757000998628984,
+      "min": 2.0611302903,
+      "max": 4.6158420744,
+      "avg": 3.04919331928793,
+      "min_fmt": "1.84",
+      "max_fmt": "5.41",
+      "avg_fmt": "3.05",
+      "percentile": 42.1875,
+      "id": "1031322"
+    },
+    {
+      "name": "Nominal Maturity",
+      "name_tag": "nominal_maturity",
+      "value_fmt": "5.46",
+      "value": 5.4647165463,
+      "vs": 0.206061490318604,
+      "min": 0.4543259097,
+      "max": 11.0406042269,
+      "avg": 4.01753176901207,
+      "min_fmt": "0.23",
+      "max_fmt": "35.38",
+      "avg_fmt": "4.02",
+      "percentile": 26.5625,
+      "id": "1031324"
+    },
+    {
+      "name": "Effective Maturity",
+      "name_tag": "effective_maturity",
+      "value_fmt": "5.43",
+      "value": 5.4296289314,
+      "vs": 0.229837490931287,
+      "min": 0.3889315219,
+      "max": 11.0286064082,
+      "avg": 3.75874139806035,
+      "min_fmt": "0.07",
+      "max_fmt": "15.57",
+      "avg_fmt": "3.76",
+      "percentile": 25,
+      "id": "1031325"
+    },
+    {
+      "name": "Average Coupon",
+      "name_tag": "Average_Coupon",
+      "value_fmt": "2.73",
+      "value": 2.7311139982,
+      "vs": -0.196643322073393,
+      "min": 1.8084145784,
+      "max": 5.0146671395,
+      "avg": 2.9569696911569,
+      "min_fmt": "1.49",
+      "max_fmt": "5.44",
+      "avg_fmt": "2.96",
+      "percentile": 54.6875,
+      "id": "1031326"
+    },
+    {
+      "name": "Average Quality",
+      "name_tag": "average_quality",
+      "value_fmt": "BBB",
+      "value": 6.6039324305,
+      "vs": 0.171489860280954,
+      "min": 4.9311819529,
+      "max": 7.7951615214,
+      "avg": 6.35736488646207,
+      "min_fmt": "B",
+      "max_fmt": "AAA",
+      "avg_fmt": "BBB",
+      "percentile": 60.9375,
+      "id": "1033021"
+    }
+  ],
+  "dividend": [],
+  "zscore": []
+}
+```

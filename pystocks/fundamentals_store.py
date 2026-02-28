@@ -226,6 +226,14 @@ _HOLDINGS_MATURITY_COLUMNS = (
     "maturity_other",
 )
 
+_RATIOS_SECTION_TABLES = {
+    "ratios": "ratios_key_ratios",
+    "financials": "ratios_financials",
+    "fixed_income": "ratios_fixed_income",
+    "dividend": "ratios_dividend",
+    "zscore": "ratios_zscore",
+}
+
 _MORNINGSTAR_SUMMARY_COLUMNS = (
     "medalist_rating",
     "process",
@@ -909,32 +917,76 @@ class FundamentalsStore:
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    source_file TEXT,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     as_of_date TEXT,
-                    title_vs TEXT,
                     PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid),
                     FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
                 );
 
-                CREATE TABLE IF NOT EXISTS ratios_metrics (
+                CREATE TABLE IF NOT EXISTS ratios_key_ratios (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    section TEXT,
                     metric_id TEXT,
-                    metric_name TEXT,
                     value_num REAL,
-                    value_fmt TEXT,
                     vs_num REAL,
                     min_num REAL,
                     max_num REAL,
                     avg_num REAL,
                     percentile_num REAL,
-                    min_fmt TEXT,
-                    max_fmt TEXT,
-                    avg_fmt TEXT,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS ratios_financials (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    metric_id TEXT,
+                    value_num REAL,
+                    vs_num REAL,
+                    min_num REAL,
+                    max_num REAL,
+                    avg_num REAL,
+                    percentile_num REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS ratios_fixed_income (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    metric_id TEXT,
+                    value_num REAL,
+                    vs_num REAL,
+                    min_num REAL,
+                    max_num REAL,
+                    avg_num REAL,
+                    percentile_num REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS ratios_dividend (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    metric_id TEXT,
+                    value_num REAL,
+                    vs_num REAL,
+                    min_num REAL,
+                    max_num REAL,
+                    avg_num REAL,
+                    percentile_num REAL,
+                    FOREIGN KEY (conid) REFERENCES products(conid)
+                );
+
+                CREATE TABLE IF NOT EXISTS ratios_zscore (
+                    conid TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    metric_id TEXT,
+                    value_num REAL,
+                    vs_num REAL,
+                    min_num REAL,
+                    max_num REAL,
+                    avg_num REAL,
+                    percentile_num REAL,
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -951,12 +1003,11 @@ class FundamentalsStore:
                     FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
                 );
 
-                CREATE TABLE IF NOT EXISTS lipper_ratings_values (
+                CREATE TABLE IF NOT EXISTS lipper_ratings (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     period TEXT,
                     metric_id TEXT,
-                    metric_name TEXT,
                     rating_value REAL,
                     rating_label TEXT,
                     universe_name TEXT,
@@ -969,7 +1020,6 @@ class FundamentalsStore:
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    source_file TEXT,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     response_type TEXT,
@@ -1047,7 +1097,6 @@ class FundamentalsStore:
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    source_file TEXT,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     title_vs TEXT,
@@ -1081,7 +1130,6 @@ class FundamentalsStore:
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    source_file TEXT,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     owners_types_count INTEGER,
@@ -1132,7 +1180,6 @@ class FundamentalsStore:
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    source_file TEXT,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     as_of_date TEXT,
@@ -1176,7 +1223,6 @@ class FundamentalsStore:
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    source_file TEXT,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     points_count INTEGER,
@@ -1502,7 +1548,7 @@ class FundamentalsStore:
         source_file,
         now_iso,
         extra,
-        include_source_file=True,
+        include_source_file=False,
     ):
         base = {
             "conid": str(conid),
@@ -1934,14 +1980,13 @@ class FundamentalsStore:
             now_iso,
             {
                 "as_of_date": _to_iso_date(payload.get("as_of_date")),
-                "title_vs": payload.get("title_vs"),
             },
         )
 
-        self._delete_children(conn, ["ratios_metrics"], conid, effective_at)
+        self._delete_children(conn, list(_RATIOS_SECTION_TABLES.values()), conid, effective_at)
 
-        metric_rows = []
-        for section in ("ratios", "financials", "fixed_income", "dividend", "zscore"):
+        for section, table_name in _RATIOS_SECTION_TABLES.items():
+            metric_rows = []
             values = payload.get(section, []) if isinstance(payload.get(section), list) else []
             for item in values:
                 if not isinstance(item, dict):
@@ -1950,22 +1995,16 @@ class FundamentalsStore:
                     {
                         "conid": str(conid),
                         "effective_at": str(effective_at),
-                        "section": section,
                         "metric_id": _sanitize_segment(item.get("name_tag") or item.get("id") or item.get("name")),
-                        "metric_name": item.get("name"),
                         "value_num": _parse_number(item.get("value")),
-                        "value_fmt": item.get("value_fmt"),
                         "vs_num": _parse_number(item.get("vs")),
                         "min_num": _parse_number(item.get("min")),
                         "max_num": _parse_number(item.get("max")),
                         "avg_num": _parse_number(item.get("avg")),
                         "percentile_num": _parse_number(item.get("percentile")),
-                        "min_fmt": item.get("min_fmt"),
-                        "max_fmt": item.get("max_fmt"),
-                        "avg_fmt": item.get("avg_fmt"),
                     }
                 )
-        self._insert_rows(conn, "ratios_metrics", metric_rows)
+            self._insert_rows(conn, table_name, metric_rows)
 
     def _upsert_lipper(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
         universes = payload.get("universes", []) if isinstance(payload.get("universes"), list) else []
@@ -1985,7 +2024,7 @@ class FundamentalsStore:
             include_source_file=False,
         )
 
-        self._delete_children(conn, ["lipper_ratings_values"], conid, effective_at)
+        self._delete_children(conn, ["lipper_ratings"], conid, effective_at)
 
         rows = []
         for universe in universes:
@@ -2009,14 +2048,13 @@ class FundamentalsStore:
                             "effective_at": str(effective_at),
                             "period": period,
                             "metric_id": _sanitize_segment(item.get("name_tag") or item.get("id") or item.get("name")),
-                            "metric_name": item.get("name"),
                             "rating_value": _parse_number(rating.get("value")),
                             "rating_label": rating.get("name"),
                             "universe_name": universe_name,
                             "universe_as_of_date": universe_as_of,
                         }
                     )
-        self._insert_rows(conn, "lipper_ratings_values", rows)
+        self._insert_rows(conn, "lipper_ratings", rows)
 
     def _upsert_dividends(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
         snapshot = normalize_dividends_snapshot(payload)

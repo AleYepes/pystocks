@@ -131,7 +131,7 @@ def test_child_and_series_raw_tables_do_not_use_synthetic_id_columns():
         try:
             tables = [
                 "profile_and_fees_reports",
-                "ratios_ratios",
+                "ratios_key_ratios",
                 "ratios_financials",
                 "ratios_fixed_income",
                 "ratios_dividend",
