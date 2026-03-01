@@ -99,7 +99,7 @@ Drop unless explicitly needed:
 When comparing the web-app endpoint vs official API source:
 
 1. Store official source in separate SQLite file.
-2. Mirror core schema (`price_chart_snapshots`, `price_chart_series_raw`) for easy joins.
+2. Mirror core schema (`price_chart_snapshots`, `price_chart_series`) for easy joins.
 3. Compare on `(conid, effective_at)` and compute:
 - Absolute differences
 - Percent differences
@@ -125,4 +125,3 @@ When implementing a new series endpoint, follow this order:
 4. Wire into `_write_series(...)` dispatcher
 5. Add tests in `pystocks/tests/`
 6. Run `./venv/bin/python -m pytest -q`
-

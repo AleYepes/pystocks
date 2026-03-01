@@ -65,13 +65,12 @@ checks = [
     'esg_snapshots',
     'price_chart_snapshots',
     'sentiment_search_snapshots',
-    'price_chart_series_raw',
+    'price_chart_series',
     'sentiment_search_series_raw',
     'sentiment_search_series_latest',
     'ownership_trade_log_series_raw',
     'ownership_trade_log_series_latest',
-    'dividends_events_series_raw',
-    'dividends_events_series_latest',
+    'dividends_events_series',
 ]
 for t in checks:
     n = con.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
@@ -89,7 +88,7 @@ SELECT COUNT(*) FROM ownership_trade_log_series_latest
 WHERE upper(action) = 'NO CHANGE'
 """).fetchone()[0])
 print('price_series_rows', con.execute("""
-SELECT COUNT(*) FROM price_chart_series_raw
+SELECT COUNT(*) FROM price_chart_series
 """).fetchone()[0])
 con.close()
 PY

@@ -12,7 +12,6 @@ import zstandard as zstd
 from .config import SQLITE_DB_PATH
 from .fundamentals_normalizers import (
     extract_dividends_events,
-    extract_dividends_industry_metrics,
     extract_ownership_trade_log,
     normalize_dividends_snapshot,
     normalize_ownership_snapshot,
@@ -277,6 +276,13 @@ _ESG_CODE_TO_COLUMN = {
 
 _ESG_SCORE_COLUMNS = tuple(_ESG_CODE_TO_COLUMN.values())
 
+_DIVIDENDS_INDUSTRY_METRIC_COLUMNS = (
+    "dividend_yield",
+    "annual_dividend",
+    "dividend_ttm",
+    "dividend_yield_ttm",
+)
+
 
 def _sanitize_segment(value):
     segment = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
@@ -514,6 +520,32 @@ def _sanitize_sentiment_search_payload(payload):
         row_copy = {k: v for k, v in row.items() if k not in drop_keys}
         out_sentiment.append(row_copy)
     out["sentiment"] = out_sentiment
+    return out
+
+
+def _sanitize_dividends_payload(payload):
+    if not isinstance(payload, dict):
+        return payload
+    history = payload.get("history")
+    if not isinstance(history, dict):
+        return payload
+    series = history.get("series")
+    if not isinstance(series, list):
+        return payload
+
+    filtered_series = []
+    for node in series:
+        if not isinstance(node, dict):
+            continue
+        name = str(node.get("name") or node.get("title") or "").strip().lower()
+        if "price" in name:
+            continue
+        filtered_series.append(node)
+
+    out = {k: v for k, v in payload.items()}
+    out_history = {k: v for k, v in history.items()}
+    out_history["series"] = filtered_series
+    out["history"] = out_history
     return out
 
 
@@ -1043,22 +1075,6 @@ class FundamentalsStore:
                     payload_hash TEXT NOT NULL,
                     inserted_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    response_type TEXT,
-                    has_history INTEGER,
-                    history_points INTEGER,
-                    embedded_price_points INTEGER,
-                    no_div_data_marker REAL,
-                    no_div_data_period REAL,
-                    no_dividend_text TEXT,
-                    last_paid_date TEXT,
-                    last_paid_amount REAL,
-                    last_paid_currency TEXT,
-                    dividend_yield REAL,
-                    annual_dividend REAL,
-                    paying_companies REAL,
-                    paying_companies_percent REAL,
-                    dividend_ttm REAL,
-                    dividend_yield_ttm REAL,
                     PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid),
                     FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
@@ -1067,9 +1083,12 @@ class FundamentalsStore:
                 CREATE TABLE IF NOT EXISTS dividends_industry_metrics (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    metric_id TEXT,
-                    value_num REAL,
-                    formatted_value TEXT,
+                    dividend_yield REAL,
+                    annual_dividend REAL,
+                    dividend_ttm REAL,
+                    dividend_yield_ttm REAL,
+                    currency TEXT,
+                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -1256,7 +1275,7 @@ class FundamentalsStore:
                     FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
                 );
 
-                CREATE TABLE IF NOT EXISTS price_chart_series_raw (
+                CREATE TABLE IF NOT EXISTS price_chart_series (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     price REAL,
@@ -1346,15 +1365,9 @@ class FundamentalsStore:
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
-                CREATE TABLE IF NOT EXISTS dividends_events_series_raw (
+                CREATE TABLE IF NOT EXISTS dividends_events_series (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    observed_at TEXT NOT NULL,
-                    payload_hash TEXT NOT NULL,
-                    inserted_at TEXT NOT NULL,
-                    row_key TEXT NOT NULL,
-                    trade_date TEXT,
-                    event_date TEXT,
                     amount REAL,
                     currency TEXT,
                     description TEXT,
@@ -1365,25 +1378,6 @@ class FundamentalsStore:
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
-                CREATE TABLE IF NOT EXISTS dividends_events_series_latest (
-                    conid TEXT NOT NULL,
-                    row_key TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    observed_at TEXT NOT NULL,
-                    payload_hash TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    trade_date TEXT,
-                    event_date TEXT,
-                    amount REAL,
-                    currency TEXT,
-                    description TEXT,
-                    event_type TEXT,
-                    declaration_date TEXT,
-                    record_date TEXT,
-                    payment_date TEXT,
-                    PRIMARY KEY (conid, row_key),
-                    FOREIGN KEY (conid) REFERENCES products(conid)
-                );
                 """
             )
 
@@ -1409,10 +1403,10 @@ class FundamentalsStore:
                 CREATE INDEX IF NOT EXISTS idx_price_snapshots_hash ON price_chart_snapshots(payload_hash);
                 CREATE INDEX IF NOT EXISTS idx_sentiment_snapshots_hash ON sentiment_search_snapshots(payload_hash);
 
-                CREATE INDEX IF NOT EXISTS idx_price_series_raw_effective_at ON price_chart_series_raw(effective_at);
+                CREATE INDEX IF NOT EXISTS idx_price_series_effective_at ON price_chart_series(effective_at);
                 CREATE INDEX IF NOT EXISTS idx_sentiment_latest_trade_date ON sentiment_search_series_latest(trade_date);
                 CREATE INDEX IF NOT EXISTS idx_ownership_latest_trade_date ON ownership_trade_log_series_latest(trade_date);
-                CREATE INDEX IF NOT EXISTS idx_dividends_latest_trade_date ON dividends_events_series_latest(event_date);
+                CREATE INDEX IF NOT EXISTS idx_dividends_events_series_effective_at ON dividends_events_series(effective_at);
                 """
             )
 
@@ -1505,7 +1499,7 @@ class FundamentalsStore:
                 row = conn.execute(
                     """
                     SELECT MAX(effective_at) AS max_effective_at
-                    FROM price_chart_series_raw
+                    FROM price_chart_series
                     WHERE conid = ?
                     """,
                     [str(conid)],
@@ -1542,6 +1536,8 @@ class FundamentalsStore:
             if isinstance(value, (dict, list)):
                 if endpoint == "sentiment_search" and isinstance(value, dict):
                     value = _sanitize_sentiment_search_payload(value)
+                if endpoint == "dividends" and isinstance(value, dict):
+                    value = _sanitize_dividends_payload(value)
                 payloads[endpoint] = value
         return payloads
 
@@ -2091,40 +2087,27 @@ class FundamentalsStore:
             payload_hash,
             source_file,
             now_iso,
-            {
-                "response_type": snapshot.get("response_type"),
-                "has_history": _to_int_bool(snapshot.get("has_history")),
-                "history_points": int(snapshot.get("history_points") or 0),
-                "embedded_price_points": int(snapshot.get("embedded_price_points") or 0),
-                "no_div_data_marker": _parse_number(snapshot.get("no_div_data_marker")),
-                "no_div_data_period": _parse_number(snapshot.get("no_div_data_period")),
-                "no_dividend_text": payload.get("no_dividend_text"),
-                "last_paid_date": snapshot.get("last_paid_date"),
-                "last_paid_amount": _parse_number(snapshot.get("last_paid_amount")),
-                "last_paid_currency": snapshot.get("last_paid_currency"),
-                "dividend_yield": _parse_number(snapshot.get("dividend_yield")),
-                "annual_dividend": _parse_number(snapshot.get("annual_dividend")),
-                "paying_companies": _parse_number(snapshot.get("paying_companies")),
-                "paying_companies_percent": _parse_number(snapshot.get("paying_companies_percent")),
-                "dividend_ttm": _parse_number(snapshot.get("dividend_ttm")),
-                "dividend_yield_ttm": _parse_number(snapshot.get("dividend_yield_ttm")),
-            },
+            {},
         )
 
         self._delete_children(conn, ["dividends_industry_metrics"], conid, effective_at)
 
-        rows = []
-        for item in extract_dividends_industry_metrics(payload):
-            rows.append(
-                {
-                    "conid": str(conid),
-                    "effective_at": str(effective_at),
-                    "metric_id": _sanitize_segment(item.get("metric_id")),
-                    "value_num": _parse_number(item.get("value")),
-                    "formatted_value": item.get("formatted_value"),
-                }
-            )
-        self._insert_rows(conn, "dividends_industry_metrics", rows)
+        currency = snapshot.get("last_paid_currency")
+        if currency is None:
+            event_rows = extract_dividends_events(payload)
+            for row in event_rows:
+                if row.get("currency"):
+                    currency = row.get("currency")
+                    break
+
+        metrics_row = {
+            "conid": str(conid),
+            "effective_at": str(effective_at),
+            "currency": currency,
+        }
+        for column in _DIVIDENDS_INDUSTRY_METRIC_COLUMNS:
+            metrics_row[column] = _parse_number(snapshot.get(column))
+        self._upsert_row(conn, "dividends_industry_metrics", metrics_row, ["conid", "effective_at"])
 
     def _upsert_morningstar(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
         self._upsert_snapshot_row(
@@ -2430,7 +2413,7 @@ class FundamentalsStore:
 
             conn.execute(
                 """
-                INSERT INTO price_chart_series_raw (
+                INSERT INTO price_chart_series (
                     conid,
                     effective_at,
                     price,
@@ -2755,31 +2738,28 @@ class FundamentalsStore:
         latest_upserted = 0
 
         for row in rows:
-            row_key = "|".join(
-                [
-                    "dividends",
-                    str(row.get("event_date") or row.get("trade_date") or ""),
-                    str(row.get("amount") or ""),
-                    str(row.get("currency") or ""),
-                    str(row.get("event_type") or ""),
-                    str(row.get("declaration_date") or ""),
-                    str(row.get("record_date") or ""),
-                    str(row.get("payment_date") or ""),
-                    str(row.get("description") or ""),
-                ]
-            )
+            point_effective_at = row.get("trade_date") or row.get("event_date")
+            if not point_effective_at:
+                continue
+
+            event_date = row.get("event_date")
+            if event_date:
+                point_date = _parse_date_candidate(point_effective_at)
+                debug_date = _parse_date_candidate(event_date)
+                if point_date is not None and debug_date is not None and abs((point_date - debug_date).days) > 1:
+                    logger.warning(
+                        "dividends date mismatch between trade_date and event_date: conid=%s effective_at=%s trade_date=%s event_date=%s",
+                        str(conid),
+                        str(effective_at),
+                        str(point_effective_at),
+                        str(event_date),
+                    )
 
             conn.execute(
                 """
-                INSERT INTO dividends_events_series_raw (
+                INSERT INTO dividends_events_series (
                     conid,
                     effective_at,
-                    observed_at,
-                    payload_hash,
-                    inserted_at,
-                    row_key,
-                    trade_date,
-                    event_date,
                     amount,
                     currency,
                     description,
@@ -2787,17 +2767,11 @@ class FundamentalsStore:
                     declaration_date,
                     record_date,
                     payment_date
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     str(conid),
-                    str(effective_at),
-                    str(observed_at),
-                    str(payload_hash),
-                    inserted_at,
-                    row_key,
-                    row.get("trade_date"),
-                    row.get("event_date"),
+                    str(point_effective_at),
                     _parse_number(row.get("amount")),
                     row.get("currency"),
                     row.get("description"),
@@ -2808,94 +2782,6 @@ class FundamentalsStore:
                 ],
             )
             raw_written += 1
-
-            existing = conn.execute(
-                """
-                SELECT effective_at, observed_at, payload_hash
-                FROM dividends_events_series_latest
-                WHERE conid = ? AND row_key = ?
-                """,
-                [str(conid), row_key],
-            ).fetchone()
-
-            if existing is None:
-                conn.execute(
-                    """
-                    INSERT INTO dividends_events_series_latest (
-                        conid,
-                        row_key,
-                        effective_at,
-                        observed_at,
-                        payload_hash,
-                        updated_at,
-                        trade_date,
-                        event_date,
-                        amount,
-                        currency,
-                        description,
-                        event_type,
-                        declaration_date,
-                        record_date,
-                        payment_date
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        str(conid),
-                        row_key,
-                        str(effective_at),
-                        str(observed_at),
-                        str(payload_hash),
-                        inserted_at,
-                        row.get("trade_date"),
-                        row.get("event_date"),
-                        _parse_number(row.get("amount")),
-                        row.get("currency"),
-                        row.get("description"),
-                        row.get("event_type"),
-                        row.get("declaration_date"),
-                        row.get("record_date"),
-                        row.get("payment_date"),
-                    ],
-                )
-                latest_upserted += 1
-            elif self._series_is_newer(effective_at, observed_at, payload_hash, existing):
-                conn.execute(
-                    """
-                    UPDATE dividends_events_series_latest
-                    SET effective_at = ?,
-                        observed_at = ?,
-                        payload_hash = ?,
-                        updated_at = ?,
-                        trade_date = ?,
-                        event_date = ?,
-                        amount = ?,
-                        currency = ?,
-                        description = ?,
-                        event_type = ?,
-                        declaration_date = ?,
-                        record_date = ?,
-                        payment_date = ?
-                    WHERE conid = ? AND row_key = ?
-                    """,
-                    [
-                        str(effective_at),
-                        str(observed_at),
-                        str(payload_hash),
-                        inserted_at,
-                        row.get("trade_date"),
-                        row.get("event_date"),
-                        _parse_number(row.get("amount")),
-                        row.get("currency"),
-                        row.get("description"),
-                        row.get("event_type"),
-                        row.get("declaration_date"),
-                        row.get("record_date"),
-                        row.get("payment_date"),
-                        str(conid),
-                        row_key,
-                    ],
-                )
-                latest_upserted += 1
 
         return raw_written, latest_upserted
 

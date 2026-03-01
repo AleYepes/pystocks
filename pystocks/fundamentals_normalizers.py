@@ -364,7 +364,8 @@ def extract_dividends_events(payload):
             if not isinstance(point, dict):
                 continue
 
-            event_date = _to_iso_date(point.get("ex_dividend_date")) or _to_iso_date(point.get("x"))
+            trade_date = _to_iso_date(point.get("x")) or _to_iso_date(point.get("ex_dividend_date"))
+            event_date = _to_iso_date(point.get("ex_dividend_date"))
             amount = point.get("amount")
             if amount is None:
                 amount = point.get("y")
@@ -373,7 +374,7 @@ def extract_dividends_events(payload):
                 amount = amount_value
 
             row = {
-                "trade_date": event_date,
+                "trade_date": trade_date,
                 "event_date": event_date,
                 "amount": amount,
                 "currency": _extract_currency(point.get("formatted_amount")) or fallback_currency,

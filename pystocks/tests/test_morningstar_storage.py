@@ -144,10 +144,10 @@ def test_child_and_series_raw_tables_do_not_use_synthetic_id_columns():
                 "ownership_owners_types",
                 "ownership_holders",
                 "esg",
-                "price_chart_series_raw",
+                "price_chart_series",
                 "sentiment_search_series_raw",
                 "ownership_trade_log_series_raw",
-                "dividends_events_series_raw",
+                "dividends_events_series",
             ]
             for table in tables:
                 cols = _table_columns(con, table)

@@ -168,7 +168,7 @@ class OfficialPriceStore:
                     FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
                 );
 
-                CREATE TABLE IF NOT EXISTS price_chart_series_raw (
+                CREATE TABLE IF NOT EXISTS price_chart_series (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     price REAL,
@@ -195,7 +195,7 @@ class OfficialPriceStore:
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_official_price_snapshots_hash ON price_chart_snapshots(payload_hash);
-                CREATE INDEX IF NOT EXISTS idx_official_price_series_effective_at ON price_chart_series_raw(effective_at);
+                CREATE INDEX IF NOT EXISTS idx_official_price_series_effective_at ON price_chart_series(effective_at);
                 CREATE INDEX IF NOT EXISTS idx_official_fetch_log_conid ON fetch_log(conid);
                 """
             )
@@ -291,7 +291,7 @@ class OfficialPriceStore:
             )
             conn.executemany(
                 """
-                INSERT INTO price_chart_series_raw (
+                INSERT INTO price_chart_series (
                     conid,
                     effective_at,
                     price,
@@ -381,7 +381,7 @@ def _load_series_df(sqlite_path, conids=None):
                 return pd.read_sql_query(
                     f"""
                     SELECT conid, effective_at, price, open, high, low, close
-                    FROM price_chart_series_raw
+                    FROM price_chart_series
                     WHERE conid IN ({placeholders})
                     """,
                     conn,
@@ -390,7 +390,7 @@ def _load_series_df(sqlite_path, conids=None):
             return pd.read_sql_query(
                 """
                 SELECT conid, effective_at, price, open, high, low, close
-                FROM price_chart_series_raw
+                FROM price_chart_series
                 """,
                 conn,
             )

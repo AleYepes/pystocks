@@ -87,7 +87,7 @@ def test_official_store_upserts_series_and_snapshot_metrics():
         con = sqlite3.connect(db_path)
         try:
             series_count = con.execute(
-                "SELECT COUNT(*) FROM price_chart_series_raw WHERE conid = ?",
+                "SELECT COUNT(*) FROM price_chart_series WHERE conid = ?",
                 ["abc"],
             ).fetchone()[0]
             assert series_count == 2
@@ -95,7 +95,7 @@ def test_official_store_upserts_series_and_snapshot_metrics():
             updated_close = con.execute(
                 """
                 SELECT close
-                FROM price_chart_series_raw
+                FROM price_chart_series
                 WHERE conid = ? AND effective_at = ?
                 """,
                 ["abc", "2025-01-02"],

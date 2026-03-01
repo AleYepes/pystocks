@@ -1,8 +1,8 @@
 ## Dividends
 
-Can return two types from the same endpoint
+Depending on the product, the endpoint can return two different payloads
 
-### Short summary
+### Short response
 
 Header: 
 https://www.interactivebrokers.ie/tws.proxy/fundamentals/dividends/564156940
@@ -22,7 +22,7 @@ Response:
 }
 ```
 
-### Long summary
+### Long response
 
 Header:
 https://www.interactivebrokers.ie/tws.proxy/fundamentals/dividends/237937002
