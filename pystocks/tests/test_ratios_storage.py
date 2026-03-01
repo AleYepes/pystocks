@@ -165,7 +165,7 @@ def test_ratios_split_into_section_tables_and_drop_fmt_fields():
                 "performance_snapshots",
                 "ownership_snapshots",
                 "esg_snapshots",
-                "sentiment_search_snapshots",
+                "sentiment_snapshots",
             ]:
                 assert "source_file" not in _table_columns(con, table)
         finally:

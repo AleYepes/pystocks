@@ -86,7 +86,7 @@
 11. `price_chart_snapshots`
 - Core columns: `points_count`, `min_trade_date`, `max_trade_date`.
 
-12. `sentiment_search_snapshots`
+12. `sentiment_snapshots`
 - Core columns: `points_count`, `min_trade_date`, `max_trade_date`.
 
 13. Optional scalar overflow table for evolving fields

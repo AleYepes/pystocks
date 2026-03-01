@@ -620,9 +620,11 @@ def _extract_sentiment_search_rows(payload):
             continue
 
         dt = _parse_date_candidate(point.get("datetime"))
+        effective_at = dt.isoformat() if dt is not None else None
+        if effective_at is None:
+            continue
         row = {
-            "trade_date": dt.isoformat() if dt is not None else None,
-            "datetime_ms": point.get("datetime"),
+            "effective_at": effective_at,
             "sscore": point.get("sscore"),
             "sdelta": point.get("sdelta"),
             "svolatility": point.get("svolatility"),
@@ -633,7 +635,7 @@ def _extract_sentiment_search_rows(payload):
             "sbuzz": point.get("sbuzz"),
         }
 
-        if any(v is not None for v in row.values()):
+        if any(row.get(k) is not None for k in ("sscore", "sdelta", "svolatility", "sdispersion", "svscore", "svolume", "smean", "sbuzz")):
             rows.append(row)
 
     return rows
@@ -1260,7 +1262,7 @@ class FundamentalsStore:
                     FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
                 );
 
-                CREATE TABLE IF NOT EXISTS sentiment_search_snapshots (
+                CREATE TABLE IF NOT EXISTS sentiment_snapshots (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
@@ -1287,15 +1289,9 @@ class FundamentalsStore:
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
-                CREATE TABLE IF NOT EXISTS sentiment_search_series_raw (
+                CREATE TABLE IF NOT EXISTS sentiment_series (
                     conid TEXT NOT NULL,
                     effective_at TEXT NOT NULL,
-                    observed_at TEXT NOT NULL,
-                    payload_hash TEXT NOT NULL,
-                    inserted_at TEXT NOT NULL,
-                    row_key TEXT NOT NULL,
-                    trade_date TEXT,
-                    datetime_ms INTEGER,
                     sscore REAL,
                     sdelta REAL,
                     svolatility REAL,
@@ -1304,27 +1300,7 @@ class FundamentalsStore:
                     svolume REAL,
                     smean REAL,
                     sbuzz REAL,
-                    FOREIGN KEY (conid) REFERENCES products(conid)
-                );
-
-                CREATE TABLE IF NOT EXISTS sentiment_search_series_latest (
-                    conid TEXT NOT NULL,
-                    row_key TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    observed_at TEXT NOT NULL,
-                    payload_hash TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    trade_date TEXT,
-                    datetime_ms INTEGER,
-                    sscore REAL,
-                    sdelta REAL,
-                    svolatility REAL,
-                    sdispersion REAL,
-                    svscore REAL,
-                    svolume REAL,
-                    smean REAL,
-                    sbuzz REAL,
-                    PRIMARY KEY (conid, row_key),
+                    PRIMARY KEY (conid, effective_at),
                     FOREIGN KEY (conid) REFERENCES products(conid)
                 );
 
@@ -1401,10 +1377,10 @@ class FundamentalsStore:
                 CREATE INDEX IF NOT EXISTS idx_ownership_snapshots_hash ON ownership_snapshots(payload_hash);
                 CREATE INDEX IF NOT EXISTS idx_esg_snapshots_hash ON esg_snapshots(payload_hash);
                 CREATE INDEX IF NOT EXISTS idx_price_snapshots_hash ON price_chart_snapshots(payload_hash);
-                CREATE INDEX IF NOT EXISTS idx_sentiment_snapshots_hash ON sentiment_search_snapshots(payload_hash);
+                CREATE INDEX IF NOT EXISTS idx_sentiment_snapshots_hash ON sentiment_snapshots(payload_hash);
 
                 CREATE INDEX IF NOT EXISTS idx_price_series_effective_at ON price_chart_series(effective_at);
-                CREATE INDEX IF NOT EXISTS idx_sentiment_latest_trade_date ON sentiment_search_series_latest(trade_date);
+                CREATE INDEX IF NOT EXISTS idx_sentiment_series_effective_at ON sentiment_series(effective_at);
                 CREATE INDEX IF NOT EXISTS idx_ownership_latest_trade_date ON ownership_trade_log_series_latest(trade_date);
                 CREATE INDEX IF NOT EXISTS idx_dividends_events_series_effective_at ON dividends_events_series(effective_at);
                 """
@@ -1551,7 +1527,7 @@ class FundamentalsStore:
             "morningstar": "morningstar_snapshots",
             "price_chart": "price_chart_snapshots",
             "performance": "performance_snapshots",
-            "sentiment_search": "sentiment_search_snapshots",
+            "sentiment_search": "sentiment_snapshots",
             "ownership": "ownership_snapshots",
             "esg": "esg_snapshots",
         }[endpoint]
@@ -2360,13 +2336,13 @@ class FundamentalsStore:
 
     def _upsert_sentiment_snapshot(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
         rows = _extract_sentiment_search_rows(payload)
-        dates = [r.get("trade_date") for r in rows if r.get("trade_date")]
+        dates = [r.get("effective_at") for r in rows if r.get("effective_at")]
         min_date = min(dates) if dates else None
         max_date = max(dates) if dates else None
 
         self._upsert_snapshot_row(
             conn,
-            "sentiment_search_snapshots",
+            "sentiment_snapshots",
             conid,
             effective_at,
             observed_at,
@@ -2449,20 +2425,15 @@ class FundamentalsStore:
         latest_upserted = 0
 
         for row in rows:
-            row_key = row.get("datetime_ms") or row.get("trade_date")
-            row_key = f"sentiment_search|{row_key}"
+            point_effective_at = row.get("effective_at")
+            if not point_effective_at:
+                continue
 
             conn.execute(
                 """
-                INSERT INTO sentiment_search_series_raw (
+                INSERT INTO sentiment_series (
                     conid,
                     effective_at,
-                    observed_at,
-                    payload_hash,
-                    inserted_at,
-                    row_key,
-                    trade_date,
-                    datetime_ms,
                     sscore,
                     sdelta,
                     svolatility,
@@ -2471,17 +2442,20 @@ class FundamentalsStore:
                     svolume,
                     smean,
                     sbuzz
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(conid, effective_at) DO UPDATE SET
+                    sscore = excluded.sscore,
+                    sdelta = excluded.sdelta,
+                    svolatility = excluded.svolatility,
+                    sdispersion = excluded.sdispersion,
+                    svscore = excluded.svscore,
+                    svolume = excluded.svolume,
+                    smean = excluded.smean,
+                    sbuzz = excluded.sbuzz
                 """,
                 [
                     str(conid),
-                    str(effective_at),
-                    str(observed_at),
-                    str(payload_hash),
-                    inserted_at,
-                    str(row_key),
-                    row.get("trade_date"),
-                    int(row.get("datetime_ms")) if row.get("datetime_ms") is not None else None,
+                    str(point_effective_at),
                     _parse_number(row.get("sscore")),
                     _parse_number(row.get("sdelta")),
                     _parse_number(row.get("svolatility")),
@@ -2493,98 +2467,6 @@ class FundamentalsStore:
                 ],
             )
             raw_written += 1
-
-            existing = conn.execute(
-                """
-                SELECT effective_at, observed_at, payload_hash
-                FROM sentiment_search_series_latest
-                WHERE conid = ? AND row_key = ?
-                """,
-                [str(conid), str(row_key)],
-            ).fetchone()
-
-            if existing is None:
-                conn.execute(
-                    """
-                    INSERT INTO sentiment_search_series_latest (
-                        conid,
-                        row_key,
-                        effective_at,
-                        observed_at,
-                        payload_hash,
-                        updated_at,
-                        trade_date,
-                        datetime_ms,
-                        sscore,
-                        sdelta,
-                        svolatility,
-                        sdispersion,
-                        svscore,
-                        svolume,
-                        smean,
-                        sbuzz
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        str(conid),
-                        str(row_key),
-                        str(effective_at),
-                        str(observed_at),
-                        str(payload_hash),
-                        inserted_at,
-                        row.get("trade_date"),
-                        int(row.get("datetime_ms")) if row.get("datetime_ms") is not None else None,
-                        _parse_number(row.get("sscore")),
-                        _parse_number(row.get("sdelta")),
-                        _parse_number(row.get("svolatility")),
-                        _parse_number(row.get("sdispersion")),
-                        _parse_number(row.get("svscore")),
-                        _parse_number(row.get("svolume")),
-                        _parse_number(row.get("smean")),
-                        _parse_number(row.get("sbuzz")),
-                    ],
-                )
-                latest_upserted += 1
-            elif self._series_is_newer(effective_at, observed_at, payload_hash, existing):
-                conn.execute(
-                    """
-                    UPDATE sentiment_search_series_latest
-                    SET effective_at = ?,
-                        observed_at = ?,
-                        payload_hash = ?,
-                        updated_at = ?,
-                        trade_date = ?,
-                        datetime_ms = ?,
-                        sscore = ?,
-                        sdelta = ?,
-                        svolatility = ?,
-                        sdispersion = ?,
-                        svscore = ?,
-                        svolume = ?,
-                        smean = ?,
-                        sbuzz = ?
-                    WHERE conid = ? AND row_key = ?
-                    """,
-                    [
-                        str(effective_at),
-                        str(observed_at),
-                        str(payload_hash),
-                        inserted_at,
-                        row.get("trade_date"),
-                        int(row.get("datetime_ms")) if row.get("datetime_ms") is not None else None,
-                        _parse_number(row.get("sscore")),
-                        _parse_number(row.get("sdelta")),
-                        _parse_number(row.get("svolatility")),
-                        _parse_number(row.get("sdispersion")),
-                        _parse_number(row.get("svscore")),
-                        _parse_number(row.get("svolume")),
-                        _parse_number(row.get("smean")),
-                        _parse_number(row.get("sbuzz")),
-                        str(conid),
-                        str(row_key),
-                    ],
-                )
-                latest_upserted += 1
 
         return raw_written, latest_upserted
 

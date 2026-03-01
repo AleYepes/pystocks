@@ -145,7 +145,7 @@ def test_child_and_series_raw_tables_do_not_use_synthetic_id_columns():
                 "ownership_holders",
                 "esg",
                 "price_chart_series",
-                "sentiment_search_series_raw",
+                "sentiment_series",
                 "ownership_trade_log_series_raw",
                 "dividends_events_series",
             ]
