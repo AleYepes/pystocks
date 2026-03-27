@@ -458,8 +458,8 @@ async def main(
             logger.error("Unable to authenticate IBKR session. Aborting fundamentals scrape.")
             return
 
-    scraped_today = [] if force else get_scraped_conids()
-    logger.info(f"Skipping {len(scraped_today)} instruments already scraped today.")
+    scraped_recently = [] if force else get_scraped_conids()
+    logger.info(f"Skipping {len(scraped_recently)} instruments already scraped in the last 7 days.")
 
     selected_conids = _load_conids_from_file(conids_file)
     if selected_conids is not None:
@@ -468,7 +468,7 @@ async def main(
             return
         conids_to_scrape = selected_conids
         if not force:
-            conids_to_scrape = [c for c in conids_to_scrape if c not in scraped_today]
+            conids_to_scrape = [c for c in conids_to_scrape if c not in scraped_recently]
         logger.info(f"Using explicit conid target list: {len(conids_to_scrape)} items.")
     else:
         all_conids = get_all_instrument_conids()
@@ -478,7 +478,7 @@ async def main(
                 "Run `python -m pystocks.cli scrape_products` first."
             )
             return
-        conids_to_scrape = [c for c in all_conids if c not in scraped_today]
+        conids_to_scrape = [c for c in all_conids if c not in scraped_recently]
     
     if limit:
         conids_to_scrape = conids_to_scrape[start_index:start_index + limit]

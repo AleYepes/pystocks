@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import sqlite3
 
 import pandas as pd
@@ -152,17 +152,21 @@ def get_all_instrument_conids():
 def get_scraped_conids(today=None):
     init_db()
     if today is None:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().date()
+    elif isinstance(today, str):
+        today = datetime.fromisoformat(today).date()
+
+    cutoff = (today - timedelta(days=6)).isoformat()
     conn = _connect()
     try:
         rows = conn.execute(
             """
             SELECT conid
             FROM products
-            WHERE last_scraped_fundamentals = ?
+            WHERE last_scraped_fundamentals >= ?
               AND conid IS NOT NULL
             """,
-            [today],
+            [cutoff],
         ).fetchall()
         return [str(r[0]) for r in rows]
     finally:
