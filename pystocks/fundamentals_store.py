@@ -2637,6 +2637,36 @@ class FundamentalsStore:
                         str(event_date),
                     )
 
+            existing = conn.execute(
+                """
+                SELECT 1
+                FROM dividends_events_series
+                WHERE conid = ?
+                  AND effective_at = ?
+                  AND COALESCE(amount, -999999999.0) = COALESCE(?, -999999999.0)
+                  AND COALESCE(currency, '') = COALESCE(?, '')
+                  AND COALESCE(description, '') = COALESCE(?, '')
+                  AND COALESCE(event_type, '') = COALESCE(?, '')
+                  AND COALESCE(declaration_date, '') = COALESCE(?, '')
+                  AND COALESCE(record_date, '') = COALESCE(?, '')
+                  AND COALESCE(payment_date, '') = COALESCE(?, '')
+                LIMIT 1
+                """,
+                [
+                    str(conid),
+                    str(point_effective_at),
+                    _parse_number(row.get("amount")),
+                    row.get("currency"),
+                    row.get("description"),
+                    row.get("event_type"),
+                    row.get("declaration_date"),
+                    row.get("record_date"),
+                    row.get("payment_date"),
+                ],
+            ).fetchone()
+            if existing is not None:
+                continue
+
             conn.execute(
                 """
                 INSERT INTO dividends_events_series (

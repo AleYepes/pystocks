@@ -236,3 +236,73 @@ def test_dividends_mismatch_logging_only_triggers_for_gt_one_day(caplog):
         assert len(mismatch_logs) == 1
     finally:
         tmp.cleanup()
+
+
+def test_dividends_events_series_is_idempotent_across_changed_snapshot_dates():
+    tmp, db_path, store = _make_store()
+    try:
+        base_dividends = {
+            "history": {
+                "series": [
+                    {
+                        "name": "dividends",
+                        "plotData": [
+                            {
+                                "x": "2024-01-10",
+                                "amount": 1.0,
+                                "type": "ACTUAL",
+                                "description": "Regular Dividend",
+                                "ex_dividend_date": {"y": 2024, "m": "JAN", "d": 10},
+                            },
+                            {
+                                "x": "2024-04-10",
+                                "amount": 1.2,
+                                "type": "ACTUAL",
+                                "description": "Regular Dividend",
+                                "ex_dividend_date": {"y": 2024, "m": "APR", "d": 10},
+                            },
+                        ],
+                    }
+                ]
+            }
+        }
+        snapshot_1 = {
+            "conid": "divs_repeat",
+            "scraped_at": "2026-03-01T10:00:00+00:00",
+            "ratios": {"as_of_date": "2026-02-27"},
+            "dividends": base_dividends,
+        }
+        snapshot_2 = {
+            "conid": "divs_repeat",
+            "scraped_at": "2026-04-01T10:00:00+00:00",
+            "ratios": {"as_of_date": "2026-03-31"},
+            "dividends": {
+                **base_dividends,
+                "industry_average": {"annual_dividend": "2.2"},
+            },
+        }
+
+        result_1 = store.persist_combined_snapshot(snapshot_1)
+        result_2 = store.persist_combined_snapshot(snapshot_2)
+        assert result_1["status"] == "ok"
+        assert result_2["status"] == "ok"
+
+        con = sqlite3.connect(db_path)
+        try:
+            rows = con.execute(
+                """
+                SELECT effective_at, amount, description
+                FROM dividends_events_series
+                WHERE conid = ?
+                ORDER BY effective_at
+                """,
+                ["divs_repeat"],
+            ).fetchall()
+            assert rows == [
+                ("2024-01-10", 1.0, "Regular Dividend"),
+                ("2024-04-10", 1.2, "Regular Dividend"),
+            ]
+        finally:
+            con.close()
+    finally:
+        tmp.cleanup()

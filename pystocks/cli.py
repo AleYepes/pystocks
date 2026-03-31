@@ -1,5 +1,8 @@
 import fire
 import asyncio
+import sqlite3
+
+from .config import SQLITE_DB_PATH
 
 class PyStocksCLI:
     def scrape_products(self):
@@ -26,15 +29,38 @@ class PyStocksCLI:
         )
 
     def preprocess_prices(self):
-        """Deferred until price ingestion/materialization is finalized."""
-        return {"status": "deferred", "step": "price_preprocess"}
+        """Build clean daily return artifacts and price eligibility tables."""
+        from .price_preprocess import run_price_preprocess
+        return run_price_preprocess()
+
+    def build_analysis_panel(self):
+        """Build the point-in-time analysis snapshot panel."""
+        from .analysis import build_analysis_panel
+        return build_analysis_panel()
+
+    def run_factor_research(self):
+        """Build factor returns, run sleeve research, and persist outputs."""
+        from .analysis import run_factor_research
+        return run_factor_research()
+
+    def compute_factor_betas(self):
+        """Compute current ETF factor betas from persistent factors."""
+        from .analysis import compute_current_betas
+        return compute_current_betas()
 
     def run_analysis(self):
-        """Deferred until factor analysis pipeline is finalized."""
-        return {"status": "deferred", "step": "analysis"}
+        """Run the full analysis pipeline."""
+        from .analysis import run_analysis_pipeline
+        return run_analysis_pipeline()
+
+    def refresh_fundamentals_views(self):
+        """Run lightweight SQLite maintenance for the fundamentals store."""
+        with sqlite3.connect(str(SQLITE_DB_PATH)) as conn:
+            conn.execute("ANALYZE;")
+        return {"status": "ok", "sqlite_path": str(SQLITE_DB_PATH)}
 
     def run_pipeline(self, limit=100, verbose=False, force=False, conids_file=None):
-        """Run ingestion pipeline: products -> fundamentals."""
+        """Run ingestion and analysis pipeline: products -> fundamentals -> prices -> analysis."""
         print("Starting full pipeline...")
         result = {}
 
@@ -48,6 +74,12 @@ class PyStocksCLI:
             force=force,
             conids_file=conids_file,
         )
+
+        print("3. Preprocessing prices...")
+        result["prices"] = self.preprocess_prices()
+
+        print("4. Running analysis...")
+        result["analysis"] = self.run_analysis()
 
         print("Pipeline complete.")
         print(result)
