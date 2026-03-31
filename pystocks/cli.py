@@ -30,8 +30,13 @@ class PyStocksCLI:
 
     def preprocess_prices(self):
         """Build clean daily return artifacts and price eligibility tables."""
-        from .price_preprocess import run_price_preprocess
+        from .preprocess.price import run_price_preprocess
         return run_price_preprocess()
+
+    def preprocess_dividends(self):
+        """Build cleaned dividend-event artifacts for total-return analysis."""
+        from .preprocess.dividends import run_dividend_preprocess
+        return run_dividend_preprocess()
 
     def build_analysis_panel(self):
         """Build the point-in-time analysis snapshot panel."""
