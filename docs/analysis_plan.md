@@ -1,147 +1,230 @@
 # Factor Research Pipeline Plan
 
-## Summary
+## Status
 
-- Keep one small ingestion precondition ahead of analysis work: pystocks/fundamentals_store.py:1344 and pystocks/fundamentals_store.py:2617
-currently let dividends_events_series append duplicate rows when a changed dividend snapshot is reprocessed. Price and sentiment series are
-idempotent; dividend events are not.
-- The current DB supports a real v1: 229 ratio snapshots across 8 effective dates, 212 conids in the latest 2026-02-28 snapshot, 209 with price
-history, 94 with sentiment, 32 with ownership, and 0 ESG. That means the core model should use price + fundamentals/holdings/performance/
-dividends, with sentiment as a sidecar track, ownership as optional event research, and ESG excluded for now.
-- Primary objective is explanatory and persistence-oriented: stable factor definitions, persistent factor returns, and current factor betas. Not
-pure forecasting.
-- The pipeline will cover all ETF holding types in one framework, but it will not force one shared factor library onto all of them. It will run one
-common pipeline with sleeve-specific factor families and sleeve-specific regressions.
+This document describes the current target state for the refactored analysis flow in `pystocks/`.
 
-## Architecture
+Some parts already exist:
 
-- pystocks/price_preprocess.py becomes the hard gate for daily return usability.
-It should produce a clean daily return panel, an eligibility table, and explicit row-level flags for invalid price, stale run, gap/interpolation,
-and outlier removal.
-- pystocks/analysis.py becomes a thin orchestrator over four stages:
-    1. build_snapshot_panel
-    2. build_factor_library
-    3. build_factor_returns
-    4. run_factor_research and compute_current_betas
-- Add one internal module for snapshot assembly.
-Its job is to denormalize SQLite tables into one analysis-ready panel keyed by (rebalance_date, conid), using the latest snapshot with
-effective_at <= rebalance_date and never looking forward.
-- Add one internal module for factor definitions.
-It should store factor metadata in a registry: factor_id, family, sleeve applicability, sign convention, source columns, transform, weighting
-rule, and whether it is raw, composite, or clustered.
-- Add one internal module for model selection and reporting.
-It should handle correlation clustering, factor pruning, elastic net selection frequency, stability scoring, and final OLS beta estimation on the
-reduced factor set.
+- `pystocks/price_preprocess.py` builds row-level clean-price flags and eligibility outputs.
+- `pystocks/analysis.py` already builds a snapshot panel, factor returns, factor clustering, persistence outputs, and current betas.
+- CLI entrypoints already exist in `pystocks/cli.py`.
 
-## Data Model And Outputs
+This plan now focuses on the gaps that still matter after the initial implementation and the SQLite anomaly review.
 
-- Rebalance frequency is monthly, aligned to snapshot availability.
-Each monthly rebalance date uses the latest available fundamental snapshot and carries that state forward until the next snapshot arrives.
-- Define ETF sleeves once and use them everywhere.
-Sleeves are equity, bond, commodity, and other, assigned from profile_and_fees.asset_type with holdings_asset_type as the tie-breaker.
-- Build one analysis-ready snapshot panel with one row per (rebalance_date, conid).
-It includes:
-    - Core shared features: AUM, expense ratio, domicile, classification, payout/dividend metrics, recent performance stats, price-derived momentum/
-    volatility/drawdown/liquidity/gap quality, and snapshot age.
-    - Equity sleeve features: value, profitability, leverage, sector/country/style concentration, top-10 concentration, regional aggregates, and
-    country macro exposure from holdings weights.
-    - Bond sleeve features: duration/maturity buckets, debtor quality, debt type, yield/income metrics, fixed-income ratios, and inflation-protected
-    flags.
-    - Commodity and other sleeves: only shared features in v1 unless there are at least 20 comparable ETFs in a family on a rebalance date.
-- Build factor series as tradable mimicking portfolios, not direct raw fundamentals in the regression.
-For each candidate factor at each rebalance date:
-    - Rank eligible ETFs within the applicable sleeve.
-    - Standardize sign so higher score always means “more of the factor”.
-    - Form long-short portfolios from top and bottom quantiles.
-    - Value-weight by total_net_assets_value when parsable, else equal-weight.
-    - Hold until the next rebalance.
-- Use a short-duration sovereign bond ETF basket as the excess-return baseline.
-The basket is built from the bond sleeve using the shortest maturity buckets, highest quality buckets, and government/treasury-oriented
-classifications when available. All ETF returns are modeled as excess returns over this internal baseline.
-- Sentiment is a separate research track in v1.
-It produces its own daily factor candidates from sscore, sdelta, svolatility, sdispersion, svscore, svolume, smean, and sbuzz, plus rolling z-
-scores and moving-average deviations. These are evaluated only on the 94-conid covered subset and compared against the core model as an
-incremental overlay, not mixed into the core factor set.
-- Ownership is not part of the core regression set in v1.
-Use it only for event-style exploratory summaries because coverage is thin and current history is very short.
-- ESG is excluded entirely until coverage exists.
-- Materialize these outputs:
-    - analysis_snapshot_panel
-    - analysis_daily_returns
-    - analysis_factor_returns
-    - analysis_factor_clusters
-    - analysis_model_results
-    - analysis_factor_persistence
-    - analysis_current_betas
-- Store durable outputs in SQLite plus parquet extracts under data/analysis/.
-SQLite stays the queryable source of truth; parquet is only for model-friendly cached frames.
+## Objective
 
-## Multicollinearity, Stationarity, And Selection
+- Primary goal is explanatory and persistence-oriented factor research.
+- The pipeline should produce stable factor definitions, persistent factor returns, and current factor betas.
+- The pipeline should stay point-in-time correct and avoid mixing future fundamentals into earlier rebalances.
+- The pipeline should support multiple ETF sleeves without forcing one shared factor library onto all of them.
 
-- Do not manually drop factors in code as the legacy script did in src/analysis.py:972.
-Replace that with deterministic screening.
-- Screening order is fixed:
-    1. Coverage filter: drop factor candidates with less than 60% non-null coverage in their applicable sleeve.
-    2. Variance filter: drop near-constant factors.
-    3. Turnover filter: drop factors whose long/short memberships barely change across rebalances.
-    4. Correlation clustering on factor-return series with absolute correlation threshold 0.90.
-    5. Within each cluster, keep one canonical representative if one exists; otherwise replace the cluster with the first standardized principal
-        component.
-    6. Run elastic net on the clustered set.
-    7. Refit OLS only on the surviving factors to estimate interpretable betas and diagnostics.
-- Persistence is measured across snapshot blocks, not just arbitrary day windows.
-Use anchored walk-forward runs where each training set contains whole snapshot vintages and each test set is the next snapshot interval.
-- Treat fundamentals as piecewise-constant state variables.
-Do not difference or de-trend the raw snapshot features aggressively in v1. Instead:
-    - carry them forward between snapshots,
-    - add days_since_snapshot,
-    - add snapshot-to-snapshot deltas where prior snapshots exist,
-    - and judge persistence on whether factor returns and selected betas remain stable across vintages.
-- Price-derived factors remain fully daily.
-That is where most short-horizon time variation comes from in v1.
-- Composite factors are first-class and registry-defined.
-Start with canonical composites:
-    - value
-    - profitability
-    - leverage
-    - momentum
-    - quality
-    - income
-    - duration
-    - credit
-    - concentration
-    Each composite must list its source metrics and weights explicitly so the same definition is reused in every run.
+## Current Execution Flow
 
-## Interfaces And Acceptance
+1. Session validation and login
+2. Product universe scrape
+3. Fundamentals and series scrape
+4. SQLite materialization
+5. Price series preprocessing
+6. Snapshot panel assembly
+7. Factor return construction
+8. Factor research and persistence scoring
+9. Current beta estimation
 
-- Add CLI entrypoints under pystocks.cli:
-    - build_analysis_panel
-    - run_factor_research
-    - compute_factor_betas
-    - run_analysis_pipeline
-- run_factor_research should output:
-    - factor-return series,
-    - cluster map,
-    - elastic-net selection frequencies,
-    - OLS diagnostics,
-    - persistence summary by factor and sleeve.
-- compute_factor_betas should output current betas for the latest eligible rebalance date using the persistent factor set chosen by research.
-- Required test scenarios:
-    - snapshot as-of joining never uses future fundamentals
-    - a missing new snapshot correctly carries the previous snapshot forward
-    - price cleaning removes invalid rows, stale runs, and extreme spikes without deleting normal jumps
-    - factor registry produces the same factor definition every run
-    - correlation clustering collapses near-duplicate factor families deterministically
-    - sentiment research runs on the covered subset without shrinking the core universe
-    - bond baseline selection only uses eligible short-duration sovereign bond ETFs
-    - current-beta computation uses the persistent factor set, not all raw candidates
-    - duplicate dividend-event ingestion is blocked once the precondition fix is applied
+## What Is Working
 
-## Assumptions And Defaults
+### Price preprocessing
 
-- Primary goal is explanation and persistence, not maximum predictive accuracy.
-- All ETF holding types stay in scope, but regressions are sleeve-specific with one optional pooled exploratory report.
-- The internal short-government-bond ETF basket is the excess-return baseline.
-- Sentiment stays separate from the core factor model in v1.
-- Ownership and ESG do not block the first factor-analysis implementation.
-- No CSV-centric workflow returns; SQLite plus parquet is the analysis path.
+`pystocks/price_preprocess.py` now covers:
+
+- invalid prices
+- stale runs
+- robust return outliers
+- short bridge-price anomalies inside decimal-shift pockets
+- instrument eligibility based on history length, missing ratio, and internal gaps
+
+This is the correct place for series-level cleaning of `price_chart_series`.
+
+### Analysis orchestration
+
+`pystocks/analysis.py` already handles:
+
+- as-of snapshot selection
+- monthly rebalance panel construction
+- sleeve assignment
+- price-derived features
+- raw and composite factor return construction
+- correlation clustering
+- elastic-net-based factor persistence research
+- current beta computation
+
+### Validation
+
+The current test suite covers:
+
+- storage and normalization for major endpoint families
+- effective date resolution
+- point-in-time panel behavior
+- analysis clustering behavior
+- price preprocessing edge cases
+
+## Gaps That Still Need Work
+
+### 1. Separate snapshot preprocessing layer
+
+This is the main missing architecture piece.
+
+The current code loads and merges snapshot tables directly inside `pystocks/analysis.py`. That is workable for a first pass, but it is not enough for durable factor research because the holdings and snapshot tables are not scale-consistent.
+
+Required action:
+
+- Add a dedicated snapshot preprocessing module.
+- Keep `pystocks/price_preprocess.py` series-only.
+- Move snapshot hygiene, table-specific scaling rules, and point-in-time feature normalization into the new snapshot layer.
+
+Reason:
+
+- Price-series anomalies and snapshot-table anomalies have different semantics and should not share one preprocessing module.
+
+### 2. Persist raw price anomaly signals from ingestion
+
+`pystocks/fundamentals_store.py` computes `debug_mismatch` for price rows, but that signal is not persisted into `price_chart_series`.
+
+Required action:
+
+- Persist `debug_mismatch` or an aggregated mismatch signal in SQLite.
+- Expose it to preprocessing as another row-level flag.
+
+Reason:
+
+- The current bridge-price anomaly logic is useful, but it is inferential.
+- If ingestion already sees a date mismatch signal, analysis should retain it.
+
+### 3. Instrument-level quarantine rules
+
+Some instruments are structurally broken, not just locally noisy.
+
+Examples seen in SQLite:
+
+- repeated zero/nonzero toggling
+- long invalid runs from inception
+- dense `high < low` rows
+- long flat stale runs
+
+Required action:
+
+- Add instrument-level quarantine rules on top of row-level cleaning.
+- Quarantine should be based on metrics such as invalid-row density, zero-toggle frequency, and repeated bridge-anomaly pockets.
+
+Reason:
+
+- Eligibility filtering alone is too late and too indirect for clearly broken instruments.
+
+### 4. Decide on regularized business-day return panels
+
+The legacy path regularized prices onto business days before downstream analysis. The current refactor does not.
+
+This is now an explicit design decision, not an accidental omission.
+
+Required action:
+
+- Decide whether factor research should consume sparse clean returns or a regularized business-day panel built after cleaning.
+- If added, keep this as a separate post-cleaning step rather than mixing it into raw series cleaning.
+
+Reason:
+
+- This choice affects momentum, volatility, gap handling, and comparability across ETFs.
+
+### 5. Snapshot feature semantics review
+
+Several holdings tables appear to mix overlapping or non-exclusive exposure views. Totals do not consistently sum to `1.0`.
+
+Required action:
+
+- Review holdings tables one by one.
+- Define which tables are expected to sum to `1.0`.
+- Define which tables can exceed `1.0`.
+- Define whether any tables need deduplication, rescaling, or aggregation before factor use.
+
+This is especially important for:
+
+- `holdings_asset_type`
+- `holdings_debtor_quality`
+- `holdings_maturity`
+- `holdings_currency`
+- `holdings_investor_country`
+- `holdings_debt_type`
+- `holdings_industry`
+
+### 6. Factor-definition hardening
+
+The current factor construction works, but the factor-definition layer is still implicit in `pystocks/analysis.py`.
+
+Required action:
+
+- Add an internal factor registry or equivalent explicit definition layer.
+- Store factor metadata such as factor id, family, sleeve applicability, sign convention, source columns, transform, and weighting rule.
+
+Reason:
+
+- This makes factor definitions reproducible and easier to review.
+- It also makes clustering and persistence outputs easier to interpret.
+
+## Modeling Defaults
+
+- Rebalance frequency is monthly.
+- Snapshot data is treated as piecewise-constant state carried forward until the next valid snapshot.
+- Price-derived features remain daily.
+- Factor construction remains sleeve-specific.
+- Sentiment stays a sidecar research track until coverage and value are better established.
+- Ownership stays optional and event-style.
+- ESG remains out of scope until coverage exists.
+
+## Outputs
+
+The analysis pipeline should continue to materialize:
+
+- `analysis_snapshot_panel`
+- `analysis_daily_returns`
+- `analysis_price_eligibility`
+- `analysis_factor_returns`
+- `analysis_factor_clusters`
+- `analysis_model_results`
+- `analysis_factor_persistence`
+- `analysis_current_betas`
+
+SQLite remains the durable queryable store. Parquet outputs under `data/analysis/` remain cache artifacts for analysis workflows.
+
+## Required Validation
+
+Keep these scenarios covered:
+
+- snapshot as-of joining never uses future data
+- a missing later snapshot correctly carries the prior snapshot forward
+- price cleaning removes invalid rows, stale runs, extreme spikes, and bridge anomalies without deleting normal step changes
+- bond baseline selection only uses eligible short-duration sovereign bond ETFs
+- factor clustering is deterministic
+- current beta computation uses the persistent factor set, not all raw factors
+- dividend event ingestion remains idempotent when snapshots are reprocessed
+
+Add these scenarios next:
+
+- real SQLite anomaly windows as regression tests
+- instrument-level quarantine behavior
+- snapshot preprocessing rules for holdings tables with ambiguous scale semantics
+- persisted `debug_mismatch` propagation from ingestion into preprocessing
+
+## Recommended Order
+
+1. Add snapshot preprocessing as a separate module.
+2. Persist raw price anomaly signals from ingestion.
+3. Add instrument-level quarantine rules.
+4. Decide on sparse versus regularized business-day return panels.
+5. Harden factor definitions into an explicit registry or equivalent layer.
+6. Expand tests around real anomaly windows and snapshot semantics.
+
+## Notes
+
+- Do not treat old DB coverage counts as durable planning inputs. They drift quickly and should be regenerated when needed.
+- Do not reintroduce CSV-centric analysis flows.
+- Keep `pystocks/` as the source of truth for production analysis logic.
