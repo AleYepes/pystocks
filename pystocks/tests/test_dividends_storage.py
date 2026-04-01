@@ -34,8 +34,16 @@ def test_dividends_series_and_metrics_are_refactored_to_new_schema():
                 },
                 "industry_comparison": {
                     "content": [
-                        {"search_id": "div_yield", "value": 0.0085, "formatted_value": "0.85%"},
-                        {"search_id": "div_per_share", "value": 5.585599, "formatted_value": "5.59"},
+                        {
+                            "search_id": "div_yield",
+                            "value": 0.0085,
+                            "formatted_value": "0.85%",
+                        },
+                        {
+                            "search_id": "div_per_share",
+                            "value": 5.585599,
+                            "formatted_value": "5.59",
+                        },
                     ]
                 },
                 "last_payed_dividend_currency": "USD",
@@ -50,7 +58,11 @@ def test_dividends_series_and_metrics_are_refactored_to_new_schema():
                                     "formatted_amount": "1.11 EUR",
                                     "type": "ACTUAL",
                                     "description": "Regular Dividend",
-                                    "ex_dividend_date": {"y": 2024, "m": "JAN", "d": 10},
+                                    "ex_dividend_date": {
+                                        "y": 2024,
+                                        "m": "JAN",
+                                        "d": 10,
+                                    },
                                     "declaration_date": {"y": 2024, "m": "JAN", "d": 9},
                                     "record_date": {"y": 2024, "m": "JAN", "d": 11},
                                     "payment_date": {"y": 2024, "m": "FEB", "d": 1},
@@ -60,7 +72,11 @@ def test_dividends_series_and_metrics_are_refactored_to_new_schema():
                                     "amount": 1.22,
                                     "type": "ACTUAL",
                                     "description": "Regular Dividend",
-                                    "ex_dividend_date": {"y": 2024, "m": "APR", "d": 10},
+                                    "ex_dividend_date": {
+                                        "y": 2024,
+                                        "m": "APR",
+                                        "d": 10,
+                                    },
                                     "declaration_date": {"y": 2024, "m": "APR", "d": 9},
                                     "record_date": {"y": 2024, "m": "APR", "d": 11},
                                     "payment_date": {"y": 2024, "m": "MAY", "d": 1},
@@ -70,7 +86,13 @@ def test_dividends_series_and_metrics_are_refactored_to_new_schema():
                         {
                             "name": "price",
                             "plotData": [
-                                {"x": "2024-01-10", "y": 100.0, "open": 99.0, "high": 101.0, "low": 98.0},
+                                {
+                                    "x": "2024-01-10",
+                                    "y": 100.0,
+                                    "open": 99.0,
+                                    "high": 101.0,
+                                    "low": 98.0,
+                                },
                             ],
                         },
                     ]
@@ -87,7 +109,9 @@ def test_dividends_series_and_metrics_are_refactored_to_new_schema():
         try:
             table_names = {
                 row[0]
-                for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
             }
             assert "dividends_events_series_latest" not in table_names
             assert "dividends_events_series" in table_names
@@ -231,7 +255,8 @@ def test_dividends_mismatch_logging_only_triggers_for_gt_one_day(caplog):
         mismatch_logs = [
             rec.message
             for rec in caplog.records
-            if "dividends date mismatch between trade_date and event_date" in rec.message
+            if "dividends date mismatch between trade_date and event_date"
+            in rec.message
         ]
         assert len(mismatch_logs) == 1
     finally:

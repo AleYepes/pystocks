@@ -2,20 +2,21 @@ import asyncio
 import json
 import logging
 from collections import Counter, defaultdict
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 from urllib.parse import parse_qs
+
 from tqdm.asyncio import tqdm
 
 from .config import RESEARCH_DIR
-from .session import IBKRSession
+from .fundamentals_store import FundamentalsStore
 from .ops_state import (
-    init_db,
     get_all_instrument_conids,
     get_scraped_conids,
+    init_db,
     update_instrument_fundamentals_status,
 )
-from .fundamentals_store import FundamentalsStore
+from .session import IBKRSession
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +36,10 @@ def _load_conids_from_file(path):
         out.append(value)
     return out
 
+
 class FundamentalScraper:
     """Scrapes fundamental data from IBKR Portal API."""
+
     PERIODS_DESC = ["10Y", "5Y", "3Y", "1Y", "6M"]
     PRICE_CHART_PERIOD_WINDOWS = [
         ("1W", 14),
@@ -61,7 +64,7 @@ class FundamentalScraper:
         "esg": "impact/esg",
         "performance": "mf_performance",
     }
-    
+
     def __init__(self, session=None):
         self.session = session or IBKRSession()
         self.esg_account_id = self.session.get_primary_account_id()
@@ -69,7 +72,7 @@ class FundamentalScraper:
         self.research_dir.mkdir(parents=True, exist_ok=True)
         self.store = FundamentalsStore()
         self.telemetry = {
-            "run_started_at": datetime.now(timezone.utc).isoformat(),
+            "run_started_at": datetime.now(UTC).isoformat(),
             "endpoint_calls": Counter(),
             "endpoint_useful_payloads": Counter(),
             "status_codes": defaultdict(Counter),
@@ -79,7 +82,7 @@ class FundamentalScraper:
     def _endpoint_family(self, endpoint):
         endpoint = endpoint.lstrip("/")
         if endpoint.startswith("fundamentals/"):
-            endpoint = endpoint[len("fundamentals/"):]
+            endpoint = endpoint[len("fundamentals/") :]
 
         if endpoint.startswith("landing/"):
             return "landing"
@@ -117,17 +120,24 @@ class FundamentalScraper:
     def _record_useful_payload(self, endpoint):
         family = self._endpoint_family(endpoint)
         self.telemetry["endpoint_useful_payloads"][family] += 1
-        
+
     async def fetch_endpoint(self, client, endpoint):
         """Fetches data from a specific endpoint and logs it."""
         # Check if endpoint starts with fundamentals/ or mstar/ or sma/
         # If not, default to fundamentals/
-        path_prefix = "" if ("/" in endpoint and endpoint.split("/")[0] in ["fundamentals", "mstar", "sma", "impact"]) else "fundamentals/"
+        path_prefix = (
+            ""
+            if (
+                "/" in endpoint
+                and endpoint.split("/")[0] in ["fundamentals", "mstar", "sma", "impact"]
+            )
+            else "fundamentals/"
+        )
         url = f"/tws.proxy/{path_prefix}{endpoint}"
         try:
             response = await client.get(url)
             self._record_endpoint_status(endpoint, response.status_code)
-            
+
             if response.status_code == 200:
                 return response.json()
             elif response.status_code in [401, 403]:
@@ -184,7 +194,12 @@ class FundamentalScraper:
             "lipper": ["universes"],
             "esg": ["content"],
             # Keep both short and long dividends payload families.
-            "divs": ["history", "industry_average", "no_div_data_marker", "last_payed_dividend_amount"],
+            "divs": [
+                "history",
+                "industry_average",
+                "no_div_data_marker",
+                "last_payed_dividend_amount",
+            ],
             "mstar": ["summary", "commentary"],
             "price_chart": ["plot"],
             "perf": ["cumulative", "annualized"],
@@ -207,7 +222,7 @@ class FundamentalScraper:
 
     def _build_sma_search_endpoint(self, conid):
         # Request max historical daily sentiment series.
-        to_dt = datetime.now(timezone.utc)
+        to_dt = datetime.now(UTC)
         from_str = "1995-01-01 00:00"
         to_str = to_dt.strftime("%Y-%m-%d %H:%M")
         return f"sma/request?type=search&conid={conid}&from={from_str}&to={to_str}&bar_size=1D&tz=-60"
@@ -217,11 +232,11 @@ class FundamentalScraper:
         if latest_effective_at is None:
             return "MAX"
 
-        as_of = as_of_date or datetime.now(timezone.utc).date()
+        as_of = as_of_date or datetime.now(UTC).date()
         if isinstance(as_of, datetime):
             as_of = as_of.date()
         if not isinstance(as_of, date):
-            as_of = datetime.now(timezone.utc).date()
+            as_of = datetime.now(UTC).date()
 
         missing_days = (as_of - latest_effective_at).days
         if missing_days <= 0:
@@ -275,7 +290,9 @@ class FundamentalScraper:
         Returns tuple: (payload_or_auth_error, selected_period_or_none)
         """
         for period in self.PERIODS_DESC:
-            endpoint = f"mf_performance/{conid}?risk_period={period}&statistic_period={period}"
+            endpoint = (
+                f"mf_performance/{conid}?risk_period={period}&statistic_period={period}"
+            )
             data = await self.fetch_endpoint(client, endpoint)
             if data == "__AUTH_ERROR__":
                 return "__AUTH_ERROR__", None
@@ -287,7 +304,9 @@ class FundamentalScraper:
         """Scrapes fundamental data for a given conid."""
         widgets = "objective,mstar,lipper_ratings,mf_key_ratios,risk_and_statistics,holdings,performance_and_peers,keyProfile,ownership,dividends,tear_sheet,news,fund_mstar,mf_esg,social_sentiment,securities_lending,sv,short_sale,ukuser"
 
-        landing_data = await self.fetch_endpoint(client, f"landing/{conid}?widgets={widgets}")
+        landing_data = await self.fetch_endpoint(
+            client, f"landing/{conid}?widgets={widgets}"
+        )
         if landing_data == "__AUTH_ERROR__":
             return "__AUTH_ERROR__"
         if not isinstance(landing_data, dict):
@@ -305,14 +324,33 @@ class FundamentalScraper:
 
         price_chart_period = self._select_price_chart_period(conid)
         fixed_task_items = [
-            ("profile_and_fees", self.fetch_endpoint(client, f"mf_profile_and_fees/{conid}?sustainability=UK&lang=en")),
+            (
+                "profile_and_fees",
+                self.fetch_endpoint(
+                    client, f"mf_profile_and_fees/{conid}?sustainability=UK&lang=en"
+                ),
+            ),
             ("holdings", self.fetch_endpoint(client, f"mf_holdings/{conid}")),
             ("ratios", self.fetch_endpoint(client, f"mf_ratios_fundamentals/{conid}")),
             ("lipper_ratings", self.fetch_endpoint(client, f"mf_lip_ratings/{conid}")),
             ("dividends", self.fetch_endpoint(client, f"dividends/{conid}")),
-            ("morningstar", self.fetch_endpoint(client, f"mstar/fund/detail?conid={conid}")),
-            ("price_chart", self.fetch_endpoint(client, self._build_price_chart_endpoint(conid, chart_period=price_chart_period))),
-            ("sentiment_search", self.fetch_endpoint(client, self._build_sma_search_endpoint(conid))),
+            (
+                "morningstar",
+                self.fetch_endpoint(client, f"mstar/fund/detail?conid={conid}"),
+            ),
+            (
+                "price_chart",
+                self.fetch_endpoint(
+                    client,
+                    self._build_price_chart_endpoint(
+                        conid, chart_period=price_chart_period
+                    ),
+                ),
+            ),
+            (
+                "sentiment_search",
+                self.fetch_endpoint(client, self._build_sma_search_endpoint(conid)),
+            ),
             ("ownership", self.fetch_endpoint(client, f"ownership/{conid}")),
             ("esg", self.fetch_endpoint(client, self._build_esg_endpoint(conid))),
         ]
@@ -332,9 +370,11 @@ class FundamentalScraper:
             values = await asyncio.gather(*tasks)
             period_results = dict(zip(names, values))
 
-        if "__AUTH_ERROR__" in fixed_results.values() or any(r[0] == "__AUTH_ERROR__" for r in period_results.values()):
+        if "__AUTH_ERROR__" in fixed_results.values() or any(
+            r[0] == "__AUTH_ERROR__" for r in period_results.values()
+        ):
             return "__AUTH_ERROR__"
-        
+
         for name, data in fixed_results.items():
             has_payload = self._has_payload_data(data, name)
             include_payload = has_payload or (
@@ -346,14 +386,18 @@ class FundamentalScraper:
                 if name == "price_chart":
                     combined_data["price_chart_period"] = price_chart_period
                 if has_payload:
-                    self._record_useful_payload(self.RESULT_ENDPOINT_FAMILIES.get(name, name))
-        
+                    self._record_useful_payload(
+                        self.RESULT_ENDPOINT_FAMILIES.get(name, name)
+                    )
+
         for name, (data, period) in period_results.items():
             if data:
                 combined_data[name] = data
                 combined_data[f"{name}_period"] = period
-                self._record_useful_payload(self.RESULT_ENDPOINT_FAMILIES.get(name, name))
-                
+                self._record_useful_payload(
+                    self.RESULT_ENDPOINT_FAMILIES.get(name, name)
+                )
+
         return combined_data
 
     def save_telemetry(
@@ -371,7 +415,9 @@ class FundamentalScraper:
         output_path=None,
     ):
         endpoint_calls = dict(sorted(self.telemetry["endpoint_calls"].items()))
-        endpoint_useful = dict(sorted(self.telemetry["endpoint_useful_payloads"].items()))
+        endpoint_useful = dict(
+            sorted(self.telemetry["endpoint_useful_payloads"].items())
+        )
         status_codes = {}
         for endpoint, counts in self.telemetry["status_codes"].items():
             status_codes[endpoint] = dict(sorted(counts.items(), key=lambda kv: kv[0]))
@@ -384,14 +430,16 @@ class FundamentalScraper:
                     "endpoint": endpoint,
                     "call_count": call_count,
                     "useful_payload_count": useful_count,
-                    "useful_payload_rate": (useful_count / call_count) if call_count else 0.0,
+                    "useful_payload_rate": (useful_count / call_count)
+                    if call_count
+                    else 0.0,
                     "status_codes": status_codes.get(endpoint, {}),
                 }
             )
 
         payload = {
             "run_started_at": self.telemetry["run_started_at"],
-            "run_finished_at": datetime.now(timezone.utc).isoformat(),
+            "run_finished_at": datetime.now(UTC).isoformat(),
             "run_stats": {
                 "total_targeted_conids": total_targeted,
                 "processed_conids": processed_conids,
@@ -411,7 +459,7 @@ class FundamentalScraper:
             telemetry_path = Path(output_path)
             telemetry_path.parent.mkdir(parents=True, exist_ok=True)
         else:
-            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             telemetry_path = self.research_dir / f"fundamentals_run_telemetry_{ts}.json"
 
         latest_path = self.research_dir / "fundamentals_run_telemetry_latest.json"
@@ -424,11 +472,14 @@ class FundamentalScraper:
             run_stats = dict(payload.get("run_stats", {}))
             run_stats["run_started_at"] = payload.get("run_started_at")
             run_stats["run_finished_at"] = payload.get("run_finished_at")
-            self.store.persist_ingest_run(run_stats=run_stats, endpoint_summary=endpoint_summary)
+            self.store.persist_ingest_run(
+                run_stats=run_stats, endpoint_summary=endpoint_summary
+            )
         except Exception as e:
             logger.warning(f"Failed persisting run telemetry to SQLite: {e}")
 
         return telemetry_path, latest_path
+
 
 async def main(
     limit=None,
@@ -446,7 +497,7 @@ async def main(
         logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s")
     root_logger.setLevel(log_level)
     logger.setLevel(log_level)
-    
+
     scraper = FundamentalScraper()
     has_valid_session = await scraper.session.validate_auth_state()
     if not has_valid_session:
@@ -455,11 +506,15 @@ async def main(
             force_browser=True,
         )
         if not authenticated:
-            logger.error("Unable to authenticate IBKR session. Aborting fundamentals scrape.")
+            logger.error(
+                "Unable to authenticate IBKR session. Aborting fundamentals scrape."
+            )
             return
 
     scraped_recently = [] if force else get_scraped_conids()
-    logger.info(f"Skipping {len(scraped_recently)} instruments already scraped in the last 7 days.")
+    logger.info(
+        f"Skipping {len(scraped_recently)} instruments already scraped in the last 7 days."
+    )
 
     selected_conids = _load_conids_from_file(conids_file)
     if selected_conids is not None:
@@ -468,7 +523,9 @@ async def main(
             return
         conids_to_scrape = selected_conids
         if not force:
-            conids_to_scrape = [c for c in conids_to_scrape if c not in scraped_recently]
+            conids_to_scrape = [
+                c for c in conids_to_scrape if c not in scraped_recently
+            ]
         logger.info(f"Using explicit conid target list: {len(conids_to_scrape)} items.")
     else:
         all_conids = get_all_instrument_conids()
@@ -479,9 +536,9 @@ async def main(
             )
             return
         conids_to_scrape = [c for c in all_conids if c not in scraped_recently]
-    
+
     if limit:
-        conids_to_scrape = conids_to_scrape[start_index:start_index + limit]
+        conids_to_scrape = conids_to_scrape[start_index : start_index + limit]
     else:
         conids_to_scrape = conids_to_scrape[start_index:]
 
@@ -508,8 +565,12 @@ async def main(
                         data = await scraper.scrape_conid(client, conid)
 
                         if data == "__AUTH_ERROR__":
-                            update_instrument_fundamentals_status(conid, "auth_error", mark_scraped=False)
-                            logger.warning(f"Authentication expired while scraping conid={conid}.")
+                            update_instrument_fundamentals_status(
+                                conid, "auth_error", mark_scraped=False
+                            )
+                            logger.warning(
+                                f"Authentication expired while scraping conid={conid}."
+                            )
                             needs_reauth = True
                             break
 
@@ -517,13 +578,25 @@ async def main(
                             store_result = scraper.store.persist_combined_snapshot(
                                 data,
                             )
-                            inserted_events += int(store_result.get("inserted_events", 0))
-                            overwritten_events += int(store_result.get("overwritten_events", 0))
-                            unchanged_events += int(store_result.get("unchanged_events", 0))
-                            series_raw_rows_written += int(store_result.get("series_raw_rows_written", 0))
-                            series_latest_rows_upserted += int(store_result.get("series_latest_rows_upserted", 0))
+                            inserted_events += int(
+                                store_result.get("inserted_events", 0)
+                            )
+                            overwritten_events += int(
+                                store_result.get("overwritten_events", 0)
+                            )
+                            unchanged_events += int(
+                                store_result.get("unchanged_events", 0)
+                            )
+                            series_raw_rows_written += int(
+                                store_result.get("series_raw_rows_written", 0)
+                            )
+                            series_latest_rows_upserted += int(
+                                store_result.get("series_latest_rows_upserted", 0)
+                            )
                             if store_result.get("status") == "ok":
-                                update_instrument_fundamentals_status(conid, "success", mark_scraped=True)
+                                update_instrument_fundamentals_status(
+                                    conid, "success", mark_scraped=True
+                                )
                                 saved_snapshots += 1
                             else:
                                 update_instrument_fundamentals_status(
@@ -532,7 +605,9 @@ async def main(
                                     mark_scraped=False,
                                 )
                         else:
-                            update_instrument_fundamentals_status(conid, "empty_payload", mark_scraped=False)
+                            update_instrument_fundamentals_status(
+                                conid, "empty_payload", mark_scraped=False
+                            )
 
                         processed_conids += 1
                         pbar.update(1)
@@ -548,7 +623,9 @@ async def main(
                 break
 
             if auth_retries >= max_auth_retries:
-                logger.error(f"Exceeded maximum reauthentication attempts ({max_auth_retries}).")
+                logger.error(
+                    f"Exceeded maximum reauthentication attempts ({max_auth_retries})."
+                )
                 aborted = True
                 break
 
@@ -583,6 +660,8 @@ async def main(
 async def run_fundamentals_update(limit=100, verbose=False, **kwargs):
     return await main(limit=limit, verbose=verbose, **kwargs)
 
+
 if __name__ == "__main__":
     import fire
+
     fire.Fire(main)

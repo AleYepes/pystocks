@@ -1,10 +1,9 @@
-from datetime import datetime, timedelta, timezone
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
 from .config import SQLITE_DB_PATH
-
 
 DB_PATH = SQLITE_DB_PATH
 _INITIALIZED_DB_PATH = None
@@ -89,7 +88,7 @@ def upsert_instruments_from_products(products_df):
         & (normalized["conid"].str.lower() != "nan")
     ].drop_duplicates(subset=["conid"], keep="last")
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     init_db()
     conn = _connect()
     try:
@@ -176,7 +175,7 @@ def get_scraped_conids(today=None):
 def update_instrument_fundamentals_status(conid, status, mark_scraped=False):
     init_db()
     conid = str(conid)
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     conn = _connect()
     try:
         conn.execute(

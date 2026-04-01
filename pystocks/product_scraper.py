@@ -39,7 +39,7 @@ async def fetch_api_direct(client, page_number, retries=5):
                 await asyncio.sleep(5 * (attempt + 1))
             else:
                 await asyncio.sleep(1 * (attempt + 1))
-        except (httpx.RequestError, asyncio.TimeoutError):
+        except (TimeoutError, httpx.RequestError):
             await asyncio.sleep(2 * (attempt + 1))
 
     return None
@@ -80,8 +80,14 @@ async def scrape_ibkr_products():
 
     df = pd.DataFrame(all_products).drop_duplicates(subset=["conid"], keep="last")
     n_upserted = upsert_instruments_from_products(df)
-    logger.info(f"Upserted {n_upserted} products into SQLite products table at {SQLITE_DB_PATH}")
-    return {"status": "ok", "products_upserted": n_upserted, "sqlite_path": str(SQLITE_DB_PATH)}
+    logger.info(
+        f"Upserted {n_upserted} products into SQLite products table at {SQLITE_DB_PATH}"
+    )
+    return {
+        "status": "ok",
+        "products_upserted": n_upserted,
+        "sqlite_path": str(SQLITE_DB_PATH),
+    }
 
 
 if __name__ == "__main__":

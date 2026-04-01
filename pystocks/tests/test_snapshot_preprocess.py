@@ -24,14 +24,34 @@ def test_preprocess_snapshot_features_builds_merged_feature_rows():
         ),
         "holdings_asset_type": pd.DataFrame(
             [
-                {"conid": "a", "effective_at": "2026-01-31", "equity": 0.97, "fixed_income": 0.0},
-                {"conid": "b", "effective_at": "2026-01-31", "equity": 0.0, "fixed_income": 0.98},
+                {
+                    "conid": "a",
+                    "effective_at": "2026-01-31",
+                    "equity": 0.97,
+                    "fixed_income": 0.0,
+                },
+                {
+                    "conid": "b",
+                    "effective_at": "2026-01-31",
+                    "equity": 0.0,
+                    "fixed_income": 0.98,
+                },
             ]
         ),
         "ratios_key_ratios": pd.DataFrame(
             [
-                {"conid": "a", "effective_at": "2026-01-31", "metric_id": "price_book", "value_num": 1.5},
-                {"conid": "b", "effective_at": "2026-01-31", "metric_id": "price_book", "value_num": 3.0},
+                {
+                    "conid": "a",
+                    "effective_at": "2026-01-31",
+                    "metric_id": "price_book",
+                    "value_num": 1.5,
+                },
+                {
+                    "conid": "b",
+                    "effective_at": "2026-01-31",
+                    "metric_id": "price_book",
+                    "value_num": 3.0,
+                },
             ]
         ),
     }
@@ -52,23 +72,41 @@ def test_preprocess_snapshot_features_builds_holdings_diagnostics():
     tables = {
         "holdings_geographic_weights": pd.DataFrame(
             [
-                {"conid": "near", "effective_at": "2026-01-31", "region": "North America", "value_num": 0.98},
-                {"conid": "near", "effective_at": "2026-01-31", "region": "Europe", "value_num": 0.01},
+                {
+                    "conid": "near",
+                    "effective_at": "2026-01-31",
+                    "region": "North America",
+                    "value_num": 0.98,
+                },
+                {
+                    "conid": "near",
+                    "effective_at": "2026-01-31",
+                    "region": "Europe",
+                    "value_num": 0.01,
+                },
             ]
         ),
         "holdings_currency": pd.DataFrame(
             [
-                {"conid": "over", "effective_at": "2026-01-31", "code": "USD", "currency": "US Dollar", "value_num": 1.15},
+                {
+                    "conid": "over",
+                    "effective_at": "2026-01-31",
+                    "code": "USD",
+                    "currency": "US Dollar",
+                    "value_num": 1.15,
+                },
             ]
         ),
     }
 
     diagnostics = preprocess_snapshot_features(tables=tables)["holdings_diagnostics"]
     near_row = diagnostics.loc[
-        (diagnostics["table_name"] == "holdings_geographic_weights") & (diagnostics["conid"] == "near")
+        (diagnostics["table_name"] == "holdings_geographic_weights")
+        & (diagnostics["conid"] == "near")
     ].iloc[0]
     over_row = diagnostics.loc[
-        (diagnostics["table_name"] == "holdings_currency") & (diagnostics["conid"] == "over")
+        (diagnostics["table_name"] == "holdings_currency")
+        & (diagnostics["conid"] == "over")
     ].iloc[0]
 
     assert bool(near_row["is_sum_near_one"])
@@ -80,17 +118,49 @@ def test_preprocess_snapshot_features_builds_holdings_diagnostics():
 
 def test_preprocess_snapshot_features_ratio_pivot_is_deterministic_and_flags_duplicates():
     base_rows = [
-        {"conid": "a", "effective_at": "2026-01-31", "metric_id": "price_book", "value_num": 3.0},
-        {"conid": "a", "effective_at": "2026-01-31", "metric_id": "price_book", "value_num": 2.0},
-        {"conid": "a", "effective_at": "2026-01-31", "metric_id": "price_sales", "value_num": 4.0},
+        {
+            "conid": "a",
+            "effective_at": "2026-01-31",
+            "metric_id": "price_book",
+            "value_num": 3.0,
+        },
+        {
+            "conid": "a",
+            "effective_at": "2026-01-31",
+            "metric_id": "price_book",
+            "value_num": 2.0,
+        },
+        {
+            "conid": "a",
+            "effective_at": "2026-01-31",
+            "metric_id": "price_sales",
+            "value_num": 4.0,
+        },
     ]
 
-    result_a = preprocess_snapshot_features(tables={"ratios_key_ratios": pd.DataFrame(base_rows)})
-    result_b = preprocess_snapshot_features(tables={"ratios_key_ratios": pd.DataFrame(list(reversed(base_rows)))})
+    result_a = preprocess_snapshot_features(
+        tables={"ratios_key_ratios": pd.DataFrame(base_rows)}
+    )
+    result_b = preprocess_snapshot_features(
+        tables={"ratios_key_ratios": pd.DataFrame(list(reversed(base_rows)))}
+    )
 
-    feature_cols = ["conid", "effective_at", "ratio_key__price_book", "ratio_key__price_sales"]
-    features_a = result_a["features"][feature_cols].sort_values(["conid", "effective_at"]).reset_index(drop=True)
-    features_b = result_b["features"][feature_cols].sort_values(["conid", "effective_at"]).reset_index(drop=True)
+    feature_cols = [
+        "conid",
+        "effective_at",
+        "ratio_key__price_book",
+        "ratio_key__price_sales",
+    ]
+    features_a = (
+        result_a["features"][feature_cols]
+        .sort_values(["conid", "effective_at"])
+        .reset_index(drop=True)
+    )
+    features_b = (
+        result_b["features"][feature_cols]
+        .sort_values(["conid", "effective_at"])
+        .reset_index(drop=True)
+    )
     diagnostics = result_a["ratio_diagnostics"]
     row = diagnostics.loc[diagnostics["table_name"] == "ratios_key_ratios"].iloc[0]
 
@@ -127,16 +197,46 @@ def test_build_analysis_panel_uses_processed_snapshot_features():
             ),
             "holdings_asset_type": pd.DataFrame(
                 [
-                    {"conid": "a", "effective_at": "2026-01-31", "equity": 1.0, "fixed_income": 0.0},
-                    {"conid": "a", "effective_at": "2026-02-28", "equity": 1.0, "fixed_income": 0.0},
-                    {"conid": "b", "effective_at": "2026-01-31", "equity": 0.0, "fixed_income": 1.0},
+                    {
+                        "conid": "a",
+                        "effective_at": "2026-01-31",
+                        "equity": 1.0,
+                        "fixed_income": 0.0,
+                    },
+                    {
+                        "conid": "a",
+                        "effective_at": "2026-02-28",
+                        "equity": 1.0,
+                        "fixed_income": 0.0,
+                    },
+                    {
+                        "conid": "b",
+                        "effective_at": "2026-01-31",
+                        "equity": 0.0,
+                        "fixed_income": 1.0,
+                    },
                 ]
             ),
             "ratios_key_ratios": pd.DataFrame(
                 [
-                    {"conid": "a", "effective_at": "2026-01-31", "metric_id": "price_book", "value_num": 1.0},
-                    {"conid": "a", "effective_at": "2026-02-28", "metric_id": "price_book", "value_num": 2.0},
-                    {"conid": "b", "effective_at": "2026-01-31", "metric_id": "price_book", "value_num": 3.0},
+                    {
+                        "conid": "a",
+                        "effective_at": "2026-01-31",
+                        "metric_id": "price_book",
+                        "value_num": 1.0,
+                    },
+                    {
+                        "conid": "a",
+                        "effective_at": "2026-02-28",
+                        "metric_id": "price_book",
+                        "value_num": 2.0,
+                    },
+                    {
+                        "conid": "b",
+                        "effective_at": "2026-01-31",
+                        "metric_id": "price_book",
+                        "value_num": 3.0,
+                    },
                 ]
             ),
         }
@@ -265,8 +365,14 @@ def test_build_analysis_panel_uses_processed_snapshot_features():
         AnalysisConfig(rebalance_freq="M"),
     )
 
-    row_feb = panel[(panel["conid"] == "a") & (panel["rebalance_date"] == pd.Timestamp("2026-02-28"))].iloc[0]
-    row_mar = panel[(panel["conid"] == "a") & (panel["rebalance_date"] == pd.Timestamp("2026-03-05"))].iloc[0]
+    row_feb = panel[
+        (panel["conid"] == "a")
+        & (panel["rebalance_date"] == pd.Timestamp("2026-02-28"))
+    ].iloc[0]
+    row_mar = panel[
+        (panel["conid"] == "a")
+        & (panel["rebalance_date"] == pd.Timestamp("2026-03-05"))
+    ].iloc[0]
     assert row_feb["ratio_key__price_book"] == 2.0
     assert row_mar["ratio_key__price_book"] == 2.0
     assert row_mar["snapshot_age_days"] == 5

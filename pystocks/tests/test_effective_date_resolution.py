@@ -20,7 +20,9 @@ def test_effective_date_uses_ratios_as_of_date_for_all_endpoints():
             "scraped_at": "2026-02-24T12:00:00+00:00",
             "holdings": {
                 "as_of_date": "2026-02-20",
-                "currency": [{"name": "US Dollar", "weight": "100%", "vs": "95%", "code": "USD"}],
+                "currency": [
+                    {"name": "US Dollar", "weight": "100%", "vs": "95%", "code": "USD"}
+                ],
             },
             "ratios": {
                 "as_of_date": "2026-02-19",
@@ -28,7 +30,10 @@ def test_effective_date_uses_ratios_as_of_date_for_all_endpoints():
             "profile_and_fees": {
                 "fund_and_profile": [
                     {"name": "Maturity Date", "value": "2030-12-31"},
-                    {"name": "Total Net Assets (Month End)", "value": "$1.2B (2026/01/30)"},
+                    {
+                        "name": "Total Net Assets (Month End)",
+                        "value": "$1.2B (2026/01/30)",
+                    },
                 ],
             },
         }

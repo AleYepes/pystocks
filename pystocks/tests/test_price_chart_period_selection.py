@@ -19,12 +19,17 @@ def _scraper_with_latest(latest):
 
 def test_select_price_chart_period_uses_max_when_no_existing_series():
     scraper = _scraper_with_latest(None)
-    assert scraper._select_price_chart_period("1001", as_of_date=date(2026, 2, 27)) == "MAX"
+    assert (
+        scraper._select_price_chart_period("1001", as_of_date=date(2026, 2, 27))
+        == "MAX"
+    )
 
 
 def test_select_price_chart_period_avoids_day_periods_for_small_gaps():
     scraper = _scraper_with_latest(date(2026, 2, 26))
-    assert scraper._select_price_chart_period("1002", as_of_date=date(2026, 2, 27)) == "1W"
+    assert (
+        scraper._select_price_chart_period("1002", as_of_date=date(2026, 2, 27)) == "1W"
+    )
 
 
 def test_select_price_chart_period_scales_by_missing_window():

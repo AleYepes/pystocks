@@ -33,8 +33,11 @@ def test_profile_fees_merges_launch_opening_price_and_splits_total_net_assets():
                 "themes": ["Index Tracking"],
                 "fund_and_profile": [
                     {"name": "Launch Opening Price", "value": "2018/07/15"},
-                    {"name": "Total Net Assets (Month End)", "value": "CAD289.15M (2026/01/30)"},
-                ]
+                    {
+                        "name": "Total Net Assets (Month End)",
+                        "value": "CAD289.15M (2026/01/30)",
+                    },
+                ],
             },
         }
 
@@ -52,7 +55,14 @@ def test_profile_fees_merges_launch_opening_price_and_splits_total_net_assets():
                 """,
                 ["profile_merge_1"],
             ).fetchone()
-            assert row == ("2018-07-15", "CAD289.15M", "2026-01-30", "Objective text", 0, "Index Tracking")
+            assert row == (
+                "2018-07-15",
+                "CAD289.15M",
+                "2026-01-30",
+                "Objective text",
+                0,
+                "Index Tracking",
+            )
 
             cols = _table_columns(con, "profile_and_fees")
             assert "total_net_assets_value" in cols
@@ -80,7 +90,10 @@ def test_profile_fees_prefers_inception_date_over_launch_opening_price():
                 "fund_and_profile": [
                     {"name": "Inception Date", "value": "2010-01-02"},
                     {"name": "Launch Opening Price", "value": "2018/07/15"},
-                    {"name": "Total Net Assets (Month End)", "value": "€20.86M (2026/01/30."},
+                    {
+                        "name": "Total Net Assets (Month End)",
+                        "value": "€20.86M (2026/01/30.",
+                    },
                 ]
             },
         }
@@ -130,7 +143,10 @@ def test_profile_fees_reports_are_pivoted_to_numeric_columns():
                         "as_of_date": "2025-01-27",
                         "fields": [
                             {"name": "Prospectus Net Expense Ratio", "value": "0.40%"},
-                            {"name": "Prospectus Net Management Fee Ratio", "value": "0.15%"},
+                            {
+                                "name": "Prospectus Net Management Fee Ratio",
+                                "value": "0.15%",
+                            },
                             {"name": "Unknown Field", "value": "99%"},
                         ],
                     },
@@ -223,7 +239,9 @@ def test_profile_fees_snapshots_schema_and_legacy_tables_removed():
 
             table_names = {
                 row[0]
-                for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
             }
             assert "profile_and_fees" in table_names
             assert "profile_and_fees_snapshots" in table_names

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -8,7 +8,7 @@ from .config import RESEARCH_DIR
 
 
 def _load_telemetry(path):
-    with open(path, "r") as f:
+    with open(path) as f:
         data = json.load(f)
 
     endpoint_map = {}
@@ -76,7 +76,7 @@ def compare(
         output_path = Path(output_csv)
         output_path.parent.mkdir(parents=True, exist_ok=True)
     else:
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         output_path = output_dir / f"fundamentals_telemetry_compare_{ts}.csv"
 
     df.to_csv(output_path, index=False)
@@ -86,11 +86,23 @@ def compare(
         print(f"{key}: {value}")
 
     print("\n--- Run Stats (baseline) ---")
-    for key in ["total_targeted_conids", "processed_conids", "saved_snapshots", "auth_retries", "aborted"]:
+    for key in [
+        "total_targeted_conids",
+        "processed_conids",
+        "saved_snapshots",
+        "auth_retries",
+        "aborted",
+    ]:
         print(f"{key}: {baseline_stats.get(key)}")
 
     print("\n--- Run Stats (candidate) ---")
-    for key in ["total_targeted_conids", "processed_conids", "saved_snapshots", "auth_retries", "aborted"]:
+    for key in [
+        "total_targeted_conids",
+        "processed_conids",
+        "saved_snapshots",
+        "auth_retries",
+        "aborted",
+    ]:
         print(f"{key}: {candidate_stats.get(key)}")
 
     print(f"\nWrote endpoint comparison to: {output_path}")

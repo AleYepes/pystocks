@@ -97,7 +97,9 @@ def test_ratios_split_into_section_tables_and_drop_fmt_fields():
         try:
             table_names = {
                 row[0]
-                for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
             }
             assert "ratios_metrics" not in table_names
             assert "ratios_key_ratios" in table_names

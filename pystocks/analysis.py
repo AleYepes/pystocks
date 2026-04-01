@@ -1,6 +1,6 @@
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-import sqlite3
 
 import networkx as nx
 import numpy as np
@@ -10,13 +10,15 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from .config import DATA_DIR, SQLITE_DB_PATH
+from .preprocess.snapshots import (
+    load_snapshot_features as load_preprocessed_snapshot_features,
+)
 from .price_preprocess import (
     PricePreprocessConfig,
     load_price_history,
     preprocess_price_history,
     save_price_preprocess_results,
 )
-from .preprocess.snapshots import load_snapshot_features as load_preprocessed_snapshot_features
 
 
 @dataclass
@@ -35,12 +37,15 @@ class AnalysisConfig:
     min_selection_count: int = 2
     outlier_z_threshold: float = 50.0
 
+
 def _write_output(name, df, output_dir, sqlite_path, long_sql_df=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     parquet_path = output_dir / f"{name}.parquet"
-    parquet_df = df.reset_index() if not isinstance(df.index, pd.RangeIndex) else df.copy()
+    parquet_df = (
+        df.reset_index() if not isinstance(df.index, pd.RangeIndex) else df.copy()
+    )
     parquet_df.to_parquet(parquet_path, index=False)
 
     sql_df = long_sql_df if long_sql_df is not None else parquet_df
@@ -48,6 +53,7 @@ def _write_output(name, df, output_dir, sqlite_path, long_sql_df=None):
         sql_df.to_sql(name, conn, if_exists="replace", index=False)
 
     return str(parquet_path)
+
 
 def _series_or_zero(df, column):
     if column in df.columns:
@@ -59,6 +65,7 @@ def _text_series(df, column):
     if column in df.columns:
         return df[column].fillna("").astype(str)
     return pd.Series("", index=df.index, dtype=object)
+
 
 def load_snapshot_features(sqlite_path=SQLITE_DB_PATH):
     return load_preprocessed_snapshot_features(sqlite_path=sqlite_path)
@@ -77,18 +84,20 @@ def _build_price_features(prices):
         g["price_feature__momentum_63"] = g["clean_price"].pct_change(63)
         g["price_feature__momentum_126"] = g["clean_price"].pct_change(126)
         g["price_feature__momentum_252"] = g["clean_price"].pct_change(252)
-        g["price_feature__volatility_21"] = g["clean_return"].rolling(21, min_periods=10).std() * np.sqrt(252.0)
-        g["price_feature__volatility_63"] = g["clean_return"].rolling(63, min_periods=21).std() * np.sqrt(252.0)
-        g["price_feature__downside_volatility_63"] = (
-            g["clean_return"]
-            .where(g["clean_return"] < 0.0)
-            .rolling(63, min_periods=21)
-            .std()
-            * np.sqrt(252.0)
-        )
+        g["price_feature__volatility_21"] = g["clean_return"].rolling(
+            21, min_periods=10
+        ).std() * np.sqrt(252.0)
+        g["price_feature__volatility_63"] = g["clean_return"].rolling(
+            63, min_periods=21
+        ).std() * np.sqrt(252.0)
+        g["price_feature__downside_volatility_63"] = g["clean_return"].where(
+            g["clean_return"] < 0.0
+        ).rolling(63, min_periods=21).std() * np.sqrt(252.0)
         rolling_peak = g["clean_price"].rolling(126, min_periods=21).max()
         drawdown = g["clean_price"] / rolling_peak - 1.0
-        g["price_feature__max_drawdown_126"] = drawdown.rolling(126, min_periods=21).min()
+        g["price_feature__max_drawdown_126"] = drawdown.rolling(
+            126, min_periods=21
+        ).min()
         frames.append(
             g[
                 [
@@ -144,12 +153,16 @@ def build_analysis_panel_data(snapshot_features, price_result, config):
     prices = price_result["prices"]
     eligibility = price_result["eligibility"]
     price_features = _build_price_features(prices)
-    rebalance_dates = _build_rebalance_dates(snapshot_features, prices, config.rebalance_freq)
+    rebalance_dates = _build_rebalance_dates(
+        snapshot_features, prices, config.rebalance_freq
+    )
     eligible_conids = set(eligibility.loc[eligibility["eligible"], "conid"].astype(str))
 
     panels = []
     for rebalance_date in rebalance_dates:
-        eligible_snapshots = snapshot_features.loc[snapshot_features["effective_at"] <= rebalance_date]
+        eligible_snapshots = snapshot_features.loc[
+            snapshot_features["effective_at"] <= rebalance_date
+        ]
         if eligible_snapshots.empty:
             continue
         latest = (
@@ -238,45 +251,39 @@ def _add_composite_features(panel):
             "ratio_dividend__dividend_yield",
         ],
     )
-    df["composite__duration"] = (
-        _sum_if_present(
-            df,
-            [
-                "holding_maturity__maturity_10_to_20_years",
-                "holding_maturity__maturity_20_to_30_years",
-                "holding_maturity__maturity_greater_than_30_years",
-            ],
-        )
-        - _sum_if_present(
-            df,
-            [
-                "holding_maturity__maturity_less_than_1_year",
-                "holding_maturity__maturity_1_to_3_years",
-                "holding_maturity__maturity_3_to_5_years",
-            ],
-        )
+    df["composite__duration"] = _sum_if_present(
+        df,
+        [
+            "holding_maturity__maturity_10_to_20_years",
+            "holding_maturity__maturity_20_to_30_years",
+            "holding_maturity__maturity_greater_than_30_years",
+        ],
+    ) - _sum_if_present(
+        df,
+        [
+            "holding_maturity__maturity_less_than_1_year",
+            "holding_maturity__maturity_1_to_3_years",
+            "holding_maturity__maturity_3_to_5_years",
+        ],
     )
-    df["composite__credit"] = (
-        _sum_if_present(
-            df,
-            [
-                "holding_quality__quality_aaa",
-                "holding_quality__quality_aa",
-                "holding_quality__quality_a",
-                "holding_quality__quality_bbb",
-            ],
-        )
-        - _sum_if_present(
-            df,
-            [
-                "holding_quality__quality_bb",
-                "holding_quality__quality_b",
-                "holding_quality__quality_ccc",
-                "holding_quality__quality_cc",
-                "holding_quality__quality_c",
-                "holding_quality__quality_d",
-            ],
-        )
+    df["composite__credit"] = _sum_if_present(
+        df,
+        [
+            "holding_quality__quality_aaa",
+            "holding_quality__quality_aa",
+            "holding_quality__quality_a",
+            "holding_quality__quality_bbb",
+        ],
+    ) - _sum_if_present(
+        df,
+        [
+            "holding_quality__quality_bb",
+            "holding_quality__quality_b",
+            "holding_quality__quality_ccc",
+            "holding_quality__quality_cc",
+            "holding_quality__quality_c",
+            "holding_quality__quality_d",
+        ],
     )
     industry_cols = [col for col in df.columns if col.startswith("industry__")]
     country_cols = [col for col in df.columns if col.startswith("country__")]
@@ -290,7 +297,9 @@ def _add_composite_features(panel):
 
 
 def _build_returns_wide(prices):
-    clean = prices.loc[prices["is_clean_price"], ["conid", "trade_date", "clean_return"]].copy()
+    clean = prices.loc[
+        prices["is_clean_price"], ["conid", "trade_date", "clean_return"]
+    ].copy()
     if clean.empty:
         return pd.DataFrame()
     return (
@@ -324,7 +333,12 @@ def _select_factor_columns(panel_slice, sleeve):
     for col in numeric_cols:
         if col in excluded:
             continue
-        if col.startswith("holding_maturity__") or col.startswith("holding_quality__") or col.startswith("debt_type__") or col.startswith("ratio_fixed_income__"):
+        if (
+            col.startswith("holding_maturity__")
+            or col.startswith("holding_quality__")
+            or col.startswith("debt_type__")
+            or col.startswith("ratio_fixed_income__")
+        ):
             if sleeve != "bond":
                 continue
         if col.startswith("composite__") and col.endswith("concentration"):
@@ -358,7 +372,9 @@ def _factor_kind(column):
     return "composite" if column.startswith("composite__") else "raw"
 
 
-def _build_long_short_series(values, returns_frame, size_weights, direction, quantile, min_assets):
+def _build_long_short_series(
+    values, returns_frame, size_weights, direction, quantile, min_assets
+):
     valid = values.replace([np.inf, -np.inf], np.nan).dropna()
     if len(valid) < min_assets or valid.nunique() < 4:
         return None
@@ -380,8 +396,16 @@ def _build_long_short_series(values, returns_frame, size_weights, direction, qua
 
     long_weights = _normalized_weights(size_weights.reindex(long_ids))
     short_weights = _normalized_weights(size_weights.reindex(short_ids))
-    long_returns = returns_frame.reindex(columns=list(long_weights.index)).fillna(0.0).dot(long_weights)
-    short_returns = returns_frame.reindex(columns=list(short_weights.index)).fillna(0.0).dot(short_weights)
+    long_returns = (
+        returns_frame.reindex(columns=list(long_weights.index))
+        .fillna(0.0)
+        .dot(long_weights)
+    )
+    short_returns = (
+        returns_frame.reindex(columns=list(short_weights.index))
+        .fillna(0.0)
+        .dot(short_weights)
+    )
     return long_returns - short_returns
 
 
@@ -395,7 +419,9 @@ def _select_baseline_bond_members(panel_slice):
         + 0.75 * _series_or_zero(bond_slice, "holding_maturity__maturity_1_to_3_years")
         - _series_or_zero(bond_slice, "holding_maturity__maturity_10_to_20_years")
         - _series_or_zero(bond_slice, "holding_maturity__maturity_20_to_30_years")
-        - _series_or_zero(bond_slice, "holding_maturity__maturity_greater_than_30_years")
+        - _series_or_zero(
+            bond_slice, "holding_maturity__maturity_greater_than_30_years"
+        )
     )
     quality_score = (
         _series_or_zero(bond_slice, "holding_quality__quality_aaa")
@@ -405,13 +431,25 @@ def _select_baseline_bond_members(panel_slice):
         - _series_or_zero(bond_slice, "holding_quality__quality_b")
         - _series_or_zero(bond_slice, "holding_quality__quality_ccc")
     )
-    sovereign_cols = [col for col in bond_slice.columns if col.startswith("debt_type__") and any(token in col for token in ["sovereign", "government", "treasury"])]
-    sovereign_score = bond_slice[sovereign_cols].sum(axis=1) if sovereign_cols else pd.Series(0.0, index=bond_slice.index)
-    text_bonus = (
-        _text_series(bond_slice, "profile__classification").str.contains("treasury|government|short", case=False, regex=True).astype(float)
-        + _text_series(bond_slice, "profile__objective").str.contains("treasury|government|short", case=False, regex=True).astype(float)
+    sovereign_cols = [
+        col
+        for col in bond_slice.columns
+        if col.startswith("debt_type__")
+        and any(token in col for token in ["sovereign", "government", "treasury"])
+    ]
+    sovereign_score = (
+        bond_slice[sovereign_cols].sum(axis=1)
+        if sovereign_cols
+        else pd.Series(0.0, index=bond_slice.index)
     )
-    bond_slice["baseline_score"] = short_score + quality_score + sovereign_score + text_bonus
+    text_bonus = _text_series(bond_slice, "profile__classification").str.contains(
+        "treasury|government|short", case=False, regex=True
+    ).astype(float) + _text_series(bond_slice, "profile__objective").str.contains(
+        "treasury|government|short", case=False, regex=True
+    ).astype(float)
+    bond_slice["baseline_score"] = (
+        short_score + quality_score + sovereign_score + text_bonus
+    )
     bond_slice = bond_slice.sort_values(
         ["baseline_score", "profile__total_net_assets_num"],
         ascending=[False, False],
@@ -434,11 +472,15 @@ def _build_baseline_returns(panel, returns_wide):
         selected = _select_baseline_bond_members(panel_slice)
         if selected.empty:
             continue
-        interval_returns = returns_wide.loc[(returns_wide.index > start) & (returns_wide.index <= end)]
+        interval_returns = returns_wide.loc[
+            (returns_wide.index > start) & (returns_wide.index <= end)
+        ]
         if interval_returns.empty:
             continue
         conids = selected["conid"].astype(str).tolist()
-        weights = _normalized_weights(selected.set_index("conid")["profile__total_net_assets_num"].reindex(conids))
+        weights = _normalized_weights(
+            selected.set_index("conid")["profile__total_net_assets_num"].reindex(conids)
+        )
         portfolio = interval_returns.reindex(columns=conids).fillna(0.0).dot(weights)
         baseline.loc[portfolio.index] = portfolio
 
@@ -465,7 +507,9 @@ def build_factor_returns(panel, prices, config):
     rebalance_dates = sorted(pd.to_datetime(panel["rebalance_date"]).unique())
 
     for start, end in zip(rebalance_dates[:-1], rebalance_dates[1:]):
-        interval_returns = returns_wide.loc[(returns_wide.index > start) & (returns_wide.index <= end)]
+        interval_returns = returns_wide.loc[
+            (returns_wide.index > start) & (returns_wide.index <= end)
+        ]
         if interval_returns.empty:
             continue
 
@@ -475,11 +519,21 @@ def build_factor_returns(panel, prices, config):
             if len(sleeve_slice) < config.min_assets_per_factor:
                 continue
 
-            size_weights = sleeve_slice.set_index("conid")["profile__total_net_assets_num"]
-            market_weights = _normalized_weights(size_weights.reindex(sleeve_slice["conid"]))
-            market_series = interval_returns.reindex(columns=list(market_weights.index)).fillna(0.0).dot(market_weights)
+            size_weights = sleeve_slice.set_index("conid")[
+                "profile__total_net_assets_num"
+            ]
+            market_weights = _normalized_weights(
+                size_weights.reindex(sleeve_slice["conid"])
+            )
+            market_series = (
+                interval_returns.reindex(columns=list(market_weights.index))
+                .fillna(0.0)
+                .dot(market_weights)
+            )
             market_factor_id = f"{sleeve}__market"
-            factor_map.setdefault(market_factor_id, []).append(market_series.rename(market_factor_id))
+            factor_map.setdefault(market_factor_id, []).append(
+                market_series.rename(market_factor_id)
+            )
             metadata[market_factor_id] = {
                 "factor_id": market_factor_id,
                 "sleeve": sleeve,
@@ -518,16 +572,29 @@ def build_factor_returns(panel, prices, config):
         return pd.DataFrame(), pd.DataFrame(), baseline_returns, baseline_members
 
     factor_returns = pd.concat(
-        [pd.concat(parts).groupby(level=0).sum().rename(factor_id) for factor_id, parts in factor_map.items()],
+        [
+            pd.concat(parts).groupby(level=0).sum().rename(factor_id)
+            for factor_id, parts in factor_map.items()
+        ],
         axis=1,
     ).sort_index()
-    factor_meta = pd.DataFrame(sorted(metadata.values(), key=lambda row: row["factor_id"]))
+    factor_meta = pd.DataFrame(
+        sorted(metadata.values(), key=lambda row: row["factor_id"])
+    )
     return factor_returns, factor_meta, baseline_returns, baseline_members
 
 
 def cluster_factor_returns(factor_returns, factor_meta, config):
     if factor_returns.empty or factor_meta.empty:
-        return pd.DataFrame(columns=["factor_id", "cluster_id", "cluster_representative", "cluster_size", "keep_factor"]), pd.DataFrame()
+        return pd.DataFrame(
+            columns=[
+                "factor_id",
+                "cluster_id",
+                "cluster_representative",
+                "cluster_size",
+                "keep_factor",
+            ]
+        ), pd.DataFrame()
 
     cluster_rows = []
     keepers = []
@@ -535,7 +602,9 @@ def cluster_factor_returns(factor_returns, factor_meta, config):
     for sleeve, meta_slice in factor_meta.groupby("sleeve"):
         factor_ids = meta_slice["factor_id"].tolist()
         sleeve_returns = factor_returns.reindex(columns=factor_ids)
-        sleeve_returns = sleeve_returns.loc[:, sleeve_returns.notna().sum() >= config.min_train_days]
+        sleeve_returns = sleeve_returns.loc[
+            :, sleeve_returns.notna().sum() >= config.min_train_days
+        ]
         if sleeve_returns.empty:
             continue
 
@@ -553,15 +622,18 @@ def cluster_factor_returns(factor_returns, factor_meta, config):
             members = sorted(component)
             member_meta = meta_slice.set_index("factor_id").loc[members].reset_index()
             coverage = sleeve_returns[members].notna().sum().rename("coverage")
-            member_meta = member_meta.merge(coverage, left_on="factor_id", right_index=True, how="left")
-            member_meta["kind_priority"] = member_meta["kind"].map({"composite": 0, "market": 1, "raw": 2}).fillna(3)
-            representative = (
-                member_meta.sort_values(
-                    ["kind_priority", "coverage", "factor_id"],
-                    ascending=[True, False, True],
-                )
-                .iloc[0]["factor_id"]
+            member_meta = member_meta.merge(
+                coverage, left_on="factor_id", right_index=True, how="left"
             )
+            member_meta["kind_priority"] = (
+                member_meta["kind"]
+                .map({"composite": 0, "market": 1, "raw": 2})
+                .fillna(3)
+            )
+            representative = member_meta.sort_values(
+                ["kind_priority", "coverage", "factor_id"],
+                ascending=[True, False, True],
+            ).iloc[0]["factor_id"]
             keepers.append(representative)
             for factor_id in members:
                 cluster_rows.append(
@@ -575,7 +647,9 @@ def cluster_factor_returns(factor_returns, factor_meta, config):
                     }
                 )
 
-    cluster_df = pd.DataFrame(cluster_rows).sort_values(["sleeve", "cluster_id", "factor_id"])
+    cluster_df = pd.DataFrame(cluster_rows).sort_values(
+        ["sleeve", "cluster_id", "factor_id"]
+    )
     reduced = factor_returns.reindex(columns=sorted(set(keepers)))
     return cluster_df, reduced
 
@@ -605,8 +679,12 @@ def _fit_elastic_net(X_train, y_train):
 
 
 def run_factor_research_data(panel, prices, config):
-    factor_returns, factor_meta, baseline_returns, baseline_members = build_factor_returns(panel, prices, config)
-    cluster_df, reduced_factors = cluster_factor_returns(factor_returns, factor_meta, config)
+    factor_returns, factor_meta, baseline_returns, baseline_members = (
+        build_factor_returns(panel, prices, config)
+    )
+    cluster_df, reduced_factors = cluster_factor_returns(
+        factor_returns, factor_meta, config
+    )
     returns_wide = _build_returns_wide(prices)
 
     if factor_returns.empty or reduced_factors.empty or returns_wide.empty:
@@ -627,15 +705,28 @@ def run_factor_research_data(panel, prices, config):
     selection_rows = []
 
     for sleeve in sorted(panel["sleeve"].dropna().unique()):
-        sleeve_conids = sorted(panel.loc[panel["sleeve"] == sleeve, "conid"].astype(str).unique())
-        sleeve_factors = sorted([col for col in reduced_factors.columns if col.startswith(f"{sleeve}__")])
+        sleeve_conids = sorted(
+            panel.loc[panel["sleeve"] == sleeve, "conid"].astype(str).unique()
+        )
+        sleeve_factors = sorted(
+            [col for col in reduced_factors.columns if col.startswith(f"{sleeve}__")]
+        )
         if not sleeve_conids or not sleeve_factors:
             continue
 
         for train_end, test_end in zip(unique_snapshots[2:-1], unique_snapshots[3:]):
-            X_train = reduced_factors.loc[reduced_factors.index <= train_end, sleeve_factors].dropna(how="all")
-            X_test = reduced_factors.loc[(reduced_factors.index > train_end) & (reduced_factors.index <= test_end), sleeve_factors].dropna(how="all")
-            if len(X_train) < config.min_train_days or len(X_test) < config.min_test_days:
+            X_train = reduced_factors.loc[
+                reduced_factors.index <= train_end, sleeve_factors
+            ].dropna(how="all")
+            X_test = reduced_factors.loc[
+                (reduced_factors.index > train_end)
+                & (reduced_factors.index <= test_end),
+                sleeve_factors,
+            ].dropna(how="all")
+            if (
+                len(X_train) < config.min_train_days
+                or len(X_test) < config.min_test_days
+            ):
                 continue
 
             for conid in sleeve_conids:
@@ -645,7 +736,10 @@ def run_factor_research_data(panel, prices, config):
                 y_excess = y.subtract(baseline_returns, fill_value=0.0)
                 train = pd.concat([X_train, y_excess.rename("target")], axis=1).dropna()
                 test = pd.concat([X_test, y_excess.rename("target")], axis=1).dropna()
-                if len(train) < config.min_train_days or len(test) < config.min_test_days:
+                if (
+                    len(train) < config.min_train_days
+                    or len(test) < config.min_test_days
+                ):
                     continue
 
                 X_train_fit = train[sleeve_factors].values
@@ -654,13 +748,19 @@ def run_factor_research_data(panel, prices, config):
                 y_test_fit = test["target"].values
 
                 try:
-                    pipeline, intercept, coefs = _fit_elastic_net(X_train_fit, y_train_fit)
+                    pipeline, intercept, coefs = _fit_elastic_net(
+                        X_train_fit, y_train_fit
+                    )
                 except ValueError:
                     continue
 
                 preds = pipeline.predict(X_test_fit)
                 denom = float(np.sum((y_test_fit - y_test_fit.mean()) ** 2))
-                r2_test = float(1.0 - np.sum((y_test_fit - preds) ** 2) / denom) if denom > 0 else np.nan
+                r2_test = (
+                    float(1.0 - np.sum((y_test_fit - preds) ** 2) / denom)
+                    if denom > 0
+                    else np.nan
+                )
 
                 selected = []
                 for factor_id, beta in zip(sleeve_factors, coefs):
@@ -698,20 +798,18 @@ def run_factor_research_data(panel, prices, config):
     persistence = pd.DataFrame()
     if not selections.empty and not model_results.empty:
         fit_counts = model_results.groupby("sleeve").size().rename("model_fit_count")
-        persistence = (
-            selections.groupby(["sleeve", "factor_id"], as_index=False)
-            .agg(
-                selection_count=("factor_id", "size"),
-                median_abs_beta=("abs_beta", "median"),
-                sign_consistency=("sign", lambda s: float(abs(np.nanmean(s)))),
-            )
+        persistence = selections.groupby(["sleeve", "factor_id"], as_index=False).agg(
+            selection_count=("factor_id", "size"),
+            median_abs_beta=("abs_beta", "median"),
+            sign_consistency=("sign", lambda s: float(abs(np.nanmean(s)))),
         )
         persistence = persistence.merge(fit_counts, on="sleeve", how="left")
-        persistence["selection_frequency"] = persistence["selection_count"] / persistence["model_fit_count"]
-        persistence["is_persistent"] = (
-            (persistence["selection_count"] >= config.min_selection_count)
-            & (persistence["selection_frequency"] >= config.selection_frequency_threshold)
+        persistence["selection_frequency"] = (
+            persistence["selection_count"] / persistence["model_fit_count"]
         )
+        persistence["is_persistent"] = (
+            persistence["selection_count"] >= config.min_selection_count
+        ) & (persistence["selection_frequency"] >= config.selection_frequency_threshold)
 
     current_betas = compute_current_betas_data(
         panel=panel,
@@ -734,14 +832,20 @@ def run_factor_research_data(panel, prices, config):
     }
 
 
-def compute_current_betas_data(panel, prices, reduced_factors, baseline_returns, persistence, config):
+def compute_current_betas_data(
+    panel, prices, reduced_factors, baseline_returns, persistence, config
+):
     returns_wide = _build_returns_wide(prices)
     if returns_wide.empty or reduced_factors.empty or persistence.empty:
         return pd.DataFrame()
 
     latest_rebalance = pd.to_datetime(panel["rebalance_date"].max())
-    latest_panel = panel.loc[panel["rebalance_date"] == latest_rebalance, ["conid", "sleeve"]].drop_duplicates()
-    start_date = returns_wide.index.max() - pd.Timedelta(days=int(config.trailing_beta_days * 1.5))
+    latest_panel = panel.loc[
+        panel["rebalance_date"] == latest_rebalance, ["conid", "sleeve"]
+    ].drop_duplicates()
+    start_date = returns_wide.index.max() - pd.Timedelta(
+        days=int(config.trailing_beta_days * 1.5)
+    )
 
     rows = []
     for sleeve, sleeve_panel in latest_panel.groupby("sleeve"):
@@ -752,7 +856,9 @@ def compute_current_betas_data(panel, prices, reduced_factors, baseline_returns,
         if not persistent_factors:
             continue
 
-        X = reduced_factors.loc[reduced_factors.index >= start_date, persistent_factors].dropna()
+        X = reduced_factors.loc[
+            reduced_factors.index >= start_date, persistent_factors
+        ].dropna()
         if len(X) < config.min_test_days:
             continue
 
@@ -779,7 +885,10 @@ def compute_current_betas_data(panel, prices, reduced_factors, baseline_returns,
                     "n_obs": int(len(data)),
                     "alpha": float(model.intercept_),
                     "r2": float(model.score(X_fit, y_fit)),
-                    **{f"beta__{factor_id}": float(beta) for factor_id, beta in zip(persistent_factors, model.coef_)},
+                    **{
+                        f"beta__{factor_id}": float(beta)
+                        for factor_id, beta in zip(persistent_factors, model.coef_)
+                    },
                 }
             )
 
@@ -787,26 +896,42 @@ def compute_current_betas_data(panel, prices, reduced_factors, baseline_returns,
 
 
 def build_analysis_panel(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs):
-    config = AnalysisConfig(sqlite_path=Path(sqlite_path), output_dir=Path(output_dir or (DATA_DIR / "analysis")), **config_kwargs)
+    config = AnalysisConfig(
+        sqlite_path=Path(sqlite_path),
+        output_dir=Path(output_dir or (DATA_DIR / "analysis")),
+        **config_kwargs,
+    )
     price_config = PricePreprocessConfig(outlier_z_threshold=config.outlier_z_threshold)
-    price_result = preprocess_price_history(load_price_history(config.sqlite_path), config=price_config)
+    price_result = preprocess_price_history(
+        load_price_history(config.sqlite_path), config=price_config
+    )
     save_price_preprocess_results(price_result, output_dir=config.output_dir)
     snapshot_features = load_snapshot_features(config.sqlite_path)
     panel = build_analysis_panel_data(snapshot_features, price_result, config)
 
-    panel_path = _write_output("analysis_snapshot_panel", panel, config.output_dir, config.sqlite_path)
+    panel_path = _write_output(
+        "analysis_snapshot_panel", panel, config.output_dir, config.sqlite_path
+    )
     return {
         "status": "ok",
         "rows": int(len(panel)),
-        "rebalance_dates": int(panel["rebalance_date"].nunique()) if not panel.empty else 0,
+        "rebalance_dates": int(panel["rebalance_date"].nunique())
+        if not panel.empty
+        else 0,
         "snapshot_panel_path": panel_path,
     }
 
 
 def run_factor_research(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs):
-    config = AnalysisConfig(sqlite_path=Path(sqlite_path), output_dir=Path(output_dir or (DATA_DIR / "analysis")), **config_kwargs)
+    config = AnalysisConfig(
+        sqlite_path=Path(sqlite_path),
+        output_dir=Path(output_dir or (DATA_DIR / "analysis")),
+        **config_kwargs,
+    )
     price_config = PricePreprocessConfig(outlier_z_threshold=config.outlier_z_threshold)
-    price_result = preprocess_price_history(load_price_history(config.sqlite_path), config=price_config)
+    price_result = preprocess_price_history(
+        load_price_history(config.sqlite_path), config=price_config
+    )
     save_price_preprocess_results(price_result, output_dir=config.output_dir)
     snapshot_features = load_snapshot_features(config.sqlite_path)
     panel = build_analysis_panel_data(snapshot_features, price_result, config)
@@ -818,32 +943,75 @@ def run_factor_research(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kw
         factor_returns_long = (
             factor_returns_wide.reset_index()
             .rename(columns={"index": "trade_date"})
-            .melt(id_vars=["trade_date"], var_name="factor_id", value_name="factor_return")
+            .melt(
+                id_vars=["trade_date"], var_name="factor_id", value_name="factor_return"
+            )
             .dropna(subset=["factor_return"])
         )
 
     paths = {
-        "snapshot_panel_path": _write_output("analysis_snapshot_panel", panel, config.output_dir, config.sqlite_path),
-        "factor_returns_path": _write_output("analysis_factor_returns", factor_returns_wide, config.output_dir, config.sqlite_path, long_sql_df=factor_returns_long) if not factor_returns_wide.empty else None,
-        "factor_clusters_path": _write_output("analysis_factor_clusters", research["factor_clusters"], config.output_dir, config.sqlite_path),
-        "factor_persistence_path": _write_output("analysis_factor_persistence", research["factor_persistence"], config.output_dir, config.sqlite_path),
-        "model_results_path": _write_output("analysis_model_results", research["model_results"], config.output_dir, config.sqlite_path),
-        "current_betas_path": _write_output("analysis_current_betas", research["current_betas"], config.output_dir, config.sqlite_path),
-        "baseline_members_path": _write_output("analysis_bond_baseline_members", research["baseline_members"], config.output_dir, config.sqlite_path),
+        "snapshot_panel_path": _write_output(
+            "analysis_snapshot_panel", panel, config.output_dir, config.sqlite_path
+        ),
+        "factor_returns_path": _write_output(
+            "analysis_factor_returns",
+            factor_returns_wide,
+            config.output_dir,
+            config.sqlite_path,
+            long_sql_df=factor_returns_long,
+        )
+        if not factor_returns_wide.empty
+        else None,
+        "factor_clusters_path": _write_output(
+            "analysis_factor_clusters",
+            research["factor_clusters"],
+            config.output_dir,
+            config.sqlite_path,
+        ),
+        "factor_persistence_path": _write_output(
+            "analysis_factor_persistence",
+            research["factor_persistence"],
+            config.output_dir,
+            config.sqlite_path,
+        ),
+        "model_results_path": _write_output(
+            "analysis_model_results",
+            research["model_results"],
+            config.output_dir,
+            config.sqlite_path,
+        ),
+        "current_betas_path": _write_output(
+            "analysis_current_betas",
+            research["current_betas"],
+            config.output_dir,
+            config.sqlite_path,
+        ),
+        "baseline_members_path": _write_output(
+            "analysis_bond_baseline_members",
+            research["baseline_members"],
+            config.output_dir,
+            config.sqlite_path,
+        ),
     }
 
     persistent = research["factor_persistence"]
     return {
         "status": "ok",
         "snapshot_rows": int(len(panel)),
-        "factor_count": int(factor_returns_wide.shape[1]) if not factor_returns_wide.empty else 0,
-        "persistent_factor_count": int(persistent["is_persistent"].sum()) if not persistent.empty else 0,
+        "factor_count": int(factor_returns_wide.shape[1])
+        if not factor_returns_wide.empty
+        else 0,
+        "persistent_factor_count": int(persistent["is_persistent"].sum())
+        if not persistent.empty
+        else 0,
         **paths,
     }
 
 
 def compute_current_betas(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs):
-    result = run_factor_research(sqlite_path=sqlite_path, output_dir=output_dir, **config_kwargs)
+    result = run_factor_research(
+        sqlite_path=sqlite_path, output_dir=output_dir, **config_kwargs
+    )
     return {
         "status": result["status"],
         "current_betas_path": result["current_betas_path"],
@@ -852,8 +1020,12 @@ def compute_current_betas(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_
 
 
 def run_analysis_pipeline(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs):
-    panel_result = build_analysis_panel(sqlite_path=sqlite_path, output_dir=output_dir, **config_kwargs)
-    research_result = run_factor_research(sqlite_path=sqlite_path, output_dir=output_dir, **config_kwargs)
+    panel_result = build_analysis_panel(
+        sqlite_path=sqlite_path, output_dir=output_dir, **config_kwargs
+    )
+    research_result = run_factor_research(
+        sqlite_path=sqlite_path, output_dir=output_dir, **config_kwargs
+    )
     return {
         "status": "ok",
         "panel": panel_result,

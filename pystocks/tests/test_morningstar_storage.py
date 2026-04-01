@@ -34,7 +34,10 @@ def test_morningstar_summary_is_wide_and_commentary_is_filtered():
                     {"id": "morningstar_rating", "value": "4"},
                     {"id": "sustainability_rating", "value": "Average"},
                     {"id": "category", "value": "Large Blend"},
-                    {"id": "category_index", "value": "Morningstar US Large-Mid TR USD"},
+                    {
+                        "id": "category_index",
+                        "value": "Morningstar US Large-Mid TR USD",
+                    },
                     {"id": "ignored_metric", "value": "ignore me"},
                 ],
                 "commentary": [

@@ -4,7 +4,7 @@ import logging
 import math
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import zstandard as zstd
@@ -64,8 +64,12 @@ _MONTH_MAP = {
 }
 
 _DATE_IN_TEXT_RE = re.compile(r"(?<!\d)(\d{4}[/-]\d{2}[/-]\d{2})(?!\d)")
-_NUM_WITH_SUFFIX_RE = re.compile(r"^[\s\$€£¥]*([+-]?\d+(?:\.\d+)?)\s*([KMBT])?\b", re.IGNORECASE)
-_TOTAL_NET_ASSETS_DATE_BLOCK_RE = re.compile(r"\(\s*\d{4}[/-]\d{2}[/-]\d{2}\s*[\)\.]?\s*")
+_NUM_WITH_SUFFIX_RE = re.compile(
+    r"^[\s\$€£¥]*([+-]?\d+(?:\.\d+)?)\s*([KMBT])?\b", re.IGNORECASE
+)
+_TOTAL_NET_ASSETS_DATE_BLOCK_RE = re.compile(
+    r"\(\s*\d{4}[/-]\d{2}[/-]\d{2}\s*[\)\.]?\s*"
+)
 
 _PROFILE_AND_FEES_FIELD_COLUMN_TYPES = {
     "Asset Type": ("asset_type", "text"),
@@ -154,7 +158,9 @@ _PROFILE_AND_FEES_REPORT_PIVOT_COLUMNS = sorted(
 _PROFILE_AND_FEES_STYLEBOX_X = ("value", "core", "growth")
 _PROFILE_AND_FEES_STYLEBOX_Y = ("large", "multi", "mid", "small")
 _PROFILE_AND_FEES_STYLEBOX_COLUMNS = [
-    f"{x}_{y}" for x in _PROFILE_AND_FEES_STYLEBOX_X for y in _PROFILE_AND_FEES_STYLEBOX_Y
+    f"{x}_{y}"
+    for x in _PROFILE_AND_FEES_STYLEBOX_X
+    for y in _PROFILE_AND_FEES_STYLEBOX_Y
 ]
 _PROFILE_AND_FEES_STYLEBOX_COORD_COLUMNS = {
     (xi, yi): f"{x}_{y}"
@@ -194,7 +200,9 @@ _HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN = {
     "quality_not_rated": "quality_not_rated",
     "quality_not_available": "quality_not_available",
 }
-_HOLDINGS_DEBTOR_QUALITY_COLUMNS = tuple(_HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN.values())
+_HOLDINGS_DEBTOR_QUALITY_COLUMNS = tuple(
+    _HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN.values()
+)
 
 _HOLDINGS_MATURITY_SOURCE_TO_COLUMN = {
     "maturity_less_than_1_year": "maturity_less_than_1_year",
@@ -290,7 +298,9 @@ def _sanitize_segment(value):
 
 
 def _canonical_json_bytes(payload):
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 def _parse_date_candidate(value):
@@ -310,7 +320,7 @@ def _parse_date_candidate(value):
         if ts > 1e12:
             ts = ts / 1000.0
         try:
-            return datetime.fromtimestamp(ts, tz=timezone.utc).date()
+            return datetime.fromtimestamp(ts, tz=UTC).date()
         except Exception:
             return None
 
@@ -381,10 +391,14 @@ def _to_iso_date(value):
         y = value.get("y")
         if y is not None and m is not None and d is not None:
             try:
-                mi = int(m) if isinstance(m, (int, float)) else _MONTH_MAP.get(str(m).strip().upper())
+                mi = (
+                    int(m)
+                    if isinstance(m, (int, float))
+                    else _MONTH_MAP.get(str(m).strip().upper())
+                )
                 if mi is None:
                     return None
-                return datetime(int(y), int(mi), int(d), tzinfo=timezone.utc).date().isoformat()
+                return datetime(int(y), int(mi), int(d), tzinfo=UTC).date().isoformat()
             except Exception:
                 return None
         return None
@@ -635,7 +649,19 @@ def _extract_sentiment_search_rows(payload):
             "sbuzz": point.get("sbuzz"),
         }
 
-        if any(row.get(k) is not None for k in ("sscore", "sdelta", "svolatility", "sdispersion", "svscore", "svolume", "smean", "sbuzz")):
+        if any(
+            row.get(k) is not None
+            for k in (
+                "sscore",
+                "sdelta",
+                "svolatility",
+                "sdispersion",
+                "svscore",
+                "svolume",
+                "smean",
+                "sbuzz",
+            )
+        ):
             rows.append(row)
 
     return rows
@@ -1362,7 +1388,7 @@ class FundamentalsStore:
                 INSERT OR IGNORE INTO schema_meta (schema_version, applied_at)
                 VALUES (1, ?)
                 """,
-                [datetime.now(timezone.utc).isoformat()],
+                [datetime.now(UTC).isoformat()],
             )
 
             conn.executescript(
@@ -1387,7 +1413,7 @@ class FundamentalsStore:
             )
 
     def _ensure_product(self, conn, conid):
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
         conn.execute(
             """
             INSERT INTO products (conid, updated_at)
@@ -1429,7 +1455,7 @@ class FundamentalsStore:
                     len(raw_bytes),
                     len(compressed),
                     compressed,
-                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(UTC).isoformat(),
                 ],
             )
 
@@ -1491,7 +1517,11 @@ class FundamentalsStore:
     def _resolve_effective_dates(self, endpoint_payloads, _observed_at):
         ratios_payload = endpoint_payloads.get("ratios")
 
-        ratios_date = _extract_as_of_date(ratios_payload) if isinstance(ratios_payload, dict) else None
+        ratios_date = (
+            _extract_as_of_date(ratios_payload)
+            if isinstance(ratios_payload, dict)
+            else None
+        )
 
         if ratios_date is not None:
             effective_at = ratios_date.isoformat()
@@ -1560,7 +1590,9 @@ class FundamentalsStore:
 
         cols = list(row.keys())
         placeholders = ", ".join(["?"] * len(cols))
-        update_cols = [c for c in cols if c not in {"conid", "effective_at", "inserted_at"}]
+        update_cols = [
+            c for c in cols if c not in {"conid", "effective_at", "inserted_at"}
+        ]
         update_sql = ", ".join([f"{c}=excluded.{c}" for c in update_cols])
 
         conn.execute(
@@ -1601,11 +1633,13 @@ class FundamentalsStore:
         cols = list(rows[0].keys())
         placeholders = ", ".join(["?"] * len(cols))
         conn.executemany(
-            f"INSERT INTO {table} ({", ".join(cols)}) VALUES ({placeholders})",
+            f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
             [[row.get(c) for c in cols] for row in rows],
         )
 
-    def _store_endpoint_scalar_extras(self, conn, endpoint, conid, effective_at, payload):
+    def _store_endpoint_scalar_extras(
+        self, conn, endpoint, conid, effective_at, payload
+    ):
         conn.execute(
             """
             DELETE FROM endpoint_scalar_extras
@@ -1634,7 +1668,17 @@ class FundamentalsStore:
 
         self._insert_rows(conn, "endpoint_scalar_extras", rows)
 
-    def _upsert_profile_fees(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+    def _upsert_profile_fees(
+        self,
+        conn,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        payload,
+    ):
         self._upsert_snapshot_row(
             conn,
             "profile_and_fees_snapshots",
@@ -1658,11 +1702,15 @@ class FundamentalsStore:
             effective_at,
         )
 
-        themes = payload.get("themes", []) if isinstance(payload.get("themes"), list) else []
+        themes = (
+            payload.get("themes", []) if isinstance(payload.get("themes"), list) else []
+        )
         theme_names = []
         for theme in themes:
             if isinstance(theme, dict):
-                theme_name = theme.get("name") or theme.get("title") or theme.get("theme")
+                theme_name = (
+                    theme.get("name") or theme.get("title") or theme.get("theme")
+                )
             else:
                 theme_name = str(theme) if theme is not None else None
             if theme_name is None:
@@ -1676,11 +1724,21 @@ class FundamentalsStore:
             "effective_at": str(effective_at),
             **{col: None for col in _PROFILE_AND_FEES_PIVOT_COLUMNS},
         }
-        profile_row["objective"] = str(payload.get("objective")) if payload.get("objective") is not None else None
+        profile_row["objective"] = (
+            str(payload.get("objective"))
+            if payload.get("objective") is not None
+            else None
+        )
         profile_row["jap_fund_warning"] = _to_int_bool(payload.get("jap_fund_warning"))
-        profile_row["theme_name"] = " | ".join(dict.fromkeys(theme_names)) if theme_names else None
+        profile_row["theme_name"] = (
+            " | ".join(dict.fromkeys(theme_names)) if theme_names else None
+        )
 
-        for item in payload.get("fund_and_profile", []) if isinstance(payload.get("fund_and_profile"), list) else []:
+        for item in (
+            payload.get("fund_and_profile", [])
+            if isinstance(payload.get("fund_and_profile"), list)
+            else []
+        ):
             if not isinstance(item, dict):
                 continue
             field_name = item.get("name")
@@ -1698,19 +1756,30 @@ class FundamentalsStore:
             if value_type == "text":
                 profile_row[column_name] = str(value) if value is not None else None
             elif value_type == "percent":
-                profile_row[column_name] = _parse_number(value, percent_as_fraction=True)
+                profile_row[column_name] = _parse_number(
+                    value, percent_as_fraction=True
+                )
             elif value_type == "date":
                 parsed_date = _to_iso_date(value)
                 if field_name == "Launch Opening Price":
-                    if profile_row.get("inception_date") is None and parsed_date is not None:
+                    if (
+                        profile_row.get("inception_date") is None
+                        and parsed_date is not None
+                    ):
                         profile_row["inception_date"] = parsed_date
                 else:
                     profile_row[column_name] = parsed_date
 
-        self._upsert_row(conn, "profile_and_fees", profile_row, ["conid", "effective_at"])
+        self._upsert_row(
+            conn, "profile_and_fees", profile_row, ["conid", "effective_at"]
+        )
 
         report_rows = []
-        for report in payload.get("reports", []) if isinstance(payload.get("reports"), list) else []:
+        for report in (
+            payload.get("reports", [])
+            if isinstance(payload.get("reports"), list)
+            else []
+        ):
             if not isinstance(report, dict):
                 continue
             report_row = {
@@ -1720,20 +1789,31 @@ class FundamentalsStore:
                 "report_as_of_date": _to_iso_date(report.get("as_of_date")),
                 **{col: None for col in _PROFILE_AND_FEES_REPORT_PIVOT_COLUMNS},
             }
-            fields = report.get("fields", []) if isinstance(report.get("fields"), list) else []
+            fields = (
+                report.get("fields", [])
+                if isinstance(report.get("fields"), list)
+                else []
+            )
             for field in fields:
                 if not isinstance(field, dict):
                     continue
                 field_name = field.get("name") or field.get("name_tag")
-                column_name = _PROFILE_AND_FEES_REPORT_FIELD_COLUMN_TYPES.get(field_name)
+                column_name = _PROFILE_AND_FEES_REPORT_FIELD_COLUMN_TYPES.get(
+                    field_name
+                )
                 if column_name is None and field_name:
                     normalized = _sanitize_segment(field_name)
                     if normalized in _PROFILE_AND_FEES_REPORT_PIVOT_COLUMNS:
                         column_name = normalized
                 if column_name is None:
                     continue
-                report_row[column_name] = _parse_number(field.get("value"), percent_as_fraction=True)
-            if not any(report_row.get(col) is not None for col in _PROFILE_AND_FEES_REPORT_PIVOT_COLUMNS):
+                report_row[column_name] = _parse_number(
+                    field.get("value"), percent_as_fraction=True
+                )
+            if not any(
+                report_row.get(col) is not None
+                for col in _PROFILE_AND_FEES_REPORT_PIVOT_COLUMNS
+            ):
                 continue
             report_rows.append(report_row)
         self._insert_rows(conn, "profile_and_fees_reports", report_rows)
@@ -1755,7 +1835,9 @@ class FundamentalsStore:
                         x_idx, y_idx = int(pair[0]), int(pair[1])
                     except (ValueError, TypeError):
                         continue
-                    column_name = _PROFILE_AND_FEES_STYLEBOX_COORD_COLUMNS.get((x_idx, y_idx))
+                    column_name = _PROFILE_AND_FEES_STYLEBOX_COORD_COLUMNS.get(
+                        (x_idx, y_idx)
+                    )
                     if column_name:
                         stylebox_row[column_name] |= 1
 
@@ -1768,13 +1850,30 @@ class FundamentalsStore:
                         x_idx, y_idx = int(pair[0]), int(pair[1])
                     except (ValueError, TypeError):
                         continue
-                    column_name = _PROFILE_AND_FEES_STYLEBOX_COORD_COLUMNS.get((x_idx, y_idx))
+                    column_name = _PROFILE_AND_FEES_STYLEBOX_COORD_COLUMNS.get(
+                        (x_idx, y_idx)
+                    )
                     if column_name:
                         stylebox_row[column_name] |= 2
 
-            self._upsert_row(conn, "profile_and_fees_stylebox", stylebox_row, ["conid", "effective_at"])
+            self._upsert_row(
+                conn,
+                "profile_and_fees_stylebox",
+                stylebox_row,
+                ["conid", "effective_at"],
+            )
 
-    def _upsert_holdings(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+    def _upsert_holdings(
+        self,
+        conn,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        payload,
+    ):
         as_of_date = _extract_as_of_date(payload)
         conn.execute(
             """
@@ -1794,7 +1893,9 @@ class FundamentalsStore:
                     "payload_hash": str(payload_hash),
                     "inserted_at": now_iso,
                     "updated_at": now_iso,
-                    "as_of_date": as_of_date.isoformat() if as_of_date is not None else None,
+                    "as_of_date": as_of_date.isoformat()
+                    if as_of_date is not None
+                    else None,
                 }
             ],
         )
@@ -1807,12 +1908,16 @@ class FundamentalsStore:
         )
 
         top10_rows = []
-        for item in payload.get("top_10", []) if isinstance(payload.get("top_10"), list) else []:
+        for item in (
+            payload.get("top_10", []) if isinstance(payload.get("top_10"), list) else []
+        ):
             if not isinstance(item, dict):
                 continue
             conids = item.get("conids", [])
             conid_list = conids if isinstance(conids, list) else []
-            conid_text = ",".join(str(value) for value in conid_list if value is not None)
+            conid_text = ",".join(
+                str(value) for value in conid_list if value is not None
+            )
             top10_rows.append(
                 {
                     "conid": str(conid),
@@ -1830,7 +1935,11 @@ class FundamentalsStore:
             "effective_at": str(effective_at),
             **{col: None for col in _HOLDINGS_ASSET_TYPE_COLUMNS},
         }
-        for item in payload.get("allocation_self", []) if isinstance(payload.get("allocation_self"), list) else []:
+        for item in (
+            payload.get("allocation_self", [])
+            if isinstance(payload.get("allocation_self"), list)
+            else []
+        ):
             if not isinstance(item, dict):
                 continue
             name = item.get("name") or item.get("type")
@@ -1858,12 +1967,21 @@ class FundamentalsStore:
         section_table_specs = [
             ("industry", "holdings_industry", "industry", None),
             ("currency", "holdings_currency", "currency", "code"),
-            ("investor_country", "holdings_investor_country", "country", "country_code"),
+            (
+                "investor_country",
+                "holdings_investor_country",
+                "country",
+                "country_code",
+            ),
             ("debt_type", "holdings_debt_type", "debt_type", None),
         ]
         for section, table_name, name_column, extra_column in section_table_specs:
             rows = []
-            values = payload.get(section, []) if isinstance(payload.get(section), list) else []
+            values = (
+                payload.get(section, [])
+                if isinstance(payload.get(section), list)
+                else []
+            )
             for item in values:
                 if not isinstance(item, dict):
                     continue
@@ -1884,7 +2002,9 @@ class FundamentalsStore:
                 }
                 if extra_column:
                     extra_value = item.get(extra_column)
-                    row[extra_column] = str(extra_value) if extra_value is not None else None
+                    row[extra_column] = (
+                        str(extra_value) if extra_value is not None else None
+                    )
                 rows.append(row)
             self._insert_rows(conn, table_name, rows)
 
@@ -1895,17 +2015,24 @@ class FundamentalsStore:
                 column_name: None
                 for column_name in (
                     *_HOLDINGS_DEBTOR_QUALITY_COLUMNS,
-                    *[f"{col}_industry_avg" for col in _HOLDINGS_DEBTOR_QUALITY_COLUMNS],
+                    *[
+                        f"{col}_industry_avg"
+                        for col in _HOLDINGS_DEBTOR_QUALITY_COLUMNS
+                    ],
                 )
             },
         }
-        for item in payload.get("debtor", []) if isinstance(payload.get("debtor"), list) else []:
+        for item in (
+            payload.get("debtor", []) if isinstance(payload.get("debtor"), list) else []
+        ):
             if not isinstance(item, dict):
                 continue
             name = item.get("name") or item.get("type")
             if name is None:
                 continue
-            column = _HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN.get(_sanitize_segment(name))
+            column = _HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN.get(
+                _sanitize_segment(name)
+            )
             if column is None:
                 continue
             weight_value = item.get("weight")
@@ -1914,8 +2041,13 @@ class FundamentalsStore:
             if weight_value is None:
                 weight_value = item.get("formatted_weight")
             debtor_quality_row[column] = _to_fraction_weight(weight_value)
-            debtor_quality_row[f"{column}_industry_avg"] = _to_fraction_percent(item.get("vs"))
-        if any(debtor_quality_row[col] is not None for col in _HOLDINGS_DEBTOR_QUALITY_COLUMNS):
+            debtor_quality_row[f"{column}_industry_avg"] = _to_fraction_percent(
+                item.get("vs")
+            )
+        if any(
+            debtor_quality_row[col] is not None
+            for col in _HOLDINGS_DEBTOR_QUALITY_COLUMNS
+        ):
             self._insert_rows(conn, "holdings_debtor_quality", [debtor_quality_row])
 
         maturity_row = {
@@ -1924,12 +2056,16 @@ class FundamentalsStore:
             **{
                 column_name: None
                 for column_name in (
-                    * _HOLDINGS_MATURITY_COLUMNS,
+                    *_HOLDINGS_MATURITY_COLUMNS,
                     *[f"{col}_industry_avg" for col in _HOLDINGS_MATURITY_COLUMNS],
                 )
             },
         }
-        for item in payload.get("maturity", []) if isinstance(payload.get("maturity"), list) else []:
+        for item in (
+            payload.get("maturity", [])
+            if isinstance(payload.get("maturity"), list)
+            else []
+        ):
             if not isinstance(item, dict):
                 continue
             name = item.get("name") or item.get("type")
@@ -1944,12 +2080,18 @@ class FundamentalsStore:
             if weight_value is None:
                 weight_value = item.get("formatted_weight")
             maturity_row[column] = _to_fraction_weight(weight_value)
-            maturity_row[f"{column}_industry_avg"] = _to_fraction_percent(item.get("vs"))
+            maturity_row[f"{column}_industry_avg"] = _to_fraction_percent(
+                item.get("vs")
+            )
         if any(maturity_row[col] is not None for col in _HOLDINGS_MATURITY_COLUMNS):
             self._insert_rows(conn, "holdings_maturity", [maturity_row])
 
         geographic_rows = []
-        geographic = payload.get("geographic") if isinstance(payload.get("geographic"), dict) else {}
+        geographic = (
+            payload.get("geographic")
+            if isinstance(payload.get("geographic"), dict)
+            else {}
+        )
         for key, value in geographic.items():
             if isinstance(value, (dict, list)):
                 continue
@@ -1963,7 +2105,17 @@ class FundamentalsStore:
             )
         self._insert_rows(conn, "holdings_geographic_weights", geographic_rows)
 
-    def _upsert_ratios(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+    def _upsert_ratios(
+        self,
+        conn,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        payload,
+    ):
         self._upsert_snapshot_row(
             conn,
             "ratios_snapshots",
@@ -1978,11 +2130,17 @@ class FundamentalsStore:
             },
         )
 
-        self._delete_children(conn, list(_RATIOS_SECTION_TABLES.values()), conid, effective_at)
+        self._delete_children(
+            conn, list(_RATIOS_SECTION_TABLES.values()), conid, effective_at
+        )
 
         for section, table_name in _RATIOS_SECTION_TABLES.items():
             metric_rows = []
-            values = payload.get(section, []) if isinstance(payload.get(section), list) else []
+            values = (
+                payload.get(section, [])
+                if isinstance(payload.get(section), list)
+                else []
+            )
             for item in values:
                 if not isinstance(item, dict):
                     continue
@@ -1990,7 +2148,9 @@ class FundamentalsStore:
                     {
                         "conid": str(conid),
                         "effective_at": str(effective_at),
-                        "metric_id": _sanitize_segment(item.get("name_tag") or item.get("id") or item.get("name")),
+                        "metric_id": _sanitize_segment(
+                            item.get("name_tag") or item.get("id") or item.get("name")
+                        ),
                         "value_num": _parse_number(item.get("value")),
                         "vs_num": _parse_number(item.get("vs")),
                         "min_num": _parse_number(item.get("min")),
@@ -2001,8 +2161,22 @@ class FundamentalsStore:
                 )
             self._insert_rows(conn, table_name, metric_rows)
 
-    def _upsert_lipper(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
-        universes = payload.get("universes", []) if isinstance(payload.get("universes"), list) else []
+    def _upsert_lipper(
+        self,
+        conn,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        payload,
+    ):
+        universes = (
+            payload.get("universes", [])
+            if isinstance(payload.get("universes"), list)
+            else []
+        )
 
         self._upsert_snapshot_row(
             conn,
@@ -2026,7 +2200,9 @@ class FundamentalsStore:
             if not isinstance(universe, dict):
                 continue
             universe_name = universe.get("name")
-            universe_as_of = _to_iso_date(universe.get("as_of_date") or universe.get("asOfDate"))
+            universe_as_of = _to_iso_date(
+                universe.get("as_of_date") or universe.get("asOfDate")
+            )
             for period_key, period_items in universe.items():
                 if period_key in {"as_of_date", "asOfDate", "name", "title"}:
                     continue
@@ -2036,13 +2212,21 @@ class FundamentalsStore:
                 for item in period_items:
                     if not isinstance(item, dict):
                         continue
-                    rating = item.get("rating") if isinstance(item.get("rating"), dict) else {}
+                    rating = (
+                        item.get("rating")
+                        if isinstance(item.get("rating"), dict)
+                        else {}
+                    )
                     rows.append(
                         {
                             "conid": str(conid),
                             "effective_at": str(effective_at),
                             "period": period,
-                            "metric_id": _sanitize_segment(item.get("name_tag") or item.get("id") or item.get("name")),
+                            "metric_id": _sanitize_segment(
+                                item.get("name_tag")
+                                or item.get("id")
+                                or item.get("name")
+                            ),
                             "rating_value": _parse_number(rating.get("value")),
                             "rating_label": rating.get("name"),
                             "universe_name": universe_name,
@@ -2051,7 +2235,17 @@ class FundamentalsStore:
                     )
         self._insert_rows(conn, "lipper_ratings", rows)
 
-    def _upsert_dividends(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+    def _upsert_dividends(
+        self,
+        conn,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        payload,
+    ):
         snapshot = normalize_dividends_snapshot(payload)
 
         self._upsert_snapshot_row(
@@ -2083,9 +2277,21 @@ class FundamentalsStore:
         }
         for column in _DIVIDENDS_INDUSTRY_METRIC_COLUMNS:
             metrics_row[column] = _parse_number(snapshot.get(column))
-        self._upsert_row(conn, "dividends_industry_metrics", metrics_row, ["conid", "effective_at"])
+        self._upsert_row(
+            conn, "dividends_industry_metrics", metrics_row, ["conid", "effective_at"]
+        )
 
-    def _upsert_morningstar(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+    def _upsert_morningstar(
+        self,
+        conn,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        payload,
+    ):
         self._upsert_snapshot_row(
             conn,
             "morningstar_snapshots",
@@ -2096,23 +2302,33 @@ class FundamentalsStore:
             source_file,
             now_iso,
             {
-                "as_of_date": _to_iso_date(payload.get("as_of_date") or payload.get("asOfDate")),
+                "as_of_date": _to_iso_date(
+                    payload.get("as_of_date") or payload.get("asOfDate")
+                ),
                 "q_full_report_id": payload.get("q_full_report_id"),
             },
             include_source_file=False,
         )
 
-        self._delete_children(conn, ["morningstar_summary", "morningstar_commentary"], conid, effective_at)
+        self._delete_children(
+            conn, ["morningstar_summary", "morningstar_commentary"], conid, effective_at
+        )
 
         summary_row = {
             "conid": str(conid),
             "effective_at": str(effective_at),
             **{col: None for col in _MORNINGSTAR_SUMMARY_COLUMNS},
         }
-        for item in payload.get("summary", []) if isinstance(payload.get("summary"), list) else []:
+        for item in (
+            payload.get("summary", [])
+            if isinstance(payload.get("summary"), list)
+            else []
+        ):
             if not isinstance(item, dict):
                 continue
-            metric_id = _sanitize_segment(item.get("id") or item.get("title") or "metric")
+            metric_id = _sanitize_segment(
+                item.get("id") or item.get("title") or "metric"
+            )
             column_name = _MORNINGSTAR_SUMMARY_ID_TO_COLUMN.get(metric_id)
             if column_name is None:
                 continue
@@ -2121,11 +2337,19 @@ class FundamentalsStore:
                 summary_row[column_name] = _parse_number(value)
             else:
                 summary_row[column_name] = str(value) if value is not None else None
-        if any(summary_row.get(col) is not None for col in _MORNINGSTAR_SUMMARY_COLUMNS):
-            self._upsert_row(conn, "morningstar_summary", summary_row, ["conid", "effective_at"])
+        if any(
+            summary_row.get(col) is not None for col in _MORNINGSTAR_SUMMARY_COLUMNS
+        ):
+            self._upsert_row(
+                conn, "morningstar_summary", summary_row, ["conid", "effective_at"]
+            )
 
         commentary_rows = []
-        for item in payload.get("commentary", []) if isinstance(payload.get("commentary"), list) else []:
+        for item in (
+            payload.get("commentary", [])
+            if isinstance(payload.get("commentary"), list)
+            else []
+        ):
             if not isinstance(item, dict):
                 continue
             author = item.get("author") if isinstance(item.get("author"), dict) else {}
@@ -2148,7 +2372,17 @@ class FundamentalsStore:
             )
         self._insert_rows(conn, "morningstar_commentary", commentary_rows)
 
-    def _upsert_performance(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+    def _upsert_performance(
+        self,
+        conn,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        payload,
+    ):
         self._upsert_snapshot_row(
             conn,
             "performance_snapshots",
@@ -2165,7 +2399,11 @@ class FundamentalsStore:
 
         rows = []
         for section in ("cumulative", "annualized", "yield", "risk", "statistic"):
-            values = payload.get(section, []) if isinstance(payload.get(section), list) else []
+            values = (
+                payload.get(section, [])
+                if isinstance(payload.get(section), list)
+                else []
+            )
             for item in values:
                 if not isinstance(item, dict):
                     continue
@@ -2174,7 +2412,9 @@ class FundamentalsStore:
                         "conid": str(conid),
                         "effective_at": str(effective_at),
                         "section": section,
-                        "metric_id": _sanitize_segment(item.get("name_tag") or item.get("id") or item.get("name")),
+                        "metric_id": _sanitize_segment(
+                            item.get("name_tag") or item.get("id") or item.get("name")
+                        ),
                         "value_num": _parse_number(item.get("value")),
                         "vs_num": _parse_number(item.get("vs")),
                         "min_num": _parse_number(item.get("min")),
@@ -2184,7 +2424,17 @@ class FundamentalsStore:
                 )
         self._insert_rows(conn, "performance", rows)
 
-    def _upsert_ownership(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+    def _upsert_ownership(
+        self,
+        conn,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        payload,
+    ):
         snapshot = normalize_ownership_snapshot(payload)
 
         self._upsert_snapshot_row(
@@ -2198,27 +2448,47 @@ class FundamentalsStore:
             now_iso,
             {
                 "owners_types_count": int(snapshot.get("owners_types_count") or 0),
-                "institutional_owners_count": int(snapshot.get("institutional_owners_count") or 0),
+                "institutional_owners_count": int(
+                    snapshot.get("institutional_owners_count") or 0
+                ),
                 "insider_owners_count": int(snapshot.get("insider_owners_count") or 0),
                 "trade_log_count_raw": int(snapshot.get("trade_log_count_raw") or 0),
                 "trade_log_count_kept": int(snapshot.get("trade_log_count_kept") or 0),
-                "has_ownership_history": _to_int_bool(snapshot.get("has_ownership_history")),
-                "ownership_history_price_points": int(snapshot.get("ownership_history_price_points") or 0),
-                "institutional_total_value_text": snapshot.get("institutional_total_value"),
-                "institutional_total_shares_text": snapshot.get("institutional_total_shares"),
+                "has_ownership_history": _to_int_bool(
+                    snapshot.get("has_ownership_history")
+                ),
+                "ownership_history_price_points": int(
+                    snapshot.get("ownership_history_price_points") or 0
+                ),
+                "institutional_total_value_text": snapshot.get(
+                    "institutional_total_value"
+                ),
+                "institutional_total_shares_text": snapshot.get(
+                    "institutional_total_shares"
+                ),
                 "institutional_total_pct_text": snapshot.get("institutional_total_pct"),
-                "institutional_total_pct_num": _parse_number(snapshot.get("institutional_total_pct_num")),
+                "institutional_total_pct_num": _parse_number(
+                    snapshot.get("institutional_total_pct_num")
+                ),
                 "insider_total_value_text": snapshot.get("insider_total_value"),
                 "insider_total_shares_text": snapshot.get("insider_total_shares"),
                 "insider_total_pct_text": snapshot.get("insider_total_pct"),
-                "insider_total_pct_num": _parse_number(snapshot.get("insider_total_pct_num")),
+                "insider_total_pct_num": _parse_number(
+                    snapshot.get("insider_total_pct_num")
+                ),
             },
         )
 
-        self._delete_children(conn, ["ownership_owners_types", "ownership_holders"], conid, effective_at)
+        self._delete_children(
+            conn, ["ownership_owners_types", "ownership_holders"], conid, effective_at
+        )
 
         owners_type_rows = []
-        for item in payload.get("owners_types", []) if isinstance(payload.get("owners_types"), list) else []:
+        for item in (
+            payload.get("owners_types", [])
+            if isinstance(payload.get("owners_types"), list)
+            else []
+        ):
             if not isinstance(item, dict):
                 continue
             type_info = item.get("type") if isinstance(item.get("type"), dict) else {}
@@ -2247,7 +2517,9 @@ class FundamentalsStore:
                     continue
                 holder_type = item.get("type")
                 if isinstance(holder_type, dict):
-                    holder_type = holder_type.get("type") or holder_type.get("display_type")
+                    holder_type = holder_type.get("type") or holder_type.get(
+                        "display_type"
+                    )
                 holder_rows.append(
                     {
                         "conid": str(conid),
@@ -2258,12 +2530,24 @@ class FundamentalsStore:
                         "display_value": item.get("display_value"),
                         "display_shares": item.get("display_shares"),
                         "display_pct": item.get("display_pct"),
-                        "pct_num": _parse_number(item.get("display_pct"), percent_as_fraction=True),
+                        "pct_num": _parse_number(
+                            item.get("display_pct"), percent_as_fraction=True
+                        ),
                     }
                 )
         self._insert_rows(conn, "ownership_holders", holder_rows)
 
-    def _upsert_esg(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+    def _upsert_esg(
+        self,
+        conn,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        payload,
+    ):
         self._upsert_snapshot_row(
             conn,
             "esg_snapshots",
@@ -2274,7 +2558,9 @@ class FundamentalsStore:
             source_file,
             now_iso,
             {
-                "as_of_date": _to_iso_date(payload.get("as_of_date") or payload.get("asOfDate")),
+                "as_of_date": _to_iso_date(
+                    payload.get("as_of_date") or payload.get("asOfDate")
+                ),
             },
         )
 
@@ -2303,7 +2589,17 @@ class FundamentalsStore:
         row.update(values_by_column)
         self._upsert_row(conn, "esg", row, ["conid", "effective_at"])
 
-    def _upsert_price_chart_snapshot(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+    def _upsert_price_chart_snapshot(
+        self,
+        conn,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        payload,
+    ):
         rows = _extract_price_chart_rows(payload)
         dates = [r.get("effective_at") for r in rows if r.get("effective_at")]
         debug_mismatch_count = sum(int(r.get("debug_mismatch") or 0) for r in rows)
@@ -2334,7 +2630,17 @@ class FundamentalsStore:
             include_source_file=False,
         )
 
-    def _upsert_sentiment_snapshot(self, conn, conid, effective_at, observed_at, payload_hash, source_file, now_iso, payload):
+    def _upsert_sentiment_snapshot(
+        self,
+        conn,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        source_file,
+        now_iso,
+        payload,
+    ):
         rows = _extract_sentiment_search_rows(payload)
         dates = [r.get("effective_at") for r in rows if r.get("effective_at")]
         min_date = min(dates) if dates else None
@@ -2356,7 +2662,9 @@ class FundamentalsStore:
             },
         )
 
-    def _series_is_newer(self, new_effective_at, new_observed_at, new_payload_hash, existing_row):
+    def _series_is_newer(
+        self, new_effective_at, new_observed_at, new_payload_hash, existing_row
+    ):
         old_effective_at = str(existing_row["effective_at"] or "")
         old_observed_at = str(existing_row["observed_at"] or "")
         old_payload_hash = str(existing_row["payload_hash"] or "")
@@ -2377,7 +2685,9 @@ class FundamentalsStore:
 
         return new_payload_hash > old_payload_hash
 
-    def _write_price_chart_series(self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload):
+    def _write_price_chart_series(
+        self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload
+    ):
         rows = _extract_price_chart_rows(payload)
         raw_written = 0
         latest_upserted = 0
@@ -2419,7 +2729,9 @@ class FundamentalsStore:
 
         return raw_written, latest_upserted
 
-    def _write_sentiment_series(self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload):
+    def _write_sentiment_series(
+        self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload
+    ):
         rows = _extract_sentiment_search_rows(payload)
         raw_written = 0
         latest_upserted = 0
@@ -2470,7 +2782,9 @@ class FundamentalsStore:
 
         return raw_written, latest_upserted
 
-    def _write_ownership_trade_log_series(self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload):
+    def _write_ownership_trade_log_series(
+        self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload
+    ):
         rows = extract_ownership_trade_log(payload, drop_no_change=True)
         raw_written = 0
         latest_upserted = 0
@@ -2571,11 +2885,15 @@ class FundamentalsStore:
                         _parse_number(row.get("holding")),
                         row.get("party"),
                         row.get("source"),
-                        str(row.get("insider")) if row.get("insider") is not None else None,
+                        str(row.get("insider"))
+                        if row.get("insider") is not None
+                        else None,
                     ],
                 )
                 latest_upserted += 1
-            elif self._series_is_newer(effective_at, observed_at, payload_hash, existing):
+            elif self._series_is_newer(
+                effective_at, observed_at, payload_hash, existing
+            ):
                 conn.execute(
                     """
                     UPDATE ownership_trade_log_series_latest
@@ -2605,7 +2923,9 @@ class FundamentalsStore:
                         _parse_number(row.get("holding")),
                         row.get("party"),
                         row.get("source"),
-                        str(row.get("insider")) if row.get("insider") is not None else None,
+                        str(row.get("insider"))
+                        if row.get("insider") is not None
+                        else None,
                         str(conid),
                         row_key,
                     ],
@@ -2614,7 +2934,9 @@ class FundamentalsStore:
 
         return raw_written, latest_upserted
 
-    def _write_dividends_events_series(self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload):
+    def _write_dividends_events_series(
+        self, conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload
+    ):
         rows = extract_dividends_events(payload)
         raw_written = 0
         latest_upserted = 0
@@ -2628,7 +2950,11 @@ class FundamentalsStore:
             if event_date:
                 point_date = _parse_date_candidate(point_effective_at)
                 debug_date = _parse_date_candidate(event_date)
-                if point_date is not None and debug_date is not None and abs((point_date - debug_date).days) > 1:
+                if (
+                    point_date is not None
+                    and debug_date is not None
+                    and abs((point_date - debug_date).days) > 1
+                ):
                     logger.warning(
                         "dividends date mismatch between trade_date and event_date: conid=%s effective_at=%s trade_date=%s event_date=%s",
                         str(conid),
@@ -2697,15 +3023,57 @@ class FundamentalsStore:
 
         return raw_written, latest_upserted
 
-    def _write_series(self, conn, endpoint, conid, effective_at, observed_at, payload_hash, inserted_at, payload):
+    def _write_series(
+        self,
+        conn,
+        endpoint,
+        conid,
+        effective_at,
+        observed_at,
+        payload_hash,
+        inserted_at,
+        payload,
+    ):
         if endpoint == "price_chart":
-            return self._write_price_chart_series(conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload)
+            return self._write_price_chart_series(
+                conn,
+                conid,
+                effective_at,
+                observed_at,
+                payload_hash,
+                inserted_at,
+                payload,
+            )
         if endpoint == "sentiment_search":
-            return self._write_sentiment_series(conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload)
+            return self._write_sentiment_series(
+                conn,
+                conid,
+                effective_at,
+                observed_at,
+                payload_hash,
+                inserted_at,
+                payload,
+            )
         if endpoint == "ownership":
-            return self._write_ownership_trade_log_series(conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload)
+            return self._write_ownership_trade_log_series(
+                conn,
+                conid,
+                effective_at,
+                observed_at,
+                payload_hash,
+                inserted_at,
+                payload,
+            )
         if endpoint == "dividends":
-            return self._write_dividends_events_series(conn, conid, effective_at, observed_at, payload_hash, inserted_at, payload)
+            return self._write_dividends_events_series(
+                conn,
+                conid,
+                effective_at,
+                observed_at,
+                payload_hash,
+                inserted_at,
+                payload,
+            )
         return 0, 0
 
     def _persist_endpoint(
@@ -2719,7 +3087,7 @@ class FundamentalsStore:
         effective_source,
         source_file,
     ):
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
         self._ensure_product(conn, conid)
 
         blob_info = self._store_blob(conn, payload)
@@ -2825,13 +3193,15 @@ class FundamentalsStore:
                 "status": "missing_conid",
             }
 
-        observed_at = snapshot.get("scraped_at") or datetime.now(timezone.utc).isoformat()
+        observed_at = snapshot.get("scraped_at") or datetime.now(UTC).isoformat()
         try:
-            observed_dt = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+            observed_dt = datetime.fromisoformat(
+                str(observed_at).replace("Z", "+00:00")
+            )
             if observed_dt.tzinfo is None:
-                observed_dt = observed_dt.replace(tzinfo=timezone.utc)
+                observed_dt = observed_dt.replace(tzinfo=UTC)
         except Exception:
-            observed_dt = datetime.now(timezone.utc)
+            observed_dt = datetime.now(UTC)
             observed_at = observed_dt.isoformat()
 
         endpoint_payloads = self._endpoint_payloads_from_snapshot(snapshot)
@@ -2887,7 +3257,9 @@ class FundamentalsStore:
                     unchanged_events += 1
 
                 series_raw_rows_written += int(result.get("series_raw_rows_written", 0))
-                series_latest_rows_upserted += int(result.get("series_latest_rows_upserted", 0))
+                series_latest_rows_upserted += int(
+                    result.get("series_latest_rows_upserted", 0)
+                )
                 per_endpoint[endpoint] = result
                 saved_any_endpoint = True
 
@@ -2929,8 +3301,8 @@ class FundamentalsStore:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
-                    run_stats.get("run_started_at") or datetime.now(timezone.utc).isoformat(),
-                    run_stats.get("run_finished_at") or datetime.now(timezone.utc).isoformat(),
+                    run_stats.get("run_started_at") or datetime.now(UTC).isoformat(),
+                    run_stats.get("run_finished_at") or datetime.now(UTC).isoformat(),
                     int(run_stats.get("total_targeted_conids", 0)),
                     int(run_stats.get("processed_conids", 0)),
                     int(run_stats.get("saved_snapshots", 0)),
@@ -2951,7 +3323,9 @@ class FundamentalsStore:
                     continue
                 call_count = int(row.get("call_count", 0))
                 useful_payload_count = int(row.get("useful_payload_count", 0))
-                useful_payload_rate = float(row.get("useful_payload_rate", 0.0)) if call_count else 0.0
+                useful_payload_rate = (
+                    float(row.get("useful_payload_rate", 0.0)) if call_count else 0.0
+                )
                 status_codes = row.get("status_codes") or {}
 
                 status_2xx = 0

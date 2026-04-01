@@ -19,7 +19,11 @@ def _table_columns(con, table):
 
 
 def _table_pk_columns(con, table):
-    return [r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall() if int(r[5]) > 0]
+    return [
+        r[1]
+        for r in con.execute(f"PRAGMA table_info({table})").fetchall()
+        if int(r[5]) > 0
+    ]
 
 
 def test_holdings_schema_uses_new_table_layout():
@@ -38,7 +42,9 @@ def test_holdings_schema_uses_new_table_layout():
                 "geographic": {"us": "100%"},
             },
         }
-        result = store.persist_combined_snapshot(snapshot, source_file="holdings_schema.json")
+        result = store.persist_combined_snapshot(
+            snapshot, source_file="holdings_schema.json"
+        )
         assert result["status"] == "ok"
 
         con = sqlite3.connect(db_path)
@@ -50,7 +56,9 @@ def test_holdings_schema_uses_new_table_layout():
 
             table_names = {
                 row[0]
-                for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
             }
             assert "holdings_asset_type" in table_names
             assert "holdings_industry" in table_names
@@ -156,10 +164,20 @@ def test_holdings_debt_maturity_asset_type_use_static_columns_with_direct_mappin
                     {"name": "Technology", "weight": 44.8681, "vs": 48.34125625},
                 ],
                 "currency": [
-                    {"name": "US Dollar", "weight": 99.9604, "vs": 107.984995833333, "code": "USD"},
+                    {
+                        "name": "US Dollar",
+                        "weight": 99.9604,
+                        "vs": 107.984995833333,
+                        "code": "USD",
+                    },
                 ],
                 "investor_country": [
-                    {"name": "United States", "weight": 97.3418, "vs": 104.736089583333, "country_code": "US"},
+                    {
+                        "name": "United States",
+                        "weight": 97.3418,
+                        "vs": 104.736089583333,
+                        "country_code": "US",
+                    },
                 ],
                 "debt_type": [
                     {"name": "Sovereign Bond", "weight": "20%", "vs": "19.5%"},
@@ -170,8 +188,16 @@ def test_holdings_debt_maturity_asset_type_use_static_columns_with_direct_mappin
                     {"name": "% Quality Not Rated", "weight": "2%", "vs": "3.3%"},
                 ],
                 "maturity": [
-                    {"name": "% Maturity 1 to 3 Years", "weight": "12.5%", "vs": "11.3%"},
-                    {"name": "% Maturity Less than 1 Year", "weight": "5.4%", "vs": "4.1%"},
+                    {
+                        "name": "% Maturity 1 to 3 Years",
+                        "weight": "12.5%",
+                        "vs": "11.3%",
+                    },
+                    {
+                        "name": "% Maturity Less than 1 Year",
+                        "weight": "5.4%",
+                        "vs": "4.1%",
+                    },
                 ],
                 "geographic": {
                     "us": "97.34%",
@@ -191,7 +217,12 @@ def test_holdings_debt_maturity_asset_type_use_static_columns_with_direct_mappin
                     {"name": "Euro", "weight": "4.5%", "vs": "5.2%", "code": "EUR"},
                 ],
                 "investor_country": [
-                    {"name": "Ireland", "weight": "1.2%", "vs": "1.0%", "country_code": "IE"},
+                    {
+                        "name": "Ireland",
+                        "weight": "1.2%",
+                        "vs": "1.0%",
+                        "country_code": "IE",
+                    },
                 ],
                 "geographic": {
                     "apac": "0.77%",

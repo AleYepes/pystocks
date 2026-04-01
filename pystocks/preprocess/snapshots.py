@@ -1,6 +1,6 @@
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-import sqlite3
 
 import numpy as np
 import pandas as pd
@@ -22,16 +22,35 @@ SNAPSHOT_TABLE_COLUMNS = {
     "holdings_maturity": ["conid", "effective_at"],
     "holdings_industry": ["conid", "effective_at", "industry", "value_num"],
     "holdings_currency": ["conid", "effective_at", "code", "currency", "value_num"],
-    "holdings_investor_country": ["conid", "effective_at", "country_code", "country", "value_num"],
+    "holdings_investor_country": [
+        "conid",
+        "effective_at",
+        "country_code",
+        "country",
+        "value_num",
+    ],
     "holdings_geographic_weights": ["conid", "effective_at", "region", "value_num"],
     "holdings_debt_type": ["conid", "effective_at", "debt_type", "value_num"],
     "holdings_top10": ["conid", "effective_at", "name", "holding_weight_num"],
     "ratios_key_ratios": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
     "ratios_financials": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
-    "ratios_fixed_income": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
+    "ratios_fixed_income": [
+        "conid",
+        "effective_at",
+        "metric_id",
+        "value_num",
+        "vs_num",
+    ],
     "ratios_dividend": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
     "ratios_zscore": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
-    "performance": ["conid", "effective_at", "section", "metric_id", "value_num", "vs_num"],
+    "performance": [
+        "conid",
+        "effective_at",
+        "section",
+        "metric_id",
+        "value_num",
+        "vs_num",
+    ],
     "dividends_industry_metrics": ["conid", "effective_at"],
     "morningstar_summary": ["conid", "effective_at"],
     "lipper_ratings": ["conid", "effective_at", "period", "metric_id", "rating_value"],
@@ -39,7 +58,9 @@ SNAPSHOT_TABLE_COLUMNS = {
 
 
 def _empty_table(name):
-    return pd.DataFrame(columns=SNAPSHOT_TABLE_COLUMNS.get(name, ["conid", "effective_at"]))
+    return pd.DataFrame(
+        columns=SNAPSHOT_TABLE_COLUMNS.get(name, ["conid", "effective_at"])
+    )
 
 
 def _sanitize_segment(value):
@@ -102,7 +123,9 @@ def _normalize_snapshot_frame(df):
 def _normalize_snapshot_tables(tables):
     normalized = {}
     for name in SNAPSHOT_TABLE_COLUMNS:
-        normalized[name] = _normalize_snapshot_frame(tables.get(name, _empty_table(name)))
+        normalized[name] = _normalize_snapshot_frame(
+            tables.get(name, _empty_table(name))
+        )
     return normalized
 
 
@@ -125,15 +148,12 @@ def _pivot_series_frame(df, key_col, value_col, prefix):
     work[value_col] = pd.to_numeric(work[value_col], errors="coerce")
     sort_cols = ["conid", "effective_at", "pivot_key", value_col]
     work = work.sort_values(sort_cols, na_position="last")
-    pivoted = (
-        work.pivot_table(
-            index=["conid", "effective_at"],
-            columns="pivot_key",
-            values=value_col,
-            aggfunc="first",
-        )
-        .reset_index()
-    )
+    pivoted = work.pivot_table(
+        index=["conid", "effective_at"],
+        columns="pivot_key",
+        values=value_col,
+        aggfunc="first",
+    ).reset_index()
     pivoted.columns = [
         col if col in {"conid", "effective_at"} else f"{prefix}__{col}"
         for col in pivoted.columns
@@ -145,7 +165,9 @@ def _pivot_metric_frame(df, prefix, key_cols):
     if df.empty:
         return pd.DataFrame(columns=["conid", "effective_at"])
     work = df.copy()
-    work["pivot_key"] = work[key_cols].astype(str).agg("__".join, axis=1).map(_sanitize_segment)
+    work["pivot_key"] = (
+        work[key_cols].astype(str).agg("__".join, axis=1).map(_sanitize_segment)
+    )
     value_pivot = _pivot_series_frame(
         work[["conid", "effective_at", "pivot_key", "value_num"]],
         "pivot_key",
@@ -153,9 +175,15 @@ def _pivot_metric_frame(df, prefix, key_cols):
         prefix,
     )
     if "vs_num" in work.columns:
-        vs_work = work[["conid", "effective_at", "pivot_key", "vs_num"]].rename(columns={"vs_num": "value_num"})
-        vs_pivot = _pivot_series_frame(vs_work, "pivot_key", "value_num", f"{prefix}_vs")
-        value_pivot = value_pivot.merge(vs_pivot, on=["conid", "effective_at"], how="outer")
+        vs_work = work[["conid", "effective_at", "pivot_key", "vs_num"]].rename(
+            columns={"vs_num": "value_num"}
+        )
+        vs_pivot = _pivot_series_frame(
+            vs_work, "pivot_key", "value_num", f"{prefix}_vs"
+        )
+        value_pivot = value_pivot.merge(
+            vs_pivot, on=["conid", "effective_at"], how="outer"
+        )
     return value_pivot.sort_values(["conid", "effective_at"]).reset_index(drop=True)
 
 
@@ -198,9 +226,15 @@ def _summarize_source_table(df, table_name):
                 "table_name": table_name,
                 "row_count": int(len(df)),
                 "key_count": key_count,
-                "conid_count": int(df["conid"].nunique()) if "conid" in df.columns else 0,
-                "min_effective_at": df["effective_at"].min() if "effective_at" in df.columns else pd.NaT,
-                "max_effective_at": df["effective_at"].max() if "effective_at" in df.columns else pd.NaT,
+                "conid_count": int(df["conid"].nunique())
+                if "conid" in df.columns
+                else 0,
+                "min_effective_at": df["effective_at"].min()
+                if "effective_at" in df.columns
+                else pd.NaT,
+                "max_effective_at": df["effective_at"].max()
+                if "effective_at" in df.columns
+                else pd.NaT,
             }
         ]
     )
@@ -211,9 +245,15 @@ def _apply_holdings_flags(df, config):
         return df.copy()
     out = df.copy()
     tolerance = float(config.holdings_sum_tolerance)
-    out["is_sum_near_one"] = out["value_sum"].notna() & out["value_sum"].sub(1.0).abs().le(tolerance)
-    out["is_sum_over_one"] = out["value_sum"].notna() & out["value_sum"].gt(1.0 + tolerance)
-    out["is_sparse_category_coverage"] = out["category_count"].fillna(0).le(config.sparse_category_threshold)
+    out["is_sum_near_one"] = out["value_sum"].notna() & out["value_sum"].sub(
+        1.0
+    ).abs().le(tolerance)
+    out["is_sum_over_one"] = out["value_sum"].notna() & out["value_sum"].gt(
+        1.0 + tolerance
+    )
+    out["is_sparse_category_coverage"] = (
+        out["category_count"].fillna(0).le(config.sparse_category_threshold)
+    )
     return out
 
 
@@ -243,7 +283,11 @@ def _wide_holdings_diagnostics(df, table_name, value_columns, config):
             "max_value": numeric.max(axis=1, skipna=True),
         }
     )
-    return _apply_holdings_flags(diagnostics, config).sort_values(["conid", "effective_at"]).reset_index(drop=True)
+    return (
+        _apply_holdings_flags(diagnostics, config)
+        .sort_values(["conid", "effective_at"])
+        .reset_index(drop=True)
+    )
 
 
 def _long_holdings_diagnostics(df, table_name, key_col, value_col, config):
@@ -272,7 +316,11 @@ def _long_holdings_diagnostics(df, table_name, key_col, value_col, config):
         )
         .assign(table_name=table_name)
     )
-    return _apply_holdings_flags(diagnostics, config).sort_values(["conid", "effective_at"]).reset_index(drop=True)
+    return (
+        _apply_holdings_flags(diagnostics, config)
+        .sort_values(["conid", "effective_at"])
+        .reset_index(drop=True)
+    )
 
 
 def _top10_features_and_diagnostics(df, config):
@@ -294,14 +342,13 @@ def _top10_features_and_diagnostics(df, config):
         return empty_features, empty_diag
 
     work = df.copy()
-    work["holding_weight_num"] = pd.to_numeric(work["holding_weight_num"], errors="coerce")
-    aggregated = (
-        work.groupby(["conid", "effective_at"], as_index=False)
-        .agg(
-            top10_count=("name", "nunique"),
-            top10_weight_sum=("holding_weight_num", "sum"),
-            top10_weight_max=("holding_weight_num", "max"),
-        )
+    work["holding_weight_num"] = pd.to_numeric(
+        work["holding_weight_num"], errors="coerce"
+    )
+    aggregated = work.groupby(["conid", "effective_at"], as_index=False).agg(
+        top10_count=("name", "nunique"),
+        top10_weight_sum=("holding_weight_num", "sum"),
+        top10_weight_max=("holding_weight_num", "max"),
     )
     diagnostics = aggregated.rename(
         columns={
@@ -313,7 +360,9 @@ def _top10_features_and_diagnostics(df, config):
     diagnostics["table_name"] = "holdings_top10"
     diagnostics = _apply_holdings_flags(diagnostics, config)
     return (
-        _prefix_frame(aggregated, "top10").sort_values(["conid", "effective_at"]).reset_index(drop=True),
+        _prefix_frame(aggregated, "top10")
+        .sort_values(["conid", "effective_at"])
+        .reset_index(drop=True),
         diagnostics.sort_values(["conid", "effective_at"]).reset_index(drop=True),
     )
 
@@ -336,7 +385,9 @@ def _ratio_diagnostics(df, table_name, key_cols):
 
     work = df.copy()
     work["value_num"] = pd.to_numeric(work.get("value_num"), errors="coerce")
-    work["metric_key"] = work[key_cols].astype(str).agg("__".join, axis=1).map(_sanitize_segment)
+    work["metric_key"] = (
+        work[key_cols].astype(str).agg("__".join, axis=1).map(_sanitize_segment)
+    )
     duplicate_rows = (
         work.groupby(["conid", "effective_at", "metric_key"])
         .size()
@@ -345,9 +396,12 @@ def _ratio_diagnostics(df, table_name, key_cols):
     duplicate_rows = duplicate_rows.loc[duplicate_rows["metric_row_count"] > 1].copy()
 
     rows = []
-    for (conid, effective_at), group in work.groupby(["conid", "effective_at"], sort=True):
+    for (conid, effective_at), group in work.groupby(
+        ["conid", "effective_at"], sort=True
+    ):
         dup_group = duplicate_rows.loc[
-            (duplicate_rows["conid"] == conid) & (duplicate_rows["effective_at"] == effective_at)
+            (duplicate_rows["conid"] == conid)
+            & (duplicate_rows["effective_at"] == effective_at)
         ]
         metric_rows = int(len(group))
         distinct_metric_keys = int(group["metric_key"].nunique())
@@ -365,16 +419,26 @@ def _ratio_diagnostics(df, table_name, key_cols):
                 "all_values_null": bool(group["value_num"].notna().sum() == 0),
             }
         )
-    return pd.DataFrame(rows, columns=columns).sort_values(["table_name", "conid", "effective_at"]).reset_index(drop=True)
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values(["table_name", "conid", "effective_at"])
+        .reset_index(drop=True)
+    )
 
 
 def load_snapshot_feature_tables(sqlite_path=SQLITE_DB_PATH):
     with sqlite3.connect(str(sqlite_path)) as conn:
         tables = {
             "profile_and_fees": _load_sql_frame(conn, "SELECT * FROM profile_and_fees"),
-            "holdings_asset_type": _load_sql_frame(conn, "SELECT * FROM holdings_asset_type"),
-            "holdings_debtor_quality": _load_sql_frame(conn, "SELECT * FROM holdings_debtor_quality"),
-            "holdings_maturity": _load_sql_frame(conn, "SELECT * FROM holdings_maturity"),
+            "holdings_asset_type": _load_sql_frame(
+                conn, "SELECT * FROM holdings_asset_type"
+            ),
+            "holdings_debtor_quality": _load_sql_frame(
+                conn, "SELECT * FROM holdings_debtor_quality"
+            ),
+            "holdings_maturity": _load_sql_frame(
+                conn, "SELECT * FROM holdings_maturity"
+            ),
             "holdings_industry": _load_sql_frame(
                 conn,
                 "SELECT conid, effective_at, industry, value_num FROM holdings_industry",
@@ -402,14 +466,24 @@ def load_snapshot_feature_tables(sqlite_path=SQLITE_DB_PATH):
                 "SELECT conid, effective_at, debt_type, value_num FROM holdings_debt_type",
             ),
             "holdings_top10": _load_sql_frame(conn, "SELECT * FROM holdings_top10"),
-            "ratios_key_ratios": _load_sql_frame(conn, "SELECT * FROM ratios_key_ratios"),
-            "ratios_financials": _load_sql_frame(conn, "SELECT * FROM ratios_financials"),
-            "ratios_fixed_income": _load_sql_frame(conn, "SELECT * FROM ratios_fixed_income"),
+            "ratios_key_ratios": _load_sql_frame(
+                conn, "SELECT * FROM ratios_key_ratios"
+            ),
+            "ratios_financials": _load_sql_frame(
+                conn, "SELECT * FROM ratios_financials"
+            ),
+            "ratios_fixed_income": _load_sql_frame(
+                conn, "SELECT * FROM ratios_fixed_income"
+            ),
             "ratios_dividend": _load_sql_frame(conn, "SELECT * FROM ratios_dividend"),
             "ratios_zscore": _load_sql_frame(conn, "SELECT * FROM ratios_zscore"),
             "performance": _load_sql_frame(conn, "SELECT * FROM performance"),
-            "dividends_industry_metrics": _load_sql_frame(conn, "SELECT * FROM dividends_industry_metrics"),
-            "morningstar_summary": _load_sql_frame(conn, "SELECT * FROM morningstar_summary"),
+            "dividends_industry_metrics": _load_sql_frame(
+                conn, "SELECT * FROM dividends_industry_metrics"
+            ),
+            "morningstar_summary": _load_sql_frame(
+                conn, "SELECT * FROM morningstar_summary"
+            ),
             "lipper_ratings": _load_sql_frame(
                 conn,
                 "SELECT conid, effective_at, period, metric_id, rating_value AS value_num FROM lipper_ratings",
@@ -420,7 +494,11 @@ def load_snapshot_feature_tables(sqlite_path=SQLITE_DB_PATH):
 
 def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB_PATH):
     config = config or SnapshotPreprocessConfig()
-    tables = load_snapshot_feature_tables(sqlite_path) if tables is None else _normalize_snapshot_tables(tables)
+    tables = (
+        load_snapshot_feature_tables(sqlite_path)
+        if tables is None
+        else _normalize_snapshot_tables(tables)
+    )
 
     frames = []
     holdings_diagnostics = []
@@ -433,7 +511,9 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
     profile = tables["profile_and_fees"].copy()
     if not profile.empty:
         if "total_net_assets_value" in profile.columns:
-            profile["total_net_assets_num"] = profile["total_net_assets_value"].map(_parse_scaled_number)
+            profile["total_net_assets_num"] = profile["total_net_assets_value"].map(
+                _parse_scaled_number
+            )
         frames.append(_prefix_frame(profile, "profile"))
 
     wide_holdings = [
@@ -445,38 +525,80 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
         df = tables[table_name].copy()
         if df.empty:
             continue
-        value_columns = [col for col in df.columns if col not in {"conid", "effective_at"}]
-        holdings_diagnostics.append(_wide_holdings_diagnostics(df, table_name, value_columns, config))
+        value_columns = [
+            col for col in df.columns if col not in {"conid", "effective_at"}
+        ]
+        holdings_diagnostics.append(
+            _wide_holdings_diagnostics(df, table_name, value_columns, config)
+        )
         frames.append(_prefix_frame(df, prefix))
 
     industry = tables["holdings_industry"].copy()
     if not industry.empty:
-        holdings_diagnostics.append(_long_holdings_diagnostics(industry, "holdings_industry", "industry", "value_num", config))
-        frames.append(_pivot_series_frame(industry, "industry", "value_num", "industry"))
+        holdings_diagnostics.append(
+            _long_holdings_diagnostics(
+                industry, "holdings_industry", "industry", "value_num", config
+            )
+        )
+        frames.append(
+            _pivot_series_frame(industry, "industry", "value_num", "industry")
+        )
 
     currency = tables["holdings_currency"].copy()
     if not currency.empty:
-        holdings_diagnostics.append(_long_holdings_diagnostics(currency, "holdings_currency", "code", "value_num", config))
-        currency["currency_key"] = currency["code"].where(currency["code"].notna(), currency["currency"])
-        frames.append(_pivot_series_frame(currency, "currency_key", "value_num", "currency"))
+        holdings_diagnostics.append(
+            _long_holdings_diagnostics(
+                currency, "holdings_currency", "code", "value_num", config
+            )
+        )
+        currency["currency_key"] = currency["code"].where(
+            currency["code"].notna(), currency["currency"]
+        )
+        frames.append(
+            _pivot_series_frame(currency, "currency_key", "value_num", "currency")
+        )
 
     country = tables["holdings_investor_country"].copy()
     if not country.empty:
-        holdings_diagnostics.append(_long_holdings_diagnostics(country, "holdings_investor_country", "country_code", "value_num", config))
-        country["country_key"] = country["country_code"].where(country["country_code"].notna(), country["country"])
-        frames.append(_pivot_series_frame(country, "country_key", "value_num", "country"))
+        holdings_diagnostics.append(
+            _long_holdings_diagnostics(
+                country,
+                "holdings_investor_country",
+                "country_code",
+                "value_num",
+                config,
+            )
+        )
+        country["country_key"] = country["country_code"].where(
+            country["country_code"].notna(), country["country"]
+        )
+        frames.append(
+            _pivot_series_frame(country, "country_key", "value_num", "country")
+        )
 
     region = tables["holdings_geographic_weights"].copy()
     if not region.empty:
-        holdings_diagnostics.append(_long_holdings_diagnostics(region, "holdings_geographic_weights", "region", "value_num", config))
+        holdings_diagnostics.append(
+            _long_holdings_diagnostics(
+                region, "holdings_geographic_weights", "region", "value_num", config
+            )
+        )
         frames.append(_pivot_series_frame(region, "region", "value_num", "region"))
 
     debt_type = tables["holdings_debt_type"].copy()
     if not debt_type.empty:
-        holdings_diagnostics.append(_long_holdings_diagnostics(debt_type, "holdings_debt_type", "debt_type", "value_num", config))
-        frames.append(_pivot_series_frame(debt_type, "debt_type", "value_num", "debt_type"))
+        holdings_diagnostics.append(
+            _long_holdings_diagnostics(
+                debt_type, "holdings_debt_type", "debt_type", "value_num", config
+            )
+        )
+        frames.append(
+            _pivot_series_frame(debt_type, "debt_type", "value_num", "debt_type")
+        )
 
-    top10_features, top10_diagnostics = _top10_features_and_diagnostics(tables["holdings_top10"], config)
+    top10_features, top10_diagnostics = _top10_features_and_diagnostics(
+        tables["holdings_top10"], config
+    )
     if not top10_features.empty:
         frames.append(top10_features)
     if not top10_diagnostics.empty:
@@ -499,8 +621,14 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
     if config.include_deferred_families:
         performance = tables["performance"].copy()
         if not performance.empty:
-            ratio_diagnostics.append(_ratio_diagnostics(performance, "performance", ["section", "metric_id"]))
-            frames.append(_pivot_metric_frame(performance, "performance", ["section", "metric_id"]))
+            ratio_diagnostics.append(
+                _ratio_diagnostics(performance, "performance", ["section", "metric_id"])
+            )
+            frames.append(
+                _pivot_metric_frame(
+                    performance, "performance", ["section", "metric_id"]
+                )
+            )
 
         dividend_metrics = tables["dividends_industry_metrics"].copy()
         if not dividend_metrics.empty:
@@ -512,8 +640,12 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
 
         lipper = tables["lipper_ratings"].copy()
         if not lipper.empty:
-            ratio_diagnostics.append(_ratio_diagnostics(lipper, "lipper_ratings", ["period", "metric_id"]))
-            frames.append(_pivot_metric_frame(lipper, "lipper", ["period", "metric_id"]))
+            ratio_diagnostics.append(
+                _ratio_diagnostics(lipper, "lipper_ratings", ["period", "metric_id"])
+            )
+            frames.append(
+                _pivot_metric_frame(lipper, "lipper", ["period", "metric_id"])
+            )
 
     frames = [frame for frame in frames if not frame.empty]
     if not frames:
@@ -525,7 +657,9 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
         features["conid"] = features["conid"].astype(str)
         features["effective_at"] = pd.to_datetime(features["effective_at"])
         features["sleeve"] = features.apply(_assign_sleeve, axis=1)
-        features = features.sort_values(["conid", "effective_at"]).reset_index(drop=True)
+        features = features.sort_values(["conid", "effective_at"]).reset_index(
+            drop=True
+        )
 
     holdings_diag = (
         pd.concat(holdings_diagnostics, ignore_index=True)
@@ -562,12 +696,20 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
             ]
         )
     )
-    summary = pd.concat(table_summary, ignore_index=True).sort_values("table_name").reset_index(drop=True)
+    summary = (
+        pd.concat(table_summary, ignore_index=True)
+        .sort_values("table_name")
+        .reset_index(drop=True)
+    )
 
     return {
         "features": features,
-        "holdings_diagnostics": holdings_diag.sort_values(["table_name", "conid", "effective_at"]).reset_index(drop=True),
-        "ratio_diagnostics": ratio_diag.sort_values(["table_name", "conid", "effective_at"]).reset_index(drop=True),
+        "holdings_diagnostics": holdings_diag.sort_values(
+            ["table_name", "conid", "effective_at"]
+        ).reset_index(drop=True),
+        "ratio_diagnostics": ratio_diag.sort_values(
+            ["table_name", "conid", "effective_at"]
+        ).reset_index(drop=True),
         "table_summary": summary,
         "config": config,
     }
@@ -595,7 +737,9 @@ def save_snapshot_preprocess_results(result, output_dir=None):
     }
 
 
-def run_snapshot_preprocess(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs):
+def run_snapshot_preprocess(
+    sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs
+):
     config = SnapshotPreprocessConfig(**config_kwargs)
     result = preprocess_snapshot_features(config=config, sqlite_path=sqlite_path)
     paths = save_snapshot_preprocess_results(result, output_dir=output_dir)

@@ -72,7 +72,9 @@ def test_esg_scores_are_pivoted_to_wide_table():
         try:
             table_names = {
                 row[0]
-                for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
             }
             assert "esg" in table_names
             assert "esg_nodes" not in table_names

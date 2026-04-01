@@ -1,6 +1,6 @@
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-import sqlite3
 
 import numpy as np
 import pandas as pd
@@ -87,7 +87,9 @@ def _normalize_dividend_frame(dividend_df):
 def _build_clean_price_reference(price_reference=None, sqlite_path=SQLITE_DB_PATH):
     if price_reference is None:
         price_result = preprocess_price_history(load_price_history(sqlite_path))
-        reference = price_result["prices"][["conid", "trade_date", "clean_price"]].copy()
+        reference = price_result["prices"][
+            ["conid", "trade_date", "clean_price"]
+        ].copy()
     else:
         reference = price_reference.copy()
 
@@ -139,26 +141,42 @@ def _summarize_dividend_events(df):
         rows.append(
             {
                 "conid": str(conid),
-                "symbol": group["symbol"].dropna().iloc[0] if group["symbol"].notna().any() else None,
-                "product_currency": group["product_currency"].dropna().iloc[0] if group["product_currency"].notna().any() else None,
+                "symbol": group["symbol"].dropna().iloc[0]
+                if group["symbol"].notna().any()
+                else None,
+                "product_currency": group["product_currency"].dropna().iloc[0]
+                if group["product_currency"].notna().any()
+                else None,
                 "event_rows": event_rows,
                 "usable_rows": usable_rows,
                 "duplicate_rows": int(group["is_duplicate_event_signature"].sum()),
                 "currency_mismatch_rows": int(group["is_currency_mismatch"].sum()),
                 "missing_currency_rows": int(group["is_missing_currency"].sum()),
-                "suspicious_yield_rows": int(group["is_suspicious_implied_yield"].sum()),
-                "missing_price_reference_rows": int(group["is_missing_price_reference"].sum()),
+                "suspicious_yield_rows": int(
+                    group["is_suspicious_implied_yield"].sum()
+                ),
+                "missing_price_reference_rows": int(
+                    group["is_missing_price_reference"].sum()
+                ),
                 "min_event_date": group["event_date"].min(),
                 "max_event_date": group["event_date"].max(),
-                "usable_ratio": float(usable_rows / event_rows) if event_rows > 0 else np.nan,
+                "usable_ratio": float(usable_rows / event_rows)
+                if event_rows > 0
+                else np.nan,
             }
         )
     return pd.DataFrame(rows).sort_values("conid").reset_index(drop=True)
 
 
-def preprocess_dividend_events(dividend_df=None, price_reference=None, config=None, sqlite_path=SQLITE_DB_PATH):
+def preprocess_dividend_events(
+    dividend_df=None, price_reference=None, config=None, sqlite_path=SQLITE_DB_PATH
+):
     config = config or DividendPreprocessConfig()
-    dividend_df = load_dividend_events(sqlite_path) if dividend_df is None else _normalize_dividend_frame(dividend_df)
+    dividend_df = (
+        load_dividend_events(sqlite_path)
+        if dividend_df is None
+        else _normalize_dividend_frame(dividend_df)
+    )
 
     if dividend_df.empty:
         empty_events = pd.DataFrame(
@@ -196,7 +214,9 @@ def preprocess_dividend_events(dividend_df=None, price_reference=None, config=No
             "config": config,
         }
 
-    reference = _build_clean_price_reference(price_reference=price_reference, sqlite_path=sqlite_path)
+    reference = _build_clean_price_reference(
+        price_reference=price_reference, sqlite_path=sqlite_path
+    )
     left = dividend_df.sort_values(["event_date", "conid"]).reset_index(drop=True)
     right = reference.rename(
         columns={
@@ -218,17 +238,25 @@ def preprocess_dividend_events(dividend_df=None, price_reference=None, config=No
     merged["price_reference_age_days"] = (
         merged["event_date"] - merged["previous_price_date"]
     ).dt.days
-    merged["implied_yield_vs_previous_price"] = merged["amount"] / merged["previous_clean_price"]
+    merged["implied_yield_vs_previous_price"] = (
+        merged["amount"] / merged["previous_clean_price"]
+    )
     merged["trailing_dividend_sum_365d"] = _compute_trailing_dividend_sum(
         merged.sort_values(["conid", "event_date"]).reset_index(drop=True)
     )
     merged["is_missing_amount"] = merged["amount"].isna()
-    merged["is_nonpositive_amount"] = merged["amount"].notna() & (merged["amount"] <= 0.0)
-    merged["is_missing_currency"] = merged["dividend_currency"].fillna("").str.strip().eq("")
+    merged["is_nonpositive_amount"] = merged["amount"].notna() & (
+        merged["amount"] <= 0.0
+    )
+    merged["is_missing_currency"] = (
+        merged["dividend_currency"].fillna("").str.strip().eq("")
+    )
     merged["is_currency_mismatch"] = (
         ~merged["is_missing_currency"]
         & merged["product_currency"].fillna("").str.strip().ne("")
-        & merged["product_currency"].fillna("").ne(merged["dividend_currency"].fillna(""))
+        & merged["product_currency"]
+        .fillna("")
+        .ne(merged["dividend_currency"].fillna(""))
     )
     merged["is_duplicate_event_signature"] = merged.duplicated(
         [
@@ -243,16 +271,14 @@ def preprocess_dividend_events(dividend_df=None, price_reference=None, config=No
         keep=False,
     )
     merged["is_missing_price_reference"] = merged["previous_clean_price"].isna()
-    merged["is_stale_price_reference"] = (
-        merged["price_reference_age_days"].notna()
-        & (merged["price_reference_age_days"] > config.max_price_reference_age_days)
+    merged["is_stale_price_reference"] = merged["price_reference_age_days"].notna() & (
+        merged["price_reference_age_days"] > config.max_price_reference_age_days
     )
-    merged["is_suspicious_implied_yield"] = (
-        merged["implied_yield_vs_previous_price"].notna()
-        & (
-            (merged["implied_yield_vs_previous_price"] <= 0.0)
-            | (merged["implied_yield_vs_previous_price"] > config.max_implied_yield)
-        )
+    merged["is_suspicious_implied_yield"] = merged[
+        "implied_yield_vs_previous_price"
+    ].notna() & (
+        (merged["implied_yield_vs_previous_price"] <= 0.0)
+        | (merged["implied_yield_vs_previous_price"] > config.max_implied_yield)
     )
     merged["usable_for_total_return_adjustment"] = ~(
         merged["is_missing_amount"]
@@ -289,7 +315,9 @@ def save_dividend_preprocess_results(result, output_dir=None):
     }
 
 
-def run_dividend_preprocess(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs):
+def run_dividend_preprocess(
+    sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs
+):
     config = DividendPreprocessConfig(**config_kwargs)
     result = preprocess_dividend_events(config=config, sqlite_path=sqlite_path)
     paths = save_dividend_preprocess_results(result, output_dir=output_dir)
@@ -299,6 +327,8 @@ def run_dividend_preprocess(sqlite_path=SQLITE_DB_PATH, output_dir=None, **confi
         "status": "ok",
         "rows": int(len(result["events"])),
         "conids": int(summary["conid"].nunique()) if not summary.empty else 0,
-        "usable_rows": int(result["events"]["usable_for_total_return_adjustment"].sum()) if not result["events"].empty else 0,
+        "usable_rows": int(result["events"]["usable_for_total_return_adjustment"].sum())
+        if not result["events"].empty
+        else 0,
         **paths,
     }

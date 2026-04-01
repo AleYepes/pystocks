@@ -10,7 +10,9 @@ def test_get_login_credentials_from_config_file():
     try:
         state_path = Path(tmp.name) / "auth_state.json"
         credentials_path = Path(tmp.name) / "login_credentials.json"
-        credentials_path.write_text(json.dumps({"username": "demo_user", "password": "demo_pass"}))
+        credentials_path.write_text(
+            json.dumps({"username": "demo_user", "password": "demo_pass"})
+        )
 
         session = IBKRSession(state_path=state_path, credentials_path=credentials_path)
         username, password = session._get_login_credentials(prompt_if_missing=False)
@@ -44,7 +46,9 @@ def test_get_login_credentials_force_prompt_overrides_saved_config(monkeypatch):
     try:
         state_path = Path(tmp.name) / "auth_state.json"
         credentials_path = Path(tmp.name) / "login_credentials.json"
-        credentials_path.write_text(json.dumps({"username": "saved_user", "password": "saved_pass"}))
+        credentials_path.write_text(
+            json.dumps({"username": "saved_user", "password": "saved_pass"})
+        )
         session = IBKRSession(state_path=state_path, credentials_path=credentials_path)
 
         monkeypatch.setattr("builtins.input", lambda _: "new_user")

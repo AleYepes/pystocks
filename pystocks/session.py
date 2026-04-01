@@ -1,26 +1,37 @@
 import asyncio
-import re
-import logging
 import getpass
-from playwright.async_api import async_playwright
-import httpx
 import json
+import logging
+import re
 from pathlib import Path
+
+import httpx
+from playwright.async_api import async_playwright
+
 from .config import SESSION_STATE_PATH
 
 logger = logging.getLogger(__name__)
 
 _ACCOUNTS_ACESWS_PATH_RE = re.compile(r"/portal\.proxy/v1/portal/acesws/([^/?]+)")
-_ACCOUNTS_PORTFOLIO2_PATH_RE = re.compile(r"/portal\.proxy/v1/portal/portfolio2/([^/?]+)")
+_ACCOUNTS_PORTFOLIO2_PATH_RE = re.compile(
+    r"/portal\.proxy/v1/portal/portfolio2/([^/?]+)"
+)
 _ACCOUNT_ID_RE = re.compile(r"^(?:U|DU|DF|F)?\d+$")
-_LOGIN_ERROR_TEXT_RE = re.compile(r"(invalid|incorrect|wrong|failed|error)", re.IGNORECASE)
+_LOGIN_ERROR_TEXT_RE = re.compile(
+    r"(invalid|incorrect|wrong|failed|error)", re.IGNORECASE
+)
 
 
 class IBKRSession:
     """Manages an authenticated session for the IBKR Client Portal."""
+
     def __init__(self, state_path=SESSION_STATE_PATH, credentials_path=None):
         self.state_path = Path(state_path)
-        self.credentials_path = Path(credentials_path) if credentials_path else self.state_path.with_name("login_credentials.json")
+        self.credentials_path = (
+            Path(credentials_path)
+            if credentials_path
+            else self.state_path.with_name("login_credentials.json")
+        )
         self.portal_url = "https://www.interactivebrokers.ie/portal/"
         self.base_url = "https://www.interactivebrokers.ie"
         self._headers = {
@@ -38,7 +49,7 @@ class IBKRSession:
     def _load_state(self):
         if not self.state_path.exists():
             return None
-        with open(self.state_path, "r") as f:
+        with open(self.state_path) as f:
             return json.load(f)
 
     def _cookies_from_state(self, state):
@@ -54,7 +65,7 @@ class IBKRSession:
         if not self.credentials_path.exists():
             return None
         try:
-            with open(self.credentials_path, "r") as f:
+            with open(self.credentials_path) as f:
                 payload = json.load(f)
         except Exception:
             return None
@@ -138,7 +149,9 @@ class IBKRSession:
     async def _submit_login_credentials(self, page, username, password):
         try:
             await self._dismiss_cookie_modal_if_present(page)
-            await page.wait_for_selector("input[name='username']", state="visible", timeout=30000)
+            await page.wait_for_selector(
+                "input[name='username']", state="visible", timeout=30000
+            )
             await page.fill("input[name='username']", username)
             await page.fill("input[name='password']", password)
             await page.click("form.xyzform-username button[type='submit']")
@@ -226,7 +239,9 @@ class IBKRSession:
         state = self._load_state()
         return await self._validate_state_payload(state, timeout_s=timeout_s)
 
-    async def _run_login_attempt(self, playwright, username, password, headless=False, timeout_ms=180000):
+    async def _run_login_attempt(
+        self, playwright, username, password, headless=False, timeout_ms=180000
+    ):
         browser = await playwright.chromium.launch(headless=headless)
         try:
             context = await browser.new_context()
@@ -249,7 +264,9 @@ class IBKRSession:
                 is_valid = await self._validate_state_payload(state, timeout_s=10.0)
                 if is_valid:
                     await context.storage_state(path=self.state_path)
-                    logger.info(f"Login successful. Session state saved to {self.state_path}")
+                    logger.info(
+                        f"Login successful. Session state saved to {self.state_path}"
+                    )
                     return True, None
                 await asyncio.sleep(2)
 
@@ -287,7 +304,9 @@ class IBKRSession:
                     logger.error("Missing IBKR credentials; login aborted.")
                     return False
 
-                logger.info("Credential login submitted. Waiting for authenticated session state.")
+                logger.info(
+                    "Credential login submitted. Waiting for authenticated session state."
+                )
                 try:
                     success, rejection_reason = await self._run_login_attempt(
                         p,
@@ -321,8 +340,12 @@ class IBKRSession:
         """
         Interactive reauth flow used by long-running scrapers after 401/403.
         """
-        logger.info("Attempting reauthentication. Complete login in the browser window.")
-        return await self.login(headless=headless, timeout_ms=timeout_ms, force_browser=True)
+        logger.info(
+            "Attempting reauthentication. Complete login in the browser window."
+        )
+        return await self.login(
+            headless=headless, timeout_ms=timeout_ms, force_browser=True
+        )
 
     def get_client(self):
         """Returns an httpx.AsyncClient initialized with the saved cookies."""
@@ -332,11 +355,9 @@ class IBKRSession:
         cookies = self._cookies_from_state(state)
 
         return httpx.AsyncClient(
-            base_url=self.base_url,
-            cookies=cookies,
-            headers=self._headers,
-            timeout=30.0
+            base_url=self.base_url, cookies=cookies, headers=self._headers, timeout=30.0
         )
+
 
 if __name__ == "__main__":
     session = IBKRSession()

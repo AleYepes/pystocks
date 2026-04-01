@@ -65,7 +65,9 @@ def test_performance_table_rename_and_column_reduction():
         try:
             table_names = {
                 row[0]
-                for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
             }
             assert "performance_metrics" not in table_names
             assert "performance" in table_names

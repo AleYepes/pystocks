@@ -2,7 +2,7 @@ import json
 import math
 import re
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 _MONTH_MAP = {
     "JAN": 1,
@@ -31,7 +31,9 @@ _MONTH_MAP = {
     "DECEMBER": 12,
 }
 
-_NUM_WITH_SUFFIX_RE = re.compile(r"^[\s\$€£¥]*([+-]?\d+(?:\.\d+)?)\s*([KMBT])?\b", re.IGNORECASE)
+_NUM_WITH_SUFFIX_RE = re.compile(
+    r"^[\s\$€£¥]*([+-]?\d+(?:\.\d+)?)\s*([KMBT])?\b", re.IGNORECASE
+)
 _DATE_LIKE_RE = re.compile(r"\b\d{4}[/-]\d{2}[/-]\d{2}\b")
 
 
@@ -176,7 +178,7 @@ def _to_iso_date(value):
         if ts > 1e12:
             ts = ts / 1000.0
         try:
-            return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+            return datetime.fromtimestamp(ts, tz=UTC).date().isoformat()
         except Exception:
             return None
 
@@ -285,7 +287,9 @@ _KNOWN_DIVIDENDS_NUMERIC_METRICS = {
 
 def _coerce_dividends_metric_value(metric_id, value):
     metric = _slug(metric_id)
-    parsed = _parse_number(value, percent_as_fraction=metric in _PERCENT_FRACTION_METRICS)
+    parsed = _parse_number(
+        value, percent_as_fraction=metric in _PERCENT_FRACTION_METRICS
+    )
     if parsed is not None:
         return parsed
     if metric in _KNOWN_DIVIDENDS_NUMERIC_METRICS:
@@ -314,9 +318,15 @@ def normalize_dividends_snapshot(payload):
         "embedded_price_points": int(embedded_price_points),
         "no_div_data_marker": payload.get("no_div_data_marker"),
         "no_div_data_period": payload.get("no_div_data_period"),
-        "dividend_yield": _coerce_dividends_metric_value("dividend_yield", industry_average.get("dividend_yield")),
-        "annual_dividend": _coerce_dividends_metric_value("annual_dividend", industry_average.get("annual_dividend")),
-        "paying_companies": _coerce_dividends_metric_value("paying_companies", industry_average.get("paying_companies")),
+        "dividend_yield": _coerce_dividends_metric_value(
+            "dividend_yield", industry_average.get("dividend_yield")
+        ),
+        "annual_dividend": _coerce_dividends_metric_value(
+            "annual_dividend", industry_average.get("annual_dividend")
+        ),
+        "paying_companies": _coerce_dividends_metric_value(
+            "paying_companies", industry_average.get("paying_companies")
+        ),
         "paying_companies_percent": _coerce_dividends_metric_value(
             "paying_companies_percent",
             industry_average.get("paying_companies_percent"),
@@ -333,14 +343,28 @@ def normalize_dividends_snapshot(payload):
             continue
         metric_id = _metric_id(item)
         if metric_id in {"div_yield", "dividend_yield_ttm", "dividend_yield"}:
-            out["dividend_yield_ttm"] = _coerce_dividends_metric_value(metric_id, item.get("value"))
+            out["dividend_yield_ttm"] = _coerce_dividends_metric_value(
+                metric_id, item.get("value")
+            )
         elif metric_id in {"div_per_share", "dividend_ttm", "annual_dividend"}:
-            out["dividend_ttm"] = _coerce_dividends_metric_value(metric_id, item.get("value"))
+            out["dividend_ttm"] = _coerce_dividends_metric_value(
+                metric_id, item.get("value")
+            )
 
-    if out["dividend_ttm"] is None and industry_average.get("annual_dividend") is not None:
-        out["dividend_ttm"] = _coerce_dividends_metric_value("annual_dividend", industry_average.get("annual_dividend"))
-    if out["dividend_yield_ttm"] is None and industry_average.get("dividend_yield") is not None:
-        out["dividend_yield_ttm"] = _coerce_dividends_metric_value("dividend_yield", industry_average.get("dividend_yield"))
+    if (
+        out["dividend_ttm"] is None
+        and industry_average.get("annual_dividend") is not None
+    ):
+        out["dividend_ttm"] = _coerce_dividends_metric_value(
+            "annual_dividend", industry_average.get("annual_dividend")
+        )
+    if (
+        out["dividend_yield_ttm"] is None
+        and industry_average.get("dividend_yield") is not None
+    ):
+        out["dividend_yield_ttm"] = _coerce_dividends_metric_value(
+            "dividend_yield", industry_average.get("dividend_yield")
+        )
 
     return out
 
@@ -364,7 +388,9 @@ def extract_dividends_events(payload):
             if not isinstance(point, dict):
                 continue
 
-            trade_date = _to_iso_date(point.get("x")) or _to_iso_date(point.get("ex_dividend_date"))
+            trade_date = _to_iso_date(point.get("x")) or _to_iso_date(
+                point.get("ex_dividend_date")
+            )
             event_date = _to_iso_date(point.get("ex_dividend_date"))
             amount = point.get("amount")
             if amount is None:
@@ -377,7 +403,8 @@ def extract_dividends_events(payload):
                 "trade_date": trade_date,
                 "event_date": event_date,
                 "amount": amount,
-                "currency": _extract_currency(point.get("formatted_amount")) or fallback_currency,
+                "currency": _extract_currency(point.get("formatted_amount"))
+                or fallback_currency,
                 "description": point.get("description"),
                 "event_type": point.get("type"),
                 "declaration_date": _to_iso_date(point.get("declaration_date")),
@@ -480,12 +507,18 @@ def normalize_ownership_snapshot(payload):
         "institutional_total_value": inst_total.get("display_value"),
         "institutional_total_shares": inst_total.get("display_shares"),
         "institutional_total_pct": inst_total.get("display_pct"),
-        "institutional_total_pct_num": _parse_number(inst_total.get("display_pct"), percent_as_fraction=True),
+        "institutional_total_pct_num": _parse_number(
+            inst_total.get("display_pct"), percent_as_fraction=True
+        ),
         "insider_total_value": insider_total.get("display_value"),
         "insider_total_shares": insider_total.get("display_shares"),
         "insider_total_pct": insider_total.get("display_pct"),
-        "insider_total_pct_num": _parse_number(insider_total.get("display_pct"), percent_as_fraction=True),
-        "owners_types_json": json.dumps(owners_types_summary, separators=(",", ":"), ensure_ascii=False),
+        "insider_total_pct_num": _parse_number(
+            insider_total.get("display_pct"), percent_as_fraction=True
+        ),
+        "owners_types_json": json.dumps(
+            owners_types_summary, separators=(",", ":"), ensure_ascii=False
+        ),
     }
 
     return out
@@ -532,16 +565,45 @@ def _extract_profile_and_fees_features(payload):
 
         num = _parse_number(value, percent_as_fraction=True)
         if num is not None:
-            _add_feature(rows, f"profile_{metric}", "profile", num, f"fund_and_profile:{metric}")
+            _add_feature(
+                rows, f"profile_{metric}", "profile", num, f"fund_and_profile:{metric}"
+            )
 
         if metric == "asset_type" and value:
-            _add_feature(rows, f"asset_{_slug(value)}", "asset", 1.0, "fund_and_profile:asset_type")
+            _add_feature(
+                rows,
+                f"asset_{_slug(value)}",
+                "asset",
+                1.0,
+                "fund_and_profile:asset_type",
+            )
         elif metric in {"fund_market_cap_focus", "market_cap_focus"} and value:
-            _add_feature(rows, f"marketcap_{_slug(value)}", "marketcap", 1.0, "fund_and_profile:market_cap")
+            _add_feature(
+                rows,
+                f"marketcap_{_slug(value)}",
+                "marketcap",
+                1.0,
+                "fund_and_profile:market_cap",
+            )
         elif metric == "domicile" and value:
-            _add_feature(rows, f"domicile_{_slug(value)}", "domicile", 1.0, "fund_and_profile:domicile")
-        elif metric in {"management_approach", "distribution_details", "fund_category"} and value:
-            _add_feature(rows, f"profile_{metric}_{_slug(value)}", "profile", 1.0, f"fund_and_profile:{metric}")
+            _add_feature(
+                rows,
+                f"domicile_{_slug(value)}",
+                "domicile",
+                1.0,
+                "fund_and_profile:domicile",
+            )
+        elif (
+            metric in {"management_approach", "distribution_details", "fund_category"}
+            and value
+        ):
+            _add_feature(
+                rows,
+                f"profile_{metric}_{_slug(value)}",
+                "profile",
+                1.0,
+                f"fund_and_profile:{metric}",
+            )
 
     for report in _safe_list(payload.get("reports")):
         report = _safe_dict(report)
@@ -580,11 +642,23 @@ def _extract_profile_and_fees_features(payload):
         frac = _to_fraction_weight(weight)
         if frac is None:
             continue
-        _add_feature(rows, f"profile_expense_{name}", "profile", frac, f"expenses_allocation:{name}")
+        _add_feature(
+            rows,
+            f"profile_expense_{name}",
+            "profile",
+            frac,
+            f"expenses_allocation:{name}",
+        )
 
     warning = payload.get("jap_fund_warning")
     if isinstance(warning, bool):
-        _add_feature(rows, "profile_jap_fund_warning", "profile", 1.0 if warning else 0.0, "jap_fund_warning")
+        _add_feature(
+            rows,
+            "profile_jap_fund_warning",
+            "profile",
+            1.0 if warning else 0.0,
+            "jap_fund_warning",
+        )
 
     return _dedupe_feature_rows(rows)
 
@@ -612,18 +686,28 @@ def _extract_holdings_features(payload):
             frac = _to_fraction_weight(weight)
             if frac is None:
                 continue
-            _add_feature(rows, f"{feature_prefix}_{name}", feature_prefix, frac, f"{section_key}:{name}")
+            _add_feature(
+                rows,
+                f"{feature_prefix}_{name}",
+                feature_prefix,
+                frac,
+                f"{section_key}:{name}",
+            )
 
     geo = _safe_dict(payload.get("geographic"))
     for key, value in geo.items():
         frac = _to_fraction_weight(value)
         if frac is None:
             continue
-        _add_feature(rows, f"countries_{_slug(key)}", "countries", frac, f"geographic:{key}")
+        _add_feature(
+            rows, f"countries_{_slug(key)}", "countries", frac, f"geographic:{key}"
+        )
 
     top10_weight = _to_fraction_weight(payload.get("top_10_weight"))
     if top10_weight is not None:
-        _add_feature(rows, "holding_top_10_weight", "holdings", top10_weight, "top_10_weight")
+        _add_feature(
+            rows, "holding_top_10_weight", "holdings", top10_weight, "top_10_weight"
+        )
 
     return _dedupe_feature_rows(rows)
 
@@ -644,13 +728,21 @@ def _extract_ratios_features(payload):
 
             value = _parse_number(item.get("value"))
             if value is not None:
-                _add_feature(rows, base, "fundamentals", value, f"{section}:{metric}:value")
+                _add_feature(
+                    rows, base, "fundamentals", value, f"{section}:{metric}:value"
+                )
 
             for field in ("vs", "min", "max", "avg", "percentile"):
                 v = _parse_number(item.get(field))
                 if v is None:
                     continue
-                _add_feature(rows, f"{base}_{field}", "fundamentals", v, f"{section}:{metric}:{field}")
+                _add_feature(
+                    rows,
+                    f"{base}_{field}",
+                    "fundamentals",
+                    v,
+                    f"{section}:{metric}:{field}",
+                )
 
     return _dedupe_feature_rows(rows)
 
@@ -675,7 +767,13 @@ def _extract_lipper_ratings_features(payload):
                 value = _parse_number(rating)
                 if value is None:
                     continue
-                _add_feature(rows, f"lipper_{period}_{metric}", "lipper", value, f"universes:{period}:{metric}")
+                _add_feature(
+                    rows,
+                    f"lipper_{period}_{metric}",
+                    "lipper",
+                    value,
+                    f"universes:{period}:{metric}",
+                )
 
     return _dedupe_feature_rows(rows)
 
@@ -690,14 +788,22 @@ def _extract_dividends_features(payload):
         num = _parse_number(value)
         if num is None:
             continue
-        _add_feature(rows, f"dividends_{_slug(key)}", "dividends", num, f"snapshot:{key}")
+        _add_feature(
+            rows, f"dividends_{_slug(key)}", "dividends", num, f"snapshot:{key}"
+        )
 
     for item in extract_dividends_industry_metrics(payload):
         metric_id = _slug(item.get("metric_id"))
         value = _parse_number(item.get("value"))
         if value is None:
             continue
-        _add_feature(rows, f"dividends_metric_{metric_id}", "dividends", value, f"industry:{metric_id}")
+        _add_feature(
+            rows,
+            f"dividends_metric_{metric_id}",
+            "dividends",
+            value,
+            f"industry:{metric_id}",
+        )
 
     return _dedupe_feature_rows(rows)
 
@@ -728,7 +834,9 @@ def _extract_morningstar_features(payload):
         value = _morningstar_numeric(item.get("value"), metric)
         if value is None:
             continue
-        _add_feature(rows, f"morningstar_{metric}", "morningstar", value, f"summary:{metric}")
+        _add_feature(
+            rows, f"morningstar_{metric}", "morningstar", value, f"summary:{metric}"
+        )
 
     return _dedupe_feature_rows(rows)
 
@@ -745,13 +853,21 @@ def _extract_performance_features(payload):
 
             value = _parse_number(item.get("value"))
             if value is not None:
-                _add_feature(rows, base, "performance", value, f"{section}:{metric}:value")
+                _add_feature(
+                    rows, base, "performance", value, f"{section}:{metric}:value"
+                )
 
             for field in ("vs", "percentile", "min", "max", "avg"):
                 extra = _parse_number(item.get(field))
                 if extra is None:
                     continue
-                _add_feature(rows, f"{base}_{field}", "performance", extra, f"{section}:{metric}:{field}")
+                _add_feature(
+                    rows,
+                    f"{base}_{field}",
+                    "performance",
+                    extra,
+                    f"{section}:{metric}:{field}",
+                )
 
     return _dedupe_feature_rows(rows)
 
@@ -775,7 +891,9 @@ def _extract_ownership_features(payload):
         num = _parse_number(value)
         if num is None:
             continue
-        _add_feature(rows, f"ownership_{_slug(key)}", "ownership", num, f"snapshot:{key}")
+        _add_feature(
+            rows, f"ownership_{_slug(key)}", "ownership", num, f"snapshot:{key}"
+        )
 
     for item in _safe_list(payload.get("owners_types")):
         item = _safe_dict(item)
@@ -789,7 +907,13 @@ def _extract_ownership_features(payload):
         frac = _to_fraction_weight(value)
         if frac is None:
             continue
-        _add_feature(rows, f"ownership_type_{_slug(label)}", "ownership", frac, f"owners_types:{label}")
+        _add_feature(
+            rows,
+            f"ownership_type_{_slug(label)}",
+            "ownership",
+            frac,
+            f"owners_types:{label}",
+        )
 
     return _dedupe_feature_rows(rows)
 
@@ -815,7 +939,13 @@ def _extract_esg_features(payload):
         _add_feature(rows, "esg_coverage", "esg", coverage, "coverage")
 
     if isinstance(payload.get("no_settings"), bool):
-        _add_feature(rows, "esg_no_settings", "esg", 1.0 if payload["no_settings"] else 0.0, "no_settings")
+        _add_feature(
+            rows,
+            "esg_no_settings",
+            "esg",
+            1.0 if payload["no_settings"] else 0.0,
+            "no_settings",
+        )
 
     return _dedupe_feature_rows(rows)
 

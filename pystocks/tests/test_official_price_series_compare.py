@@ -122,14 +122,46 @@ def test_official_store_upserts_series_and_snapshot_metrics():
 def test_build_comparison_frames_outputs_expected_diffs():
     official = pd.DataFrame(
         [
-            {"conid": "x", "effective_at": "2025-01-02", "price": 10.0, "open": 9.8, "high": 10.2, "low": 9.7, "close": 10.0},
-            {"conid": "x", "effective_at": "2025-01-03", "price": 10.5, "open": 10.0, "high": 10.6, "low": 9.9, "close": 10.5},
+            {
+                "conid": "x",
+                "effective_at": "2025-01-02",
+                "price": 10.0,
+                "open": 9.8,
+                "high": 10.2,
+                "low": 9.7,
+                "close": 10.0,
+            },
+            {
+                "conid": "x",
+                "effective_at": "2025-01-03",
+                "price": 10.5,
+                "open": 10.0,
+                "high": 10.6,
+                "low": 9.9,
+                "close": 10.5,
+            },
         ]
     )
     fundamentals = pd.DataFrame(
         [
-            {"conid": "x", "effective_at": "2025-01-02", "price": 9.5, "open": 9.6, "high": 9.7, "low": 9.2, "close": 9.5},
-            {"conid": "x", "effective_at": "2025-01-03", "price": 10.0, "open": 9.9, "high": 10.2, "low": 9.8, "close": 10.0},
+            {
+                "conid": "x",
+                "effective_at": "2025-01-02",
+                "price": 9.5,
+                "open": 9.6,
+                "high": 9.7,
+                "low": 9.2,
+                "close": 9.5,
+            },
+            {
+                "conid": "x",
+                "effective_at": "2025-01-03",
+                "price": 10.0,
+                "open": 9.9,
+                "high": 10.2,
+                "low": 9.8,
+                "close": 10.0,
+            },
         ]
     )
 

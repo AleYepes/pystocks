@@ -1,6 +1,9 @@
 import pandas as pd
 
-from pystocks.preprocess.dividends import DividendPreprocessConfig, preprocess_dividend_events
+from pystocks.preprocess.dividends import (
+    DividendPreprocessConfig,
+    preprocess_dividend_events,
+)
 
 
 def test_preprocess_dividend_events_marks_same_currency_event_usable():
@@ -59,7 +62,9 @@ def test_preprocess_dividend_events_blocks_cross_currency_adjustment():
         ]
     )
 
-    result = preprocess_dividend_events(dividend_df=dividend_df, price_reference=price_reference)
+    result = preprocess_dividend_events(
+        dividend_df=dividend_df, price_reference=price_reference
+    )
     row = result["events"].iloc[0]
 
     assert bool(row["is_currency_mismatch"])
@@ -131,7 +136,12 @@ def test_preprocess_dividend_events_flags_duplicate_signatures():
         ]
     )
 
-    result = preprocess_dividend_events(dividend_df=dividend_df, price_reference=price_reference)
+    result = preprocess_dividend_events(
+        dividend_df=dividend_df, price_reference=price_reference
+    )
 
     assert result["events"]["is_duplicate_event_signature"].tolist() == [True, True]
-    assert result["events"]["usable_for_total_return_adjustment"].tolist() == [False, False]
+    assert result["events"]["usable_for_total_return_adjustment"].tolist() == [
+        False,
+        False,
+    ]

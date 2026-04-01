@@ -1,0 +1,41 @@
+[project]
+name = "pystocks"
+version = "0.1.0"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+extend-exclude = ["src", "notebooks"]
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I", "UP"]
+ignore = ["E501"]
+fixable = ["ALL"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pyright]
+pythonVersion = "3.12"
+include = ["pystocks"]
+exclude = [
+    "src",
+    "notebooks",
+    "assets",
+    "data",
+    "docs",
+    "pystocks/tests",
+    "pystocks/analysis.py",
+    "pystocks/cli.py",
+    "pystocks/fundamentals.py",
+    "pystocks/fundamentals_store.py",
+    "pystocks/official_price_series_compare.py",
+    "pystocks/ops_state.py",
+    "pystocks/preprocess/price.py",
+    "pystocks/telemetry_compare.py",
+]
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
+venvPath = "."
+venv = "venv"

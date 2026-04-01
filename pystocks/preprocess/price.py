@@ -1,6 +1,6 @@
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-import sqlite3
 
 import numpy as np
 import pandas as pd
@@ -137,11 +137,15 @@ def _mark_stale_rows(group, stale_run_max_days):
     series = group["price_value"]
     change_groups = series.ne(series.shift()).cumsum()
     group_sizes = series.groupby(change_groups).transform("size")
-    in_run = change_groups.duplicated(keep="first") & change_groups.duplicated(keep="last")
+    in_run = change_groups.duplicated(keep="first") & change_groups.duplicated(
+        keep="last"
+    )
     return (group_sizes > stale_run_max_days) & in_run
 
 
-def _mark_price_level_anomalies(group, base_clean_mask, outlier_mask, ratio_threshold, max_bridge_span):
+def _mark_price_level_anomalies(
+    group, base_clean_mask, outlier_mask, ratio_threshold, max_bridge_span
+):
     flagged = pd.Series(False, index=group.index)
     outlier_positions = np.flatnonzero(outlier_mask.to_numpy())
     if len(outlier_positions) < 2:
@@ -153,7 +157,9 @@ def _mark_price_level_anomalies(group, base_clean_mask, outlier_mask, ratio_thre
     if len(clean_positions) == 0:
         return flagged
 
-    for left_outlier, right_outlier in zip(outlier_positions[:-1], outlier_positions[1:]):
+    for left_outlier, right_outlier in zip(
+        outlier_positions[:-1], outlier_positions[1:]
+    ):
         if right_outlier - left_outlier <= 1:
             continue
         if right_outlier - left_outlier > max_bridge_span:
@@ -175,13 +181,16 @@ def _mark_price_level_anomalies(group, base_clean_mask, outlier_mask, ratio_thre
             continue
 
         bridge_positions = np.arange(left_outlier + 1, right_outlier)
-        bridge_positions = bridge_positions[base_clean_mask.to_numpy()[bridge_positions]]
+        bridge_positions = bridge_positions[
+            base_clean_mask.to_numpy()[bridge_positions]
+        ]
         if len(bridge_positions) == 0:
             continue
 
         bridge_ratios = prices[bridge_positions] / reference
         flagged_positions = bridge_positions[
-            (bridge_ratios < (1.0 / ratio_threshold)) | (bridge_ratios > ratio_threshold)
+            (bridge_ratios < (1.0 / ratio_threshold))
+            | (bridge_ratios > ratio_threshold)
         ]
         if len(flagged_positions) > 0:
             flagged.iloc[flagged_positions] = True
@@ -232,17 +241,24 @@ def preprocess_price_history(price_df=None, config=None):
         & ~(
             df["high"].notna()
             & df["low"].notna()
-            & (pd.to_numeric(df["high"], errors="coerce") < pd.to_numeric(df["low"], errors="coerce"))
+            & (
+                pd.to_numeric(df["high"], errors="coerce")
+                < pd.to_numeric(df["low"], errors="coerce")
+            )
         )
     )
 
     df["raw_return"] = df.groupby("conid")["price_value"].pct_change(fill_method=None)
     stale_mask = pd.Series(False, index=df.index)
     for _, group in df.groupby("conid"):
-        stale_mask.loc[group.index] = _mark_stale_rows(group, config.stale_run_max_days).to_numpy()
+        stale_mask.loc[group.index] = _mark_stale_rows(
+            group, config.stale_run_max_days
+        ).to_numpy()
     df["is_stale_price"] = stale_mask.fillna(False)
 
-    candidate_returns = df["raw_return"].where(df["is_valid_price"] & ~df["is_stale_price"])
+    candidate_returns = df["raw_return"].where(
+        df["is_valid_price"] & ~df["is_stale_price"]
+    )
     outlier_mask = pd.Series(False, index=df.index)
     for _, group in df.assign(candidate_return=candidate_returns).groupby("conid"):
         outlier_mask.loc[group.index] = _robust_outlier_mask(
@@ -250,7 +266,9 @@ def preprocess_price_history(price_df=None, config=None):
             config.outlier_z_threshold,
         ).to_numpy()
     df["is_outlier_return"] = outlier_mask.fillna(False)
-    base_clean_mask = df["is_valid_price"] & ~df["is_stale_price"] & ~df["is_outlier_return"]
+    base_clean_mask = (
+        df["is_valid_price"] & ~df["is_stale_price"] & ~df["is_outlier_return"]
+    )
     price_level_anomaly_mask = pd.Series(False, index=df.index)
     for _, group in df.groupby("conid"):
         price_level_anomaly_mask.loc[group.index] = _mark_price_level_anomalies(
@@ -317,7 +335,11 @@ def run_price_preprocess(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_k
     return {
         "status": "ok",
         "rows": int(len(result["prices"])),
-        "eligible_conids": int(eligibility["eligible"].sum()) if not eligibility.empty else 0,
-        "ineligible_conids": int((~eligibility["eligible"]).sum()) if not eligibility.empty else 0,
+        "eligible_conids": int(eligibility["eligible"].sum())
+        if not eligibility.empty
+        else 0,
+        "ineligible_conids": int((~eligibility["eligible"]).sum())
+        if not eligibility.empty
+        else 0,
         **paths,
     }

@@ -26,6 +26,31 @@ python3 -m pystocks.cli run_pipeline --conids_file=docs/sample_conids.txt
 1. `scrape_products`
 2. `scrape_fundamentals`
 
+## Development workflow
+Install dependencies with:
+
+```bash
+./venv/bin/pip install -r requirements.txt
+```
+
+Install commit hooks with:
+
+```bash
+./venv/bin/pre-commit install
+```
+
+Run the code quality stack locally before committing:
+
+```bash
+./venv/bin/python -m ruff check . --fix
+./venv/bin/python -m ruff format .
+./venv/bin/python -m pyright
+./venv/bin/python -m pytest -q
+```
+
+`ruff` is the formatter, linter, and import sorter. `pyright` handles fast static type checking for the active `pystocks/` codebase.
+Pyright is intentionally scoped away from a small set of existing pandas-heavy modules with known type debt so the check is enforceable in day-to-day development.
+
 ## Data layout
 - Canonical DB: `data/pystocks.sqlite`
 - Telemetry JSON artifacts: `data/research/fundamentals_run_telemetry_*.json`

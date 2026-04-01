@@ -19,3 +19,6 @@ duckdb
 pyarrow
 polars
 pytest
+pre-commit
+pyright
+ruff

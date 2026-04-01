@@ -3,7 +3,7 @@ import json
 import math
 import sqlite3
 import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -14,15 +14,19 @@ from .config import DATA_DIR, RESEARCH_DIR, SQLITE_DB_PATH
 
 PRICE_FIELDS = ("price", "open", "high", "low", "close")
 DEFAULT_OFFICIAL_DB_PATH = str(DATA_DIR / "pystocks_official_prices.sqlite")
-DEFAULT_COMPARISON_OUT_PATH = str(RESEARCH_DIR / "official_vs_fundamentals_price_comparison_latest.csv")
+DEFAULT_COMPARISON_OUT_PATH = str(
+    RESEARCH_DIR / "official_vs_fundamentals_price_comparison_latest.csv"
+)
 
 
 def _now_iso():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _canonical_json_bytes(payload):
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 def _to_float(value):
@@ -56,7 +60,9 @@ def _to_iso_date(value):
             return None
         if len(s) >= 10:
             try:
-                return datetime.fromisoformat(s.replace("Z", "+00:00")).date().isoformat()
+                return (
+                    datetime.fromisoformat(s.replace("Z", "+00:00")).date().isoformat()
+                )
             except Exception:
                 pass
             for fmt in ("%Y%m%d", "%Y-%m-%d", "%Y/%m/%d"):
@@ -395,7 +401,9 @@ def _load_series_df(sqlite_path, conids=None):
                 conn,
             )
     except sqlite3.OperationalError:
-        return pd.DataFrame(columns=["conid", "effective_at", "price", "open", "high", "low", "close"])
+        return pd.DataFrame(
+            columns=["conid", "effective_at", "price", "open", "high", "low", "close"]
+        )
 
 
 def build_comparison_frames(official_df, fundamentals_df):
@@ -426,7 +434,9 @@ def build_comparison_frames(official_df, fundamentals_df):
         detail[diff_col] = detail[off_col] - detail[fund_col]
         detail[abs_col] = detail[diff_col].abs()
         denom = detail[fund_col].abs()
-        detail[pct_col] = np.where(denom > 0, detail[diff_col] / detail[fund_col], np.nan)
+        detail[pct_col] = np.where(
+            denom > 0, detail[diff_col] / detail[fund_col], np.nan
+        )
 
     detail = detail.sort_values(["conid", "effective_at"]).reset_index(drop=True)
 
@@ -471,7 +481,9 @@ def _resolve_contract(ib, conid):
     return None
 
 
-def _fetch_bars_for_conid(ib, conid, duration, bar_size, what_to_show, use_rth, strict_contract):
+def _fetch_bars_for_conid(
+    ib, conid, duration, bar_size, what_to_show, use_rth, strict_contract
+):
     contract = _resolve_contract(ib, conid)
     if contract is None:
         if strict_contract:
