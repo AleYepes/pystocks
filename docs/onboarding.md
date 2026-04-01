@@ -1,50 +1,197 @@
 # Agent Onboarding
 
-This repo is an IBKR ETF ingestion pipeline with SQLite-first storage.
+## What This Repo Is
 
-## Runtime modules
-1. `pystocks/session.py`: validates saved auth state and supports interactive reauth.
-2. `pystocks/product_scraper.py`: loads ETF universe into SQLite `products`.
-3. `pystocks/fundamentals.py`: scrapes per-conid fundamentals/series payloads.
-4. `pystocks/fundamentals_store.py`: raw payload blobs + flattened endpoint tables + series raw/latest tables.
+`pystocks/` is the current production codebase for an ETF ingestion, preprocessing, and factor-research pipeline.
 
-`src/` and `notebooks/` are historical/reference paths.
+Use `pystocks/` as the source of truth.
 
-## Canonical data store
+Treat these as reference only unless the task explicitly asks for them:
+
+- `src/`
+- `notebooks/`
+
+## Current Pipeline
+
+1. Session/auth: `pystocks/session.py`
+2. Product universe scrape: `pystocks/product_scraper.py`
+3. Fundamentals and series scrape: `pystocks/fundamentals.py`
+4. SQLite materialization: `pystocks/fundamentals_store.py`
+5. Series preprocessing:
+   - prices: `pystocks/preprocess/price.py`
+   - dividends: `pystocks/preprocess/dividends.py`
+6. Snapshot-feature preprocessing:
+   - dated feature tables: `pystocks/preprocess/snapshots.py`
+7. Analysis and factor research: `pystocks/analysis.py`
+
+Compatibility wrappers still exist where needed, for example `pystocks/price_preprocess.py`.
+
+## Data Model
+
+Canonical store:
+
 - `data/pystocks.sqlite`
 
-Key table groups:
+Analysis artifacts:
+
+- `data/analysis/`
+
+Important table families in SQLite:
+
 - `products`
-- `raw_payload_blobs`
-- endpoint snapshot tables (`*_snapshots`)
-- endpoint child tables (e.g. `ratios_metrics`, `holdings_top10`)
-- series raw/latest tables (`*_series_raw`, `*_series_latest`)
-- run telemetry (`ingest_runs`, `ingest_run_endpoint_rollups`)
+- raw payload/blob linkage
+- endpoint snapshot metadata: `*_snapshots`
+- normalized endpoint tables such as:
+  - `profile_and_fees`
+  - `holdings_*`
+  - `ratios_*`
+  - `performance`
+  - `dividends_industry_metrics`
+  - `morningstar_summary`
+  - `lipper_ratings`
+- series tables such as:
+  - `price_chart_series`
+  - `dividends_events_series`
+  - `sentiment_series`
 
-## Ingestion behavior
-- Endpoint overwrite key for non-series snapshots: `(conid, effective_at)`
-- Same hash on same key: unchanged no-op
-- Changed hash on same key: overwrite snapshot + replace child rows
-- Series writes on changed/inserted events:
-1. append into raw table
-2. upsert latest table by natural row key
+Important distinction:
 
-## Fast start commands
+- Raw snapshot metadata: the `*_snapshots` tables and payload blobs
+- Snapshot features: dated analytical state keyed by `(conid, effective_at)`
+- Series features: full vectors such as prices, dividends, and sentiment
+
+“Snapshot” in current analysis work means dated analytical feature state, not the raw JSON blobs.
+
+## Current Analysis Model
+
+The pipeline is building intermediate inputs for factor research, not end-user prediction models for every dataset.
+
+Primary roles:
+
+- Prices:
+  - clean return infrastructure
+  - eligibility
+  - price-derived features
+- Snapshot features:
+  - rebalance-date state for cross-sectional sorting
+  - examples: P/E, holdings exposures, fees, AUM
+- Dividends:
+  - supplementary support for total-return adjustment
+  - not yet integrated into price preprocessing output
+- Sentiment:
+  - supplementary series feature family
+  - not yet preprocessed
+
+The factor workflow is:
+
+1. take the latest valid snapshot feature row at or before each rebalance date
+2. rank the sleeve cross section on a feature
+3. build long/short factor portfolios from eligible ETFs
+4. use clean return series to produce factor return series
+5. cluster, score persistence, and estimate current betas
+
+## Preprocessing Status
+
+Implemented:
+
+- `pystocks/preprocess/price.py`
+  - invalid-price filtering
+  - stale-run detection
+  - robust return outliers
+  - short bridge-price anomaly detection
+  - eligibility outputs
+- `pystocks/preprocess/dividends.py`
+  - event loading
+  - currency mismatch flags
+  - duplicate detection
+  - implied-yield checks
+  - usable-for-total-return flags
+- `pystocks/preprocess/snapshots.py`
+  - merged dated feature output
+  - holdings diagnostics
+  - ratio diagnostics
+  - passthrough handling for deferred snapshot families
+
+Still pending or incomplete:
+
+- dividend integration into total-return price preprocessing
+- sentiment preprocessing
+- persisted `debug_mismatch` from ingestion into price preprocessing
+- instrument-level quarantine rules
+- decision on regularized business-day return panels
+- deeper review of holdings-table semantics
+- explicit factor registry
+
+## Where To Look First
+
+If the task is about:
+
+- ingestion/storage:
+  - `pystocks/fundamentals_store.py`
+  - endpoint storage tests under `pystocks/tests/`
+- price anomalies or return prep:
+  - `pystocks/preprocess/price.py`
+  - `pystocks/tests/test_price_preprocess.py`
+- dividend event quality:
+  - `pystocks/preprocess/dividends.py`
+  - `pystocks/tests/test_dividend_preprocess.py`
+- snapshot feature assembly:
+  - `pystocks/preprocess/snapshots.py`
+  - `pystocks/tests/test_snapshot_preprocess.py`
+- factor research behavior:
+  - `pystocks/analysis.py`
+  - `pystocks/tests/test_analysis_pipeline.py`
+
+## Key Docs
+
+- [analysis_plan.md](/home/alex/Documents/pystocks/docs/analysis_plan.md)
+- [preprocess_reorg_plan.md](/home/alex/Documents/pystocks/docs/preprocess_reorg_plan.md)
+- [snapshot_preprocess_plan.md](/home/alex/Documents/pystocks/docs/snapshot_preprocess_plan.md)
+- [anomaly_review_report.md](/home/alex/Documents/pystocks/docs/anomaly_review_report.md)
+
+Read those before making architectural changes.
+
+## Common Commands
+
 ```bash
 ./venv/bin/python -m pystocks.cli scrape_products
 ./venv/bin/python -m pystocks.cli scrape_fundamentals --limit 100 --verbose
+./venv/bin/python -m pystocks.cli preprocess_prices
+./venv/bin/python -m pystocks.cli preprocess_dividends
+./venv/bin/python -m pystocks.cli preprocess_snapshots
+./venv/bin/python -m pystocks.cli build_analysis_panel
+./venv/bin/python -m pystocks.cli run_factor_research
+./venv/bin/python -m pystocks.cli run_analysis
 ./venv/bin/python -m pystocks.cli run_pipeline --limit 100
 ```
 
-`run_pipeline` currently runs only products + fundamentals.
+`run_pipeline` currently runs:
 
-## Deferred modules
-- `pystocks/price_preprocess.py`
-- `pystocks/analysis.py`
+1. products
+2. fundamentals
+3. price preprocessing
+4. analysis
 
-These are intentionally out of scope for the SQLite-first refactor.
+It does not currently run dividend or snapshot preprocessing as standalone steps.
 
-## Validation before handoff
+## Working Rules
+
+- Do not add migrations or backfill logic unless explicitly asked.
+- Prefer extending `pystocks/preprocess/` over adding more root-level scripts.
+- Keep price, dividend, sentiment, and snapshot preprocessing concerns separate.
+- Prefer diagnostics and explicit flags over silent normalization when table semantics are ambiguous.
+- Do not rewrite user changes you did not make.
+
+## Validation Before Handoff
+
+Always run:
+
 ```bash
 ./venv/bin/python -m pytest -q
+```
+
+If storage/view logic changed, also run:
+
+```bash
+./venv/bin/python -m pystocks.cli refresh_fundamentals_views
 ```

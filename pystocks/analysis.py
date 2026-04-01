@@ -16,6 +16,7 @@ from .price_preprocess import (
     preprocess_price_history,
     save_price_preprocess_results,
 )
+from .preprocess.snapshots import load_snapshot_features as load_preprocessed_snapshot_features
 
 
 @dataclass
@@ -34,48 +35,6 @@ class AnalysisConfig:
     min_selection_count: int = 2
     outlier_z_threshold: float = 50.0
 
-
-def _sanitize_segment(value):
-    text = str(value or "").strip().lower()
-    out = []
-    last_was_sep = False
-    for ch in text:
-        if ch.isalnum():
-            out.append(ch)
-            last_was_sep = False
-        elif not last_was_sep:
-            out.append("_")
-            last_was_sep = True
-    return "".join(out).strip("_") or "field"
-
-
-def _parse_scaled_number(value):
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return np.nan
-    if isinstance(value, (int, float, np.number)):
-        return float(value)
-    text = str(value).strip()
-    if not text:
-        return np.nan
-    negative = text.startswith("(") and text.endswith(")")
-    text = text.strip("()").replace(",", "")
-    multiplier = 1.0
-    if text[-1:].upper() in {"K", "M", "B", "T"}:
-        multiplier = {
-            "K": 1e3,
-            "M": 1e6,
-            "B": 1e9,
-            "T": 1e12,
-        }[text[-1].upper()]
-        text = text[:-1]
-    text = text.replace("$", "").replace("€", "").replace("£", "").replace("¥", "")
-    try:
-        parsed = float(text) * multiplier
-    except ValueError:
-        return np.nan
-    return -parsed if negative else parsed
-
-
 def _write_output(name, df, output_dir, sqlite_path, long_sql_df=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -90,18 +49,6 @@ def _write_output(name, df, output_dir, sqlite_path, long_sql_df=None):
 
     return str(parquet_path)
 
-
-def _prefix_frame(df, prefix, keep=("conid", "effective_at")):
-    if df.empty:
-        return df
-    renamed = {}
-    for col in df.columns:
-        if col in keep:
-            continue
-        renamed[col] = f"{prefix}__{_sanitize_segment(col)}"
-    return df.rename(columns=renamed)
-
-
 def _series_or_zero(df, column):
     if column in df.columns:
         return pd.to_numeric(df[column], errors="coerce").fillna(0.0)
@@ -113,174 +60,8 @@ def _text_series(df, column):
         return df[column].fillna("").astype(str)
     return pd.Series("", index=df.index, dtype=object)
 
-
-def _pivot_series_frame(df, key_col, value_col, prefix):
-    if df.empty:
-        return pd.DataFrame(columns=["conid", "effective_at"])
-    work = df.copy()
-    work["pivot_key"] = work[key_col].map(_sanitize_segment)
-    pivoted = (
-        work.pivot_table(
-            index=["conid", "effective_at"],
-            columns="pivot_key",
-            values=value_col,
-            aggfunc="first",
-        )
-        .reset_index()
-    )
-    pivoted.columns = [
-        col if col in {"conid", "effective_at"} else f"{prefix}__{col}"
-        for col in pivoted.columns
-    ]
-    return pivoted
-
-
-def _pivot_metric_frame(df, prefix, key_cols):
-    if df.empty:
-        return pd.DataFrame(columns=["conid", "effective_at"])
-    work = df.copy()
-    work["pivot_key"] = work[key_cols].astype(str).agg("__".join, axis=1).map(_sanitize_segment)
-    value_pivot = _pivot_series_frame(work[["conid", "effective_at", "pivot_key", "value_num"]], "pivot_key", "value_num", prefix)
-    if "vs_num" in work.columns:
-        vs_work = work[["conid", "effective_at", "pivot_key", "vs_num"]].rename(columns={"vs_num": "value_num"})
-        vs_pivot = _pivot_series_frame(vs_work, "pivot_key", "value_num", f"{prefix}_vs")
-        value_pivot = value_pivot.merge(vs_pivot, on=["conid", "effective_at"], how="outer")
-    return value_pivot
-
-
-def _load_sql_frame(conn, query):
-    df = pd.read_sql_query(query, conn)
-    if "conid" in df.columns:
-        df["conid"] = df["conid"].astype(str)
-    if "effective_at" in df.columns:
-        df["effective_at"] = pd.to_datetime(df["effective_at"])
-    return df
-
-
 def load_snapshot_features(sqlite_path=SQLITE_DB_PATH):
-    with sqlite3.connect(str(sqlite_path)) as conn:
-        profile = _load_sql_frame(conn, "SELECT * FROM profile_and_fees")
-        holdings_asset = _prefix_frame(_load_sql_frame(conn, "SELECT * FROM holdings_asset_type"), "holding_asset")
-        holdings_quality = _prefix_frame(_load_sql_frame(conn, "SELECT * FROM holdings_debtor_quality"), "holding_quality")
-        holdings_maturity = _prefix_frame(_load_sql_frame(conn, "SELECT * FROM holdings_maturity"), "holding_maturity")
-
-        holdings_industry = _pivot_series_frame(
-            _load_sql_frame(conn, "SELECT conid, effective_at, industry, value_num FROM holdings_industry"),
-            "industry",
-            "value_num",
-            "industry",
-        )
-        holdings_currency = _pivot_series_frame(
-            _load_sql_frame(
-                conn,
-                """
-                SELECT conid, effective_at, COALESCE(code, currency) AS currency_key, value_num
-                FROM holdings_currency
-                """,
-            ),
-            "currency_key",
-            "value_num",
-            "currency",
-        )
-        holdings_country = _pivot_series_frame(
-            _load_sql_frame(
-                conn,
-                """
-                SELECT conid, effective_at, COALESCE(country_code, country) AS country_key, value_num
-                FROM holdings_investor_country
-                """,
-            ),
-            "country_key",
-            "value_num",
-            "country",
-        )
-        holdings_region = _pivot_series_frame(
-            _load_sql_frame(conn, "SELECT conid, effective_at, region, value_num FROM holdings_geographic_weights"),
-            "region",
-            "value_num",
-            "region",
-        )
-        holdings_debt_type = _pivot_series_frame(
-            _load_sql_frame(conn, "SELECT conid, effective_at, debt_type, value_num FROM holdings_debt_type"),
-            "debt_type",
-            "value_num",
-            "debt_type",
-        )
-        top10 = _load_sql_frame(conn, "SELECT * FROM holdings_top10")
-        top10_agg = pd.DataFrame(columns=["conid", "effective_at"])
-        if not top10.empty:
-            top10_agg = (
-                top10.groupby(["conid", "effective_at"], as_index=False)
-                .agg(
-                    top10_count=("name", "nunique"),
-                    top10_weight_sum=("holding_weight_num", "sum"),
-                    top10_weight_max=("holding_weight_num", "max"),
-                )
-            )
-            top10_agg = _prefix_frame(top10_agg, "top10")
-
-        ratio_key = _pivot_metric_frame(_load_sql_frame(conn, "SELECT * FROM ratios_key_ratios"), "ratio_key", ["metric_id"])
-        ratio_financial = _pivot_metric_frame(_load_sql_frame(conn, "SELECT * FROM ratios_financials"), "ratio_financial", ["metric_id"])
-        ratio_fixed_income = _pivot_metric_frame(_load_sql_frame(conn, "SELECT * FROM ratios_fixed_income"), "ratio_fixed_income", ["metric_id"])
-        ratio_dividend = _pivot_metric_frame(_load_sql_frame(conn, "SELECT * FROM ratios_dividend"), "ratio_dividend", ["metric_id"])
-        ratio_zscore = _pivot_metric_frame(_load_sql_frame(conn, "SELECT * FROM ratios_zscore"), "ratio_zscore", ["metric_id"])
-        performance = _pivot_metric_frame(_load_sql_frame(conn, "SELECT * FROM performance"), "performance", ["section", "metric_id"])
-
-        dividend_metrics = _prefix_frame(_load_sql_frame(conn, "SELECT * FROM dividends_industry_metrics"), "dividend_metric")
-        morningstar = _prefix_frame(_load_sql_frame(conn, "SELECT * FROM morningstar_summary"), "morningstar")
-        lipper = _pivot_metric_frame(_load_sql_frame(conn, "SELECT conid, effective_at, period, metric_id, rating_value AS value_num FROM lipper_ratings"), "lipper", ["period", "metric_id"])
-
-    if not profile.empty:
-        profile["total_net_assets_num"] = profile["total_net_assets_value"].map(_parse_scaled_number)
-        profile = _prefix_frame(profile, "profile")
-
-    frames = [
-        profile,
-        holdings_asset,
-        holdings_quality,
-        holdings_maturity,
-        holdings_industry,
-        holdings_currency,
-        holdings_country,
-        holdings_region,
-        holdings_debt_type,
-        top10_agg,
-        ratio_key,
-        ratio_financial,
-        ratio_fixed_income,
-        ratio_dividend,
-        ratio_zscore,
-        performance,
-        dividend_metrics,
-        morningstar,
-        lipper,
-    ]
-    frames = [frame for frame in frames if not frame.empty]
-    if not frames:
-        return pd.DataFrame(columns=["conid", "effective_at"])
-
-    merged = frames[0]
-    for frame in frames[1:]:
-        merged = merged.merge(frame, on=["conid", "effective_at"], how="outer")
-
-    merged["conid"] = merged["conid"].astype(str)
-    merged["effective_at"] = pd.to_datetime(merged["effective_at"])
-    merged["sleeve"] = merged.apply(_assign_sleeve, axis=1)
-    return merged.sort_values(["conid", "effective_at"]).reset_index(drop=True)
-
-
-def _assign_sleeve(row):
-    asset_type = str(row.get("profile__asset_type") or "").strip().lower()
-    fixed_income = float(row.get("holding_asset__fixed_income") or 0.0)
-    equity = float(row.get("holding_asset__equity") or 0.0)
-
-    if "bond" in asset_type or fixed_income >= max(0.50, equity):
-        return "bond"
-    if "commodity" in asset_type:
-        return "commodity"
-    if "mixed" in asset_type or "alternative" in asset_type or "money" in asset_type:
-        return "other"
-    return "equity"
+    return load_preprocessed_snapshot_features(sqlite_path=sqlite_path)
 
 
 def _build_price_features(prices):

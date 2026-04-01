@@ -38,6 +38,11 @@ class PyStocksCLI:
         from .preprocess.dividends import run_dividend_preprocess
         return run_dividend_preprocess()
 
+    def preprocess_snapshots(self):
+        """Build cleaned snapshot-feature artifacts and diagnostics."""
+        from .preprocess.snapshots import run_snapshot_preprocess
+        return run_snapshot_preprocess()
+
     def build_analysis_panel(self):
         """Build the point-in-time analysis snapshot panel."""
         from .analysis import build_analysis_panel
