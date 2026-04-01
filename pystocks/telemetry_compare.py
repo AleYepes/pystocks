@@ -1,13 +1,16 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from .config import RESEARCH_DIR
 
 
-def _load_telemetry(path):
+def _load_telemetry(
+    path: str | Path,
+) -> tuple[dict[str, dict[str, float]], dict[str, Any]]:
     with open(path) as f:
         data = json.load(f)
 
@@ -26,15 +29,23 @@ def _load_telemetry(path):
 
 
 def compare(
-    baseline_path,
-    candidate_path,
-    output_csv=None,
-):
+    baseline_path: str | Path,
+    candidate_path: str | Path,
+    output_csv: str | None = None,
+) -> str:
     baseline, baseline_stats = _load_telemetry(baseline_path)
     candidate, candidate_stats = _load_telemetry(candidate_path)
 
     endpoints = sorted(set(baseline.keys()) | set(candidate.keys()))
     rows = []
+    totals = {
+        "baseline_calls_total": 0,
+        "candidate_calls_total": 0,
+        "delta_calls_total": 0,
+        "baseline_useful_total": 0,
+        "candidate_useful_total": 0,
+        "delta_useful_total": 0,
+    }
     for endpoint in endpoints:
         b = baseline.get(endpoint, {})
         c = candidate.get(endpoint, {})
@@ -44,16 +55,25 @@ def compare(
         c_useful = int(c.get("useful_payload_count", 0))
         b_rate = float(b.get("useful_payload_rate", 0.0))
         c_rate = float(c.get("useful_payload_rate", 0.0))
+        delta_calls = c_calls - b_calls
+        delta_useful = c_useful - b_useful
+
+        totals["baseline_calls_total"] += b_calls
+        totals["candidate_calls_total"] += c_calls
+        totals["delta_calls_total"] += delta_calls
+        totals["baseline_useful_total"] += b_useful
+        totals["candidate_useful_total"] += c_useful
+        totals["delta_useful_total"] += delta_useful
 
         rows.append(
             {
                 "endpoint": endpoint,
                 "baseline_calls": b_calls,
                 "candidate_calls": c_calls,
-                "delta_calls": c_calls - b_calls,
+                "delta_calls": delta_calls,
                 "baseline_useful_payloads": b_useful,
                 "candidate_useful_payloads": c_useful,
-                "delta_useful_payloads": c_useful - b_useful,
+                "delta_useful_payloads": delta_useful,
                 "baseline_useful_rate": b_rate,
                 "candidate_useful_rate": c_rate,
                 "delta_useful_rate": c_rate - b_rate,
@@ -61,14 +81,6 @@ def compare(
         )
 
     df = pd.DataFrame(rows).sort_values("delta_calls")
-    totals = {
-        "baseline_calls_total": int(df["baseline_calls"].sum()),
-        "candidate_calls_total": int(df["candidate_calls"].sum()),
-        "delta_calls_total": int(df["delta_calls"].sum()),
-        "baseline_useful_total": int(df["baseline_useful_payloads"].sum()),
-        "candidate_useful_total": int(df["candidate_useful_payloads"].sum()),
-        "delta_useful_total": int(df["delta_useful_payloads"].sum()),
-    }
 
     output_dir = RESEARCH_DIR
     output_dir.mkdir(parents=True, exist_ok=True)

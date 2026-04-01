@@ -27,13 +27,8 @@ exclude = [
     "docs",
     "pystocks/tests",
     "pystocks/analysis.py",
-    "pystocks/cli.py",
-    "pystocks/fundamentals.py",
     "pystocks/fundamentals_store.py",
-    "pystocks/official_price_series_compare.py",
-    "pystocks/ops_state.py",
     "pystocks/preprocess/price.py",
-    "pystocks/telemetry_compare.py",
 ]
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false

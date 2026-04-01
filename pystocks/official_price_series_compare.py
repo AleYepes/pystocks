@@ -19,6 +19,10 @@ DEFAULT_COMPARISON_OUT_PATH = str(
 )
 
 
+def _empty_frame(columns):
+    return pd.DataFrame({column: pd.Series(dtype="object") for column in columns})
+
+
 def _now_iso():
     return datetime.now(UTC).isoformat()
 
@@ -401,8 +405,8 @@ def _load_series_df(sqlite_path, conids=None):
                 conn,
             )
     except sqlite3.OperationalError:
-        return pd.DataFrame(
-            columns=["conid", "effective_at", "price", "open", "high", "low", "close"]
+        return _empty_frame(
+            ["conid", "effective_at", "price", "open", "high", "low", "close"]
         )
 
 
@@ -605,7 +609,11 @@ def run(
     summary_df.to_csv(summary_path, index=False)
 
     overlap_rows = int(len(detail_df))
-    conid_overlap = int(detail_df["conid"].nunique()) if not detail_df.empty else 0
+    conid_overlap = (
+        int(detail_df.loc[:, ["conid"]].drop_duplicates().shape[0])
+        if not detail_df.empty
+        else 0
+    )
 
     print("Official price fetch complete.")
     print(f"targeted_conids: {len(conids)}")

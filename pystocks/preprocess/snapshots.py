@@ -57,10 +57,12 @@ SNAPSHOT_TABLE_COLUMNS = {
 }
 
 
+def _empty_frame(columns):
+    return pd.DataFrame({column: pd.Series(dtype="object") for column in columns})
+
+
 def _empty_table(name):
-    return pd.DataFrame(
-        columns=SNAPSHOT_TABLE_COLUMNS.get(name, ["conid", "effective_at"])
-    )
+    return _empty_frame(SNAPSHOT_TABLE_COLUMNS.get(name, ["conid", "effective_at"]))
 
 
 def _sanitize_segment(value):
@@ -142,7 +144,7 @@ def _prefix_frame(df, prefix, keep=("conid", "effective_at")):
 
 def _pivot_series_frame(df, key_col, value_col, prefix):
     if df.empty:
-        return pd.DataFrame(columns=["conid", "effective_at"])
+        return _empty_frame(["conid", "effective_at"])
     work = df.copy()
     work["pivot_key"] = work[key_col].map(_sanitize_segment)
     work[value_col] = pd.to_numeric(work[value_col], errors="coerce")
@@ -163,7 +165,7 @@ def _pivot_series_frame(df, key_col, value_col, prefix):
 
 def _pivot_metric_frame(df, prefix, key_cols):
     if df.empty:
-        return pd.DataFrame(columns=["conid", "effective_at"])
+        return _empty_frame(["conid", "effective_at"])
     work = df.copy()
     work["pivot_key"] = (
         work[key_cols].astype(str).agg("__".join, axis=1).map(_sanitize_segment)
@@ -259,8 +261,8 @@ def _apply_holdings_flags(df, config):
 
 def _wide_holdings_diagnostics(df, table_name, value_columns, config):
     if df.empty:
-        return pd.DataFrame(
-            columns=[
+        return _empty_frame(
+            [
                 "conid",
                 "effective_at",
                 "table_name",
@@ -292,8 +294,8 @@ def _wide_holdings_diagnostics(df, table_name, value_columns, config):
 
 def _long_holdings_diagnostics(df, table_name, key_col, value_col, config):
     if df.empty:
-        return pd.DataFrame(
-            columns=[
+        return _empty_frame(
+            [
                 "conid",
                 "effective_at",
                 "table_name",
@@ -325,9 +327,9 @@ def _long_holdings_diagnostics(df, table_name, key_col, value_col, config):
 
 def _top10_features_and_diagnostics(df, config):
     if df.empty:
-        empty_features = pd.DataFrame(columns=["conid", "effective_at"])
-        empty_diag = pd.DataFrame(
-            columns=[
+        empty_features = _empty_frame(["conid", "effective_at"])
+        empty_diag = _empty_frame(
+            [
                 "conid",
                 "effective_at",
                 "table_name",
@@ -381,7 +383,7 @@ def _ratio_diagnostics(df, table_name, key_cols):
         "all_values_null",
     ]
     if df.empty:
-        return pd.DataFrame(columns=columns)
+        return _empty_frame(columns)
 
     work = df.copy()
     work["value_num"] = pd.to_numeric(work.get("value_num"), errors="coerce")
@@ -420,7 +422,8 @@ def _ratio_diagnostics(df, table_name, key_cols):
             }
         )
     return (
-        pd.DataFrame(rows, columns=columns)
+        pd.DataFrame(rows)
+        .loc[:, columns]
         .sort_values(["table_name", "conid", "effective_at"])
         .reset_index(drop=True)
     )
@@ -649,7 +652,7 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
 
     frames = [frame for frame in frames if not frame.empty]
     if not frames:
-        features = pd.DataFrame(columns=["conid", "effective_at", "sleeve"])
+        features = _empty_frame(["conid", "effective_at", "sleeve"])
     else:
         features = frames[0]
         for frame in frames[1:]:
@@ -664,8 +667,8 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
     holdings_diag = (
         pd.concat(holdings_diagnostics, ignore_index=True)
         if holdings_diagnostics
-        else pd.DataFrame(
-            columns=[
+        else _empty_frame(
+            [
                 "conid",
                 "effective_at",
                 "table_name",
@@ -681,8 +684,8 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
     ratio_diag = (
         pd.concat(ratio_diagnostics, ignore_index=True)
         if ratio_diagnostics
-        else pd.DataFrame(
-            columns=[
+        else _empty_frame(
+            [
                 "conid",
                 "effective_at",
                 "table_name",

@@ -4,6 +4,7 @@ import logging
 from collections import Counter, defaultdict
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs
 
 from tqdm.asyncio import tqdm
@@ -150,7 +151,7 @@ class FundamentalScraper:
             self._record_endpoint_status(endpoint, 0)
             return None
 
-    def _has_payload_data(self, data, kind):
+    def _has_payload_data(self, data: Any, kind: str) -> bool:
         """Heuristic check for actual content in response."""
         if not isinstance(data, dict):
             return False
@@ -206,12 +207,13 @@ class FundamentalScraper:
             "owner": ["trade_log", "owners_types"],
             "sma_search": ["sentiment"],
         }
+        kind = str(kind_alias.get(kind, kind))
         for key in checks.get(kind, []):
             if self._has_any_value(data.get(key)):
                 return True
         return False
 
-    def _has_any_value(self, value):
+    def _has_any_value(self, value: Any) -> bool:
         if value is None:
             return False
         if isinstance(value, str):
@@ -657,7 +659,9 @@ async def main(
             logger.info(f"Updated latest telemetry pointer at {latest_path}")
 
 
-async def run_fundamentals_update(limit=100, verbose=False, **kwargs):
+async def run_fundamentals_update(
+    limit: int | None = 100, verbose: bool = False, **kwargs: Any
+) -> None:
     return await main(limit=limit, verbose=verbose, **kwargs)
 
 

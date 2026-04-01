@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 
@@ -9,7 +9,7 @@ DB_PATH = SQLITE_DB_PATH
 _INITIALIZED_DB_PATH = None
 
 
-def _connect():
+def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH))
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
@@ -18,11 +18,11 @@ def _connect():
     return conn
 
 
-def get_connection():
+def get_connection() -> sqlite3.Connection:
     return _connect()
 
 
-def init_db():
+def init_db() -> None:
     global _INITIALIZED_DB_PATH
     db_path = str(DB_PATH)
     if _INITIALIZED_DB_PATH == db_path:
@@ -51,15 +51,17 @@ def init_db():
     _INITIALIZED_DB_PATH = db_path
 
 
-def _series_or_default(df, column, default=""):
+def _series_or_default(
+    df: pd.DataFrame, column: str, default: object = ""
+) -> pd.Series:
     if column in df.columns:
-        series = df[column]
+        series = pd.Series(df[column], index=df.index)
     else:
         series = pd.Series([default] * len(df), index=df.index)
     return series.fillna(default)
 
 
-def upsert_instruments_from_products(products_df):
+def upsert_instruments_from_products(products_df: pd.DataFrame | None) -> int:
     if products_df is None or products_df.empty:
         return 0
 
@@ -82,11 +84,14 @@ def upsert_instruments_from_products(products_df):
             "name": merged_name,
         }
     )
-    normalized = normalized[
+    valid_mask = (
         normalized["conid"].notna()
         & normalized["conid"].ne("")
         & (normalized["conid"].str.lower() != "nan")
-    ].drop_duplicates(subset=["conid"], keep="last")
+    )
+    normalized = normalized.loc[valid_mask].copy()
+    normalized = normalized.drop_duplicates(subset="conid", keep="last")
+    records = normalized.to_dict(orient="records")
 
     now_iso = datetime.now(UTC).isoformat()
     init_db()
@@ -113,15 +118,15 @@ def upsert_instruments_from_products(products_df):
             """,
             [
                 (
-                    str(row.conid),
-                    str(row.symbol),
-                    str(row.exchange),
-                    str(row.isin),
-                    str(row.currency),
-                    str(row.name),
+                    str(record.get("conid", "")),
+                    str(record.get("symbol", "")),
+                    str(record.get("exchange", "")),
+                    str(record.get("isin", "")),
+                    str(record.get("currency", "")),
+                    str(record.get("name", "")),
                     now_iso,
                 )
-                for row in normalized.itertuples(index=False)
+                for record in records
             ],
         )
         conn.commit()
@@ -130,7 +135,7 @@ def upsert_instruments_from_products(products_df):
         conn.close()
 
 
-def get_all_instrument_conids():
+def get_all_instrument_conids() -> list[str]:
     init_db()
     conn = _connect()
     try:
@@ -148,14 +153,18 @@ def get_all_instrument_conids():
         conn.close()
 
 
-def get_scraped_conids(today=None):
+def get_scraped_conids(today: str | date | datetime | None = None) -> list[str]:
     init_db()
     if today is None:
-        today = datetime.now().date()
+        current_day = datetime.now().date()
     elif isinstance(today, str):
-        today = datetime.fromisoformat(today).date()
+        current_day = datetime.fromisoformat(today).date()
+    elif isinstance(today, datetime):
+        current_day = today.date()
+    else:
+        current_day = today
 
-    cutoff = (today - timedelta(days=6)).isoformat()
+    cutoff = (current_day - timedelta(days=6)).isoformat()
     conn = _connect()
     try:
         rows = conn.execute(
@@ -172,7 +181,9 @@ def get_scraped_conids(today=None):
         conn.close()
 
 
-def update_instrument_fundamentals_status(conid, status, mark_scraped=False):
+def update_instrument_fundamentals_status(
+    conid: object, status: str, mark_scraped: bool = False
+) -> None:
     init_db()
     conid = str(conid)
     now_iso = datetime.now(UTC).isoformat()

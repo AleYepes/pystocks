@@ -15,6 +15,10 @@ class DividendPreprocessConfig:
     max_price_reference_age_days: int = 10
 
 
+def _empty_frame(columns):
+    return pd.DataFrame({column: pd.Series(dtype="object") for column in columns})
+
+
 def load_dividend_events(sqlite_path=SQLITE_DB_PATH):
     with sqlite3.connect(str(sqlite_path)) as conn:
         df = pd.read_sql_query(
@@ -116,8 +120,8 @@ def _compute_trailing_dividend_sum(df):
 
 def _summarize_dividend_events(df):
     if df.empty:
-        return pd.DataFrame(
-            columns=[
+        return _empty_frame(
+            [
                 "conid",
                 "symbol",
                 "product_currency",
@@ -179,8 +183,8 @@ def preprocess_dividend_events(
     )
 
     if dividend_df.empty:
-        empty_events = pd.DataFrame(
-            columns=[
+        empty_events = _empty_frame(
+            [
                 "conid",
                 "symbol",
                 "event_date",
