@@ -1,7 +1,7 @@
 import tempfile
 from pathlib import Path
 
-from pystocks import ops_state
+from pystocks.storage import ops_state
 
 
 def test_get_scraped_conids_returns_last_seven_days():

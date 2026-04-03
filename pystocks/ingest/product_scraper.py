@@ -6,7 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from ..config import SQLITE_DB_PATH
-from ..ops_state import upsert_instruments_from_products
+from ..storage.ops_state import upsert_instruments_from_products
 
 logger = logging.getLogger(__name__)
 PRODUCT_PAGE_SIZE = 500

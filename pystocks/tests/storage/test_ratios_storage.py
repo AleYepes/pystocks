@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from pystocks.fundamentals_store import FundamentalsStore
+from pystocks.storage.fundamentals_store import FundamentalsStore
 
 
 def _make_store():

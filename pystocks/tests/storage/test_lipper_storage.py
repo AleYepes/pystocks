@@ -2,7 +2,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from pystocks.fundamentals_store import FundamentalsStore
+from pystocks.storage.fundamentals_store import FundamentalsStore
 
 
 def _make_store():

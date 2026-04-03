@@ -10,8 +10,8 @@ from urllib.parse import parse_qs
 from tqdm.asyncio import tqdm
 
 from ..config import RESEARCH_DIR
-from ..fundamentals_store import FundamentalsStore
-from ..ops_state import (
+from ..storage.fundamentals_store import FundamentalsStore
+from ..storage.ops_state import (
     get_all_instrument_conids,
     get_scraped_conids,
     init_db,

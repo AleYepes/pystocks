@@ -1,4 +1,4 @@
-from pystocks.fundamentals_store import _extract_price_chart_rows
+from pystocks.storage.fundamentals_store import _extract_price_chart_rows
 
 
 def _payload(points):
