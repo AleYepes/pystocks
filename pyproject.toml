@@ -26,9 +26,6 @@ exclude = [
     "data",
     "docs",
     "pystocks/tests",
-    "pystocks/analysis.py",
-    "pystocks/fundamentals_store.py",
-    "pystocks/preprocess/price.py",
 ]
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false

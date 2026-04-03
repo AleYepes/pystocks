@@ -1798,8 +1798,11 @@ class FundamentalsStore:
                 if not isinstance(field, dict):
                     continue
                 field_name = field.get("name") or field.get("name_tag")
-                column_name = _PROFILE_AND_FEES_REPORT_FIELD_COLUMN_TYPES.get(
-                    field_name
+                field_name = str(field_name) if field_name is not None else None
+                column_name = (
+                    _PROFILE_AND_FEES_REPORT_FIELD_COLUMN_TYPES.get(field_name)
+                    if field_name is not None
+                    else None
                 )
                 if column_name is None and field_name:
                     normalized = _sanitize_segment(field_name)
@@ -2212,11 +2215,8 @@ class FundamentalsStore:
                 for item in period_items:
                     if not isinstance(item, dict):
                         continue
-                    rating = (
-                        item.get("rating")
-                        if isinstance(item.get("rating"), dict)
-                        else {}
-                    )
+                    rating_raw = item.get("rating")
+                    rating = rating_raw if isinstance(rating_raw, dict) else {}
                     rows.append(
                         {
                             "conid": str(conid),
@@ -2352,7 +2352,8 @@ class FundamentalsStore:
         ):
             if not isinstance(item, dict):
                 continue
-            author = item.get("author") if isinstance(item.get("author"), dict) else {}
+            author_raw = item.get("author")
+            author = author_raw if isinstance(author_raw, dict) else {}
             text = item.get("text")
             text = str(text) if text is not None else None
             if text is not None:
@@ -2491,7 +2492,8 @@ class FundamentalsStore:
         ):
             if not isinstance(item, dict):
                 continue
-            type_info = item.get("type") if isinstance(item.get("type"), dict) else {}
+            type_info_raw = item.get("type")
+            type_info = type_info_raw if isinstance(type_info_raw, dict) else {}
             owners_type_rows.append(
                 {
                     "conid": str(conid),
@@ -2564,7 +2566,9 @@ class FundamentalsStore:
             },
         )
 
-        values_by_column = {column: None for column in _ESG_SCORE_COLUMNS}
+        values_by_column: dict[str, float | None] = {
+            column: None for column in _ESG_SCORE_COLUMNS
+        }
 
         def walk(nodes):
             if not isinstance(nodes, list):
@@ -3315,7 +3319,10 @@ class FundamentalsStore:
                     1 if bool(run_stats.get("aborted", False)) else 0,
                 ],
             )
-            run_id = int(cur.lastrowid)
+            lastrowid = cur.lastrowid
+            if lastrowid is None:
+                raise RuntimeError("Failed to persist telemetry run row.")
+            run_id = int(lastrowid)
 
             for row in endpoint_summary:
                 endpoint = str(row.get("endpoint") or "")

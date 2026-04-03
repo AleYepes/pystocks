@@ -1,6 +1,7 @@
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import networkx as nx
 import numpy as np
@@ -38,6 +39,14 @@ class AnalysisConfig:
     outlier_z_threshold: float = 50.0
 
 
+def _empty_frame(columns):
+    return pd.DataFrame({column: pd.Series(dtype="object") for column in columns})
+
+
+def _to_timestamp(value):
+    return pd.Timestamp(value)
+
+
 def _write_output(name, df, output_dir, sqlite_path, long_sql_df=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -57,13 +66,15 @@ def _write_output(name, df, output_dir, sqlite_path, long_sql_df=None):
 
 def _series_or_zero(df, column):
     if column in df.columns:
-        return pd.to_numeric(df[column], errors="coerce").fillna(0.0)
+        return pd.Series(
+            pd.to_numeric(df[column], errors="coerce"), index=df.index
+        ).fillna(0.0)
     return pd.Series(0.0, index=df.index)
 
 
 def _text_series(df, column):
     if column in df.columns:
-        return df[column].fillna("").astype(str)
+        return pd.Series(df[column], index=df.index).fillna("").astype(str)
     return pd.Series("", index=df.index, dtype=object)
 
 
@@ -74,7 +85,7 @@ def load_snapshot_features(sqlite_path=SQLITE_DB_PATH):
 def _build_price_features(prices):
     clean = prices.loc[prices["is_clean_price"]].copy()
     if clean.empty:
-        return pd.DataFrame(columns=["conid", "trade_date"])
+        return _empty_frame(["conid", "trade_date"])
 
     clean = clean.sort_values(["conid", "trade_date"])
     frames = []
@@ -586,8 +597,8 @@ def build_factor_returns(panel, prices, config):
 
 def cluster_factor_returns(factor_returns, factor_meta, config):
     if factor_returns.empty or factor_meta.empty:
-        return pd.DataFrame(
-            columns=[
+        return _empty_frame(
+            [
                 "factor_id",
                 "cluster_id",
                 "cluster_representative",
@@ -655,27 +666,29 @@ def cluster_factor_returns(factor_returns, factor_meta, config):
 
 
 def _fit_elastic_net(X_train, y_train):
+    elastic_net_params: Any = {
+        "alphas": [float(alpha) for alpha in np.logspace(-4, 0, 20)],
+        "l1_ratio": [0.1, 0.3, 0.5, 0.7, 0.9],
+        "cv": 5,
+        "random_state": 42,
+        "max_iter": 20000,
+    }
     pipeline = Pipeline(
         [
             ("scaler", StandardScaler()),
             (
                 "enet",
-                ElasticNetCV(
-                    alphas=np.logspace(-4, 0, 20),
-                    l1_ratio=[0.1, 0.3, 0.5, 0.7, 0.9],
-                    cv=5,
-                    random_state=42,
-                    max_iter=20000,
-                ),
+                ElasticNetCV(**elastic_net_params),
             ),
         ]
     )
-    pipeline.fit(X_train, y_train)
-    scaler = pipeline.named_steps["scaler"]
-    model = pipeline.named_steps["enet"]
+    typed_pipeline = pipeline
+    typed_pipeline.fit(X_train, y_train)
+    scaler: Any = typed_pipeline.named_steps["scaler"]
+    model: Any = typed_pipeline.named_steps["enet"]
     coefs = model.coef_ / scaler.scale_
     intercept = model.intercept_ - np.dot(coefs, scaler.mean_)
-    return pipeline, intercept, coefs
+    return typed_pipeline, intercept, coefs
 
 
 def run_factor_research_data(panel, prices, config):
@@ -742,10 +755,10 @@ def run_factor_research_data(panel, prices, config):
                 ):
                     continue
 
-                X_train_fit = train[sleeve_factors].values
-                y_train_fit = train["target"].values
-                X_test_fit = test[sleeve_factors].values
-                y_test_fit = test["target"].values
+                X_train_fit = np.asarray(train[sleeve_factors].to_numpy(), dtype=float)
+                y_train_fit = np.asarray(train["target"].to_numpy(), dtype=float)
+                X_test_fit = np.asarray(test[sleeve_factors].to_numpy(), dtype=float)
+                y_test_fit = np.asarray(test["target"].to_numpy(), dtype=float)
 
                 try:
                     pipeline, intercept, coefs = _fit_elastic_net(
@@ -797,7 +810,13 @@ def run_factor_research_data(panel, prices, config):
     selections = pd.DataFrame(selection_rows)
     persistence = pd.DataFrame()
     if not selections.empty and not model_results.empty:
-        fit_counts = model_results.groupby("sleeve").size().rename("model_fit_count")
+        sleeve_fit_counts = model_results.groupby("sleeve").size()
+        fit_counts = pd.DataFrame(
+            {
+                "sleeve": sleeve_fit_counts.index.astype(str),
+                "model_fit_count": sleeve_fit_counts.to_numpy(),
+            }
+        )
         persistence = selections.groupby(["sleeve", "factor_id"], as_index=False).agg(
             selection_count=("factor_id", "size"),
             median_abs_beta=("abs_beta", "median"),
@@ -839,11 +858,12 @@ def compute_current_betas_data(
     if returns_wide.empty or reduced_factors.empty or persistence.empty:
         return pd.DataFrame()
 
-    latest_rebalance = pd.to_datetime(panel["rebalance_date"].max())
+    latest_rebalance = _to_timestamp(panel["rebalance_date"].max())
     latest_panel = panel.loc[
         panel["rebalance_date"] == latest_rebalance, ["conid", "sleeve"]
     ].drop_duplicates()
-    start_date = returns_wide.index.max() - pd.Timedelta(
+    last_return_date = _to_timestamp(returns_wide.index.max())
+    start_date = last_return_date - pd.Timedelta(
         days=int(config.trailing_beta_days * 1.5)
     )
 
@@ -880,8 +900,8 @@ def compute_current_betas_data(
                 {
                     "conid": conid,
                     "sleeve": sleeve,
-                    "window_start": pd.Timestamp(data.index.min()),
-                    "window_end": pd.Timestamp(data.index.max()),
+                    "window_start": _to_timestamp(data.index.min()),
+                    "window_end": _to_timestamp(data.index.max()),
                     "n_obs": int(len(data)),
                     "alpha": float(model.intercept_),
                     "r2": float(model.score(X_fit, y_fit)),

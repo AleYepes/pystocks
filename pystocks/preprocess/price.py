@@ -19,6 +19,14 @@ class PricePreprocessConfig:
     bridge_outlier_span_max_rows: int = 5
 
 
+def _empty_frame(columns):
+    return pd.DataFrame({column: pd.Series(dtype="object") for column in columns})
+
+
+def _numeric_series(df, column):
+    return pd.Series(pd.to_numeric(df[column], errors="coerce"), index=df.index)
+
+
 def _compute_internal_gap_days(dates):
     if len(dates) <= 1:
         return 0
@@ -203,8 +211,8 @@ def preprocess_price_history(price_df=None, config=None):
     price_df = load_price_history() if price_df is None else price_df.copy()
 
     if price_df.empty:
-        empty = pd.DataFrame(
-            columns=[
+        empty = _empty_frame(
+            [
                 "conid",
                 "trade_date",
                 "price_value",
@@ -234,18 +242,13 @@ def preprocess_price_history(price_df=None, config=None):
         .where(df["close"].notna(), df["price"])
         .where(df["close"].notna() | df["price"].notna(), df["open"])
     )
+    high_values = _numeric_series(df, "high")
+    low_values = _numeric_series(df, "low")
     df["is_valid_price"] = (
         df["price_value"].notna()
         & np.isfinite(df["price_value"])
         & (df["price_value"] > 0)
-        & ~(
-            df["high"].notna()
-            & df["low"].notna()
-            & (
-                pd.to_numeric(df["high"], errors="coerce")
-                < pd.to_numeric(df["low"], errors="coerce")
-            )
-        )
+        & ~(high_values.notna() & low_values.notna() & (low_values > high_values))
     )
 
     df["raw_return"] = df.groupby("conid")["price_value"].pct_change(fill_method=None)
