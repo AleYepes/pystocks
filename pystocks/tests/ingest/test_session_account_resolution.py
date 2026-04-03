@@ -2,7 +2,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from pystocks.session import IBKRSession
+from pystocks.ingest.session import IBKRSession
 
 
 def _write_state(payload):

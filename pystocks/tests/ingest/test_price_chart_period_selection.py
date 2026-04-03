@@ -1,6 +1,6 @@
 from datetime import date
 
-from pystocks.fundamentals import FundamentalScraper
+from pystocks.ingest.fundamentals import FundamentalScraper
 
 
 class _StoreStub:

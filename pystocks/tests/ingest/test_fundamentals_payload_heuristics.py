@@ -1,4 +1,4 @@
-from pystocks.fundamentals import FundamentalScraper
+from pystocks.ingest.fundamentals import FundamentalScraper
 
 
 def _scraper():

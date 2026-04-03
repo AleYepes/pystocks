@@ -10,7 +10,7 @@ from .storage import open_connection
 class PyStocksCLI:
     def scrape_products(self) -> Any:
         """Scrape the list of available ETF products from IBKR website."""
-        from .product_scraper import scrape_ibkr_products
+        from .ingest.product_scraper import scrape_ibkr_products
 
         return asyncio.run(scrape_ibkr_products())
 
@@ -22,7 +22,7 @@ class PyStocksCLI:
         conids_file: str | None = None,
     ) -> Any:
         """Scrape fundamental data for ETFs using the web portal proxy."""
-        from .fundamentals import run_fundamentals_update
+        from .ingest.fundamentals import run_fundamentals_update
 
         return asyncio.run(
             run_fundamentals_update(

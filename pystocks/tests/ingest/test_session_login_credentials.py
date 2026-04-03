@@ -2,7 +2,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from pystocks.session import IBKRSession
+from pystocks.ingest.session import IBKRSession
 
 
 def test_get_login_credentials_from_config_file():
