@@ -9,17 +9,17 @@ from sklearn.linear_model import ElasticNetCV, LinearRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from .config import DATA_DIR, SQLITE_DB_PATH
-from .preprocess.price import (
+from ..config import DATA_DIR, SQLITE_DB_PATH
+from ..preprocess.price import (
     PricePreprocessConfig,
     load_price_history,
     preprocess_price_history,
     save_price_preprocess_results,
 )
-from .preprocess.snapshots import (
+from ..preprocess.snapshots import (
     load_snapshot_features as load_preprocessed_snapshot_features,
 )
-from .storage import replace_table, transaction
+from ..storage import replace_table, transaction
 
 
 @dataclass

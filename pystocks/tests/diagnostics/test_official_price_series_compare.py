@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pystocks.official_price_series_compare import (
+from pystocks.diagnostics.official_price_series_compare import (
     OfficialPriceStore,
     _load_conids_from_file,
     build_comparison_frames,
