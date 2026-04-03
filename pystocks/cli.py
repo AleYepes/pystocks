@@ -1,10 +1,10 @@
 import asyncio
-import sqlite3
 from typing import Any
 
 import fire
 
 from .config import SQLITE_DB_PATH
+from .storage import open_connection
 
 
 class PyStocksCLI:
@@ -77,7 +77,7 @@ class PyStocksCLI:
 
     def refresh_fundamentals_views(self) -> dict[str, str]:
         """Run lightweight SQLite maintenance for the fundamentals store."""
-        with sqlite3.connect(str(SQLITE_DB_PATH)) as conn:
+        with open_connection(SQLITE_DB_PATH) as conn:
             conn.execute("ANALYZE;")
         return {"status": "ok", "sqlite_path": str(SQLITE_DB_PATH)}
 

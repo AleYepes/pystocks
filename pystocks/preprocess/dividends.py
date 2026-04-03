@@ -1,4 +1,3 @@
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -6,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
+from ..storage import load_dividend_events as _load_dividend_events
 from .price import load_price_history, preprocess_price_history
 
 
@@ -20,38 +20,7 @@ def _empty_frame(columns):
 
 
 def load_dividend_events(sqlite_path=SQLITE_DB_PATH):
-    with sqlite3.connect(str(sqlite_path)) as conn:
-        df = pd.read_sql_query(
-            """
-            SELECT
-                d.conid,
-                p.symbol,
-                d.effective_at AS event_date,
-                d.amount,
-                d.currency AS dividend_currency,
-                p.currency AS product_currency,
-                d.description,
-                d.event_type,
-                d.declaration_date,
-                d.record_date,
-                d.payment_date
-            FROM dividends_events_series d
-            LEFT JOIN products p
-              ON p.conid = d.conid
-            ORDER BY d.conid, d.effective_at
-            """,
-            conn,
-        )
-    if df.empty:
-        return df
-
-    df["conid"] = df["conid"].astype(str)
-    df["event_date"] = pd.to_datetime(df["event_date"])
-    for col in ["declaration_date", "record_date", "payment_date"]:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors="coerce")
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
-    return df
+    return _load_dividend_events(sqlite_path=sqlite_path)
 
 
 def _normalize_dividend_frame(dividend_df):

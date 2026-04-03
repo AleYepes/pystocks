@@ -1,4 +1,3 @@
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -6,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
+from ..storage import load_price_history as _load_price_history
 
 
 @dataclass
@@ -100,31 +100,7 @@ def _compute_eligibility(df, config: PricePreprocessConfig):
 
 
 def load_price_history(sqlite_path=SQLITE_DB_PATH):
-    with sqlite3.connect(str(sqlite_path)) as conn:
-        df = pd.read_sql_query(
-            """
-            SELECT
-                conid,
-                effective_at AS trade_date,
-                price,
-                open,
-                high,
-                low,
-                close
-            FROM price_chart_series
-            ORDER BY conid, effective_at
-            """,
-            conn,
-        )
-    if df.empty:
-        return df
-
-    df["conid"] = df["conid"].astype(str)
-    df["trade_date"] = pd.to_datetime(df["trade_date"])
-    for col in ["price", "open", "high", "low", "close"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+    return _load_price_history(sqlite_path=sqlite_path)
 
 
 def _robust_outlier_mask(values, threshold):

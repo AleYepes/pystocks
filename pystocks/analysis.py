@@ -1,4 +1,3 @@
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,15 +10,16 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from .config import DATA_DIR, SQLITE_DB_PATH
-from .preprocess.snapshots import (
-    load_snapshot_features as load_preprocessed_snapshot_features,
-)
-from .price_preprocess import (
+from .preprocess.price import (
     PricePreprocessConfig,
     load_price_history,
     preprocess_price_history,
     save_price_preprocess_results,
 )
+from .preprocess.snapshots import (
+    load_snapshot_features as load_preprocessed_snapshot_features,
+)
+from .storage import replace_table, transaction
 
 
 @dataclass
@@ -47,7 +47,7 @@ def _to_timestamp(value):
     return pd.Timestamp(value)
 
 
-def _write_output(name, df, output_dir, sqlite_path, long_sql_df=None):
+def _write_output(name, df, output_dir, sqlite_path, long_sql_df=None, tx=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -58,8 +58,7 @@ def _write_output(name, df, output_dir, sqlite_path, long_sql_df=None):
     parquet_df.to_parquet(parquet_path, index=False)
 
     sql_df = long_sql_df if long_sql_df is not None else parquet_df
-    with sqlite3.connect(str(sqlite_path)) as conn:
-        sql_df.to_sql(name, conn, if_exists="replace", index=False)
+    replace_table(name, sql_df, sqlite_path=sqlite_path, tx=tx, index=False)
 
     return str(parquet_path)
 
@@ -929,9 +928,14 @@ def build_analysis_panel(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_k
     snapshot_features = load_snapshot_features(config.sqlite_path)
     panel = build_analysis_panel_data(snapshot_features, price_result, config)
 
-    panel_path = _write_output(
-        "analysis_snapshot_panel", panel, config.output_dir, config.sqlite_path
-    )
+    with transaction(config.sqlite_path) as tx:
+        panel_path = _write_output(
+            "analysis_snapshot_panel",
+            panel,
+            config.output_dir,
+            config.sqlite_path,
+            tx=tx,
+        )
     return {
         "status": "ok",
         "rows": int(len(panel)),
@@ -969,50 +973,61 @@ def run_factor_research(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kw
             .dropna(subset=["factor_return"])
         )
 
-    paths = {
-        "snapshot_panel_path": _write_output(
-            "analysis_snapshot_panel", panel, config.output_dir, config.sqlite_path
-        ),
-        "factor_returns_path": _write_output(
-            "analysis_factor_returns",
-            factor_returns_wide,
-            config.output_dir,
-            config.sqlite_path,
-            long_sql_df=factor_returns_long,
-        )
-        if not factor_returns_wide.empty
-        else None,
-        "factor_clusters_path": _write_output(
-            "analysis_factor_clusters",
-            research["factor_clusters"],
-            config.output_dir,
-            config.sqlite_path,
-        ),
-        "factor_persistence_path": _write_output(
-            "analysis_factor_persistence",
-            research["factor_persistence"],
-            config.output_dir,
-            config.sqlite_path,
-        ),
-        "model_results_path": _write_output(
-            "analysis_model_results",
-            research["model_results"],
-            config.output_dir,
-            config.sqlite_path,
-        ),
-        "current_betas_path": _write_output(
-            "analysis_current_betas",
-            research["current_betas"],
-            config.output_dir,
-            config.sqlite_path,
-        ),
-        "baseline_members_path": _write_output(
-            "analysis_bond_baseline_members",
-            research["baseline_members"],
-            config.output_dir,
-            config.sqlite_path,
-        ),
-    }
+    with transaction(config.sqlite_path) as tx:
+        paths = {
+            "snapshot_panel_path": _write_output(
+                "analysis_snapshot_panel",
+                panel,
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "factor_returns_path": _write_output(
+                "analysis_factor_returns",
+                factor_returns_wide,
+                config.output_dir,
+                config.sqlite_path,
+                long_sql_df=factor_returns_long,
+                tx=tx,
+            )
+            if not factor_returns_wide.empty
+            else None,
+            "factor_clusters_path": _write_output(
+                "analysis_factor_clusters",
+                research["factor_clusters"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "factor_persistence_path": _write_output(
+                "analysis_factor_persistence",
+                research["factor_persistence"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "model_results_path": _write_output(
+                "analysis_model_results",
+                research["model_results"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "current_betas_path": _write_output(
+                "analysis_current_betas",
+                research["current_betas"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "baseline_members_path": _write_output(
+                "analysis_bond_baseline_members",
+                research["baseline_members"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+        }
 
     persistent = research["factor_persistence"]
     return {

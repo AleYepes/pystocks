@@ -1,0 +1,216 @@
+import pandas as pd
+
+from ..config import SQLITE_DB_PATH
+from .txn import StorageTransaction, transaction
+
+
+def query_frame(
+    query: str,
+    *,
+    sqlite_path=SQLITE_DB_PATH,
+    params=None,
+    tx: StorageTransaction | None = None,
+) -> pd.DataFrame:
+    if tx is not None:
+        return pd.read_sql_query(query, tx.connection, params=params)
+    with transaction(sqlite_path) as managed_tx:
+        frame = pd.read_sql_query(query, managed_tx.connection, params=params)
+    return frame
+
+
+def load_price_history(
+    sqlite_path=SQLITE_DB_PATH, *, tx: StorageTransaction | None = None
+) -> pd.DataFrame:
+    df = query_frame(
+        """
+        SELECT
+            conid,
+            effective_at AS trade_date,
+            price,
+            open,
+            high,
+            low,
+            close
+        FROM price_chart_series
+        ORDER BY conid, effective_at
+        """,
+        sqlite_path=sqlite_path,
+        tx=tx,
+    )
+    if df.empty:
+        return df
+
+    df["conid"] = df["conid"].astype(str)
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    for col in ["price", "open", "high", "low", "close"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def load_dividend_events(
+    sqlite_path=SQLITE_DB_PATH, *, tx: StorageTransaction | None = None
+) -> pd.DataFrame:
+    df = query_frame(
+        """
+        SELECT
+            d.conid,
+            p.symbol,
+            d.effective_at AS event_date,
+            d.amount,
+            d.currency AS dividend_currency,
+            p.currency AS product_currency,
+            d.description,
+            d.event_type,
+            d.declaration_date,
+            d.record_date,
+            d.payment_date
+        FROM dividends_events_series d
+        LEFT JOIN products p
+          ON p.conid = d.conid
+        ORDER BY d.conid, d.effective_at
+        """,
+        sqlite_path=sqlite_path,
+        tx=tx,
+    )
+    if df.empty:
+        return df
+
+    df["conid"] = df["conid"].astype(str)
+    df["event_date"] = pd.to_datetime(df["event_date"])
+    for col in ["declaration_date", "record_date", "payment_date"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+    return df
+
+
+def _normalize_snapshot_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+    out = df.copy()
+    if "conid" in out.columns:
+        out["conid"] = out["conid"].astype(str)
+    if "effective_at" in out.columns:
+        out["effective_at"] = pd.to_datetime(out["effective_at"])
+    return out
+
+
+def _load_snapshot_frame(
+    query: str,
+    *,
+    sqlite_path=SQLITE_DB_PATH,
+    tx: StorageTransaction | None = None,
+) -> pd.DataFrame:
+    return _normalize_snapshot_frame(query_frame(query, sqlite_path=sqlite_path, tx=tx))
+
+
+def load_snapshot_feature_tables(
+    sqlite_path=SQLITE_DB_PATH, *, tx: StorageTransaction | None = None
+) -> dict[str, pd.DataFrame]:
+    return {
+        "profile_and_fees": _load_snapshot_frame(
+            "SELECT * FROM profile_and_fees",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "holdings_asset_type": _load_snapshot_frame(
+            "SELECT * FROM holdings_asset_type",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "holdings_debtor_quality": _load_snapshot_frame(
+            "SELECT * FROM holdings_debtor_quality",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "holdings_maturity": _load_snapshot_frame(
+            "SELECT * FROM holdings_maturity",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "holdings_industry": _load_snapshot_frame(
+            "SELECT conid, effective_at, industry, value_num FROM holdings_industry",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "holdings_currency": _load_snapshot_frame(
+            """
+            SELECT conid, effective_at, COALESCE(code, currency) AS code, currency, value_num
+            FROM holdings_currency
+            """,
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "holdings_investor_country": _load_snapshot_frame(
+            """
+            SELECT conid, effective_at, COALESCE(country_code, country) AS country_code, country, value_num
+            FROM holdings_investor_country
+            """,
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "holdings_geographic_weights": _load_snapshot_frame(
+            "SELECT conid, effective_at, region, value_num FROM holdings_geographic_weights",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "holdings_debt_type": _load_snapshot_frame(
+            "SELECT conid, effective_at, debt_type, value_num FROM holdings_debt_type",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "holdings_top10": _load_snapshot_frame(
+            "SELECT * FROM holdings_top10",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "ratios_key_ratios": _load_snapshot_frame(
+            "SELECT * FROM ratios_key_ratios",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "ratios_financials": _load_snapshot_frame(
+            "SELECT * FROM ratios_financials",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "ratios_fixed_income": _load_snapshot_frame(
+            "SELECT * FROM ratios_fixed_income",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "ratios_dividend": _load_snapshot_frame(
+            "SELECT * FROM ratios_dividend",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "ratios_zscore": _load_snapshot_frame(
+            "SELECT * FROM ratios_zscore",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "performance": _load_snapshot_frame(
+            "SELECT * FROM performance",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "dividends_industry_metrics": _load_snapshot_frame(
+            "SELECT * FROM dividends_industry_metrics",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "morningstar_summary": _load_snapshot_frame(
+            "SELECT * FROM morningstar_summary",
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+        "lipper_ratings": _load_snapshot_frame(
+            """
+            SELECT conid, effective_at, period, metric_id, rating_value AS value_num
+            FROM lipper_ratings
+            """,
+            sqlite_path=sqlite_path,
+            tx=tx,
+        ),
+    }

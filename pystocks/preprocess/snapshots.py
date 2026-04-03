@@ -1,4 +1,3 @@
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -6,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
+from ..storage import load_snapshot_feature_tables as _load_snapshot_feature_tables
 
 
 @dataclass
@@ -104,11 +104,6 @@ def _parse_scaled_number(value):
     except ValueError:
         return np.nan
     return -parsed if negative else parsed
-
-
-def _load_sql_frame(conn, query):
-    df = pd.read_sql_query(query, conn)
-    return _normalize_snapshot_frame(df)
 
 
 def _normalize_snapshot_frame(df):
@@ -430,69 +425,7 @@ def _ratio_diagnostics(df, table_name, key_cols):
 
 
 def load_snapshot_feature_tables(sqlite_path=SQLITE_DB_PATH):
-    with sqlite3.connect(str(sqlite_path)) as conn:
-        tables = {
-            "profile_and_fees": _load_sql_frame(conn, "SELECT * FROM profile_and_fees"),
-            "holdings_asset_type": _load_sql_frame(
-                conn, "SELECT * FROM holdings_asset_type"
-            ),
-            "holdings_debtor_quality": _load_sql_frame(
-                conn, "SELECT * FROM holdings_debtor_quality"
-            ),
-            "holdings_maturity": _load_sql_frame(
-                conn, "SELECT * FROM holdings_maturity"
-            ),
-            "holdings_industry": _load_sql_frame(
-                conn,
-                "SELECT conid, effective_at, industry, value_num FROM holdings_industry",
-            ),
-            "holdings_currency": _load_sql_frame(
-                conn,
-                """
-                SELECT conid, effective_at, COALESCE(code, currency) AS code, currency, value_num
-                FROM holdings_currency
-                """,
-            ),
-            "holdings_investor_country": _load_sql_frame(
-                conn,
-                """
-                SELECT conid, effective_at, COALESCE(country_code, country) AS country_code, country, value_num
-                FROM holdings_investor_country
-                """,
-            ),
-            "holdings_geographic_weights": _load_sql_frame(
-                conn,
-                "SELECT conid, effective_at, region, value_num FROM holdings_geographic_weights",
-            ),
-            "holdings_debt_type": _load_sql_frame(
-                conn,
-                "SELECT conid, effective_at, debt_type, value_num FROM holdings_debt_type",
-            ),
-            "holdings_top10": _load_sql_frame(conn, "SELECT * FROM holdings_top10"),
-            "ratios_key_ratios": _load_sql_frame(
-                conn, "SELECT * FROM ratios_key_ratios"
-            ),
-            "ratios_financials": _load_sql_frame(
-                conn, "SELECT * FROM ratios_financials"
-            ),
-            "ratios_fixed_income": _load_sql_frame(
-                conn, "SELECT * FROM ratios_fixed_income"
-            ),
-            "ratios_dividend": _load_sql_frame(conn, "SELECT * FROM ratios_dividend"),
-            "ratios_zscore": _load_sql_frame(conn, "SELECT * FROM ratios_zscore"),
-            "performance": _load_sql_frame(conn, "SELECT * FROM performance"),
-            "dividends_industry_metrics": _load_sql_frame(
-                conn, "SELECT * FROM dividends_industry_metrics"
-            ),
-            "morningstar_summary": _load_sql_frame(
-                conn, "SELECT * FROM morningstar_summary"
-            ),
-            "lipper_ratings": _load_sql_frame(
-                conn,
-                "SELECT conid, effective_at, period, metric_id, rating_value AS value_num FROM lipper_ratings",
-            ),
-        }
-    return tables
+    return _load_snapshot_feature_tables(sqlite_path=sqlite_path)
 
 
 def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB_PATH):

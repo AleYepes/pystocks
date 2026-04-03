@@ -4,18 +4,14 @@ from datetime import UTC, date, datetime, timedelta
 import pandas as pd
 
 from .config import SQLITE_DB_PATH
+from .storage import init_storage, open_connection
 
 DB_PATH = SQLITE_DB_PATH
 _INITIALIZED_DB_PATH = None
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA foreign_keys=ON;")
-    conn.execute("PRAGMA temp_store=MEMORY;")
-    return conn
+    return open_connection(DB_PATH)
 
 
 def get_connection() -> sqlite3.Connection:
@@ -28,26 +24,7 @@ def init_db() -> None:
     if _INITIALIZED_DB_PATH == db_path:
         return
 
-    conn = _connect()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS products (
-                conid TEXT PRIMARY KEY,
-                symbol TEXT,
-                exchange TEXT,
-                isin TEXT,
-                currency TEXT,
-                name TEXT,
-                last_scraped_fundamentals TEXT,
-                last_status_fundamentals TEXT,
-                updated_at TEXT
-            )
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    init_storage(DB_PATH)
     _INITIALIZED_DB_PATH = db_path
 
 
