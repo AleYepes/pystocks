@@ -19,6 +19,7 @@ from ..preprocess.price import (
 from ..preprocess.snapshots import (
     load_snapshot_features as load_preprocessed_snapshot_features,
 )
+from ..progress import make_progress_bar, track_progress
 from ..storage import replace_table, transaction
 
 
@@ -81,14 +82,22 @@ def load_snapshot_features(sqlite_path=SQLITE_DB_PATH):
     return load_preprocessed_snapshot_features(sqlite_path=sqlite_path)
 
 
-def _build_price_features(prices):
+def _build_price_features(prices, show_progress=False):
     clean = prices.loc[prices["is_clean_price"]].copy()
     if clean.empty:
         return _empty_frame(["conid", "trade_date"])
 
     clean = clean.sort_values(["conid", "trade_date"])
     frames = []
-    for conid, group in clean.groupby("conid"):
+    group_count = int(clean["conid"].nunique())
+    for conid, group in track_progress(
+        clean.groupby("conid"),
+        show_progress=show_progress,
+        total=group_count,
+        desc="Price features",
+        unit="conid",
+        leave=False,
+    ):
         g = group.copy()
         g["price_feature__momentum_21"] = g["clean_price"].pct_change(21)
         g["price_feature__momentum_63"] = g["clean_price"].pct_change(63)
@@ -159,17 +168,26 @@ def _merge_price_features(latest, price_features):
     return merged
 
 
-def build_analysis_panel_data(snapshot_features, price_result, config):
+def build_analysis_panel_data(
+    snapshot_features, price_result, config, show_progress=False
+):
     prices = price_result["prices"]
     eligibility = price_result["eligibility"]
-    price_features = _build_price_features(prices)
+    price_features = _build_price_features(prices, show_progress=show_progress)
     rebalance_dates = _build_rebalance_dates(
         snapshot_features, prices, config.rebalance_freq
     )
     eligible_conids = set(eligibility.loc[eligibility["eligible"], "conid"].astype(str))
 
     panels = []
-    for rebalance_date in rebalance_dates:
+    for rebalance_date in track_progress(
+        rebalance_dates,
+        show_progress=show_progress,
+        total=len(rebalance_dates),
+        desc="Analysis rebalance dates",
+        unit="date",
+        leave=False,
+    ):
         eligible_snapshots = snapshot_features.loc[
             snapshot_features["effective_at"] <= rebalance_date
         ]
@@ -469,7 +487,7 @@ def _select_baseline_bond_members(panel_slice):
     return bond_slice.head(target_count)
 
 
-def _build_baseline_returns(panel, returns_wide):
+def _build_baseline_returns(panel, returns_wide, show_progress=False):
     if panel.empty or returns_wide.empty:
         return pd.Series(dtype=float), pd.DataFrame()
 
@@ -477,7 +495,15 @@ def _build_baseline_returns(panel, returns_wide):
     baseline = pd.Series(0.0, index=returns_wide.index, name="bond_baseline_return")
     membership_rows = []
 
-    for start, end in zip(rebalance_dates[:-1], rebalance_dates[1:]):
+    intervals = list(zip(rebalance_dates[:-1], rebalance_dates[1:]))
+    for start, end in track_progress(
+        intervals,
+        show_progress=show_progress,
+        total=len(intervals),
+        desc="Baseline windows",
+        unit="window",
+        leave=False,
+    ):
         panel_slice = panel.loc[panel["rebalance_date"] == start]
         selected = _select_baseline_bond_members(panel_slice)
         if selected.empty:
@@ -506,9 +532,11 @@ def _build_baseline_returns(panel, returns_wide):
     return baseline, pd.DataFrame(membership_rows)
 
 
-def build_factor_returns(panel, prices, config):
+def build_factor_returns(panel, prices, config, show_progress=False):
     returns_wide = _build_returns_wide(prices)
-    baseline_returns, baseline_members = _build_baseline_returns(panel, returns_wide)
+    baseline_returns, baseline_members = _build_baseline_returns(
+        panel, returns_wide, show_progress=show_progress
+    )
     if panel.empty or returns_wide.empty:
         return pd.DataFrame(), pd.DataFrame(), baseline_returns, baseline_members
 
@@ -516,7 +544,15 @@ def build_factor_returns(panel, prices, config):
     metadata = {}
     rebalance_dates = sorted(pd.to_datetime(panel["rebalance_date"]).unique())
 
-    for start, end in zip(rebalance_dates[:-1], rebalance_dates[1:]):
+    intervals = list(zip(rebalance_dates[:-1], rebalance_dates[1:]))
+    for start, end in track_progress(
+        intervals,
+        show_progress=show_progress,
+        total=len(intervals),
+        desc="Factor return windows",
+        unit="window",
+        leave=False,
+    ):
         interval_returns = returns_wide.loc[
             (returns_wide.index > start) & (returns_wide.index <= end)
         ]
@@ -594,7 +630,7 @@ def build_factor_returns(panel, prices, config):
     return factor_returns, factor_meta, baseline_returns, baseline_members
 
 
-def cluster_factor_returns(factor_returns, factor_meta, config):
+def cluster_factor_returns(factor_returns, factor_meta, config, show_progress=False):
     if factor_returns.empty or factor_meta.empty:
         return _empty_frame(
             [
@@ -609,7 +645,15 @@ def cluster_factor_returns(factor_returns, factor_meta, config):
     cluster_rows = []
     keepers = []
 
-    for sleeve, meta_slice in factor_meta.groupby("sleeve"):
+    sleeve_count = int(factor_meta["sleeve"].nunique())
+    for sleeve, meta_slice in track_progress(
+        factor_meta.groupby("sleeve"),
+        show_progress=show_progress,
+        total=sleeve_count,
+        desc="Factor clustering",
+        unit="sleeve",
+        leave=False,
+    ):
         factor_ids = meta_slice["factor_id"].tolist()
         sleeve_returns = factor_returns.reindex(columns=factor_ids)
         sleeve_returns = sleeve_returns.loc[
@@ -690,12 +734,12 @@ def _fit_elastic_net(X_train, y_train):
     return typed_pipeline, intercept, coefs
 
 
-def run_factor_research_data(panel, prices, config):
+def run_factor_research_data(panel, prices, config, show_progress=False):
     factor_returns, factor_meta, baseline_returns, baseline_members = (
-        build_factor_returns(panel, prices, config)
+        build_factor_returns(panel, prices, config, show_progress=show_progress)
     )
     cluster_df, reduced_factors = cluster_factor_returns(
-        factor_returns, factor_meta, config
+        factor_returns, factor_meta, config, show_progress=show_progress
     )
     returns_wide = _build_returns_wide(prices)
 
@@ -716,6 +760,8 @@ def run_factor_research_data(panel, prices, config):
     research_rows = []
     selection_rows = []
 
+    train_test_windows = list(zip(unique_snapshots[2:-1], unique_snapshots[3:]))
+    sleeve_specs = []
     for sleeve in sorted(panel["sleeve"].dropna().unique()):
         sleeve_conids = sorted(
             panel.loc[panel["sleeve"] == sleeve, "conid"].astype(str).unique()
@@ -723,87 +769,113 @@ def run_factor_research_data(panel, prices, config):
         sleeve_factors = sorted(
             [col for col in reduced_factors.columns if col.startswith(f"{sleeve}__")]
         )
-        if not sleeve_conids or not sleeve_factors:
-            continue
+        if sleeve_conids and sleeve_factors:
+            sleeve_specs.append((sleeve, sleeve_conids, sleeve_factors))
 
-        for train_end, test_end in zip(unique_snapshots[2:-1], unique_snapshots[3:]):
-            X_train = reduced_factors.loc[
-                reduced_factors.index <= train_end, sleeve_factors
-            ].dropna(how="all")
-            X_test = reduced_factors.loc[
-                (reduced_factors.index > train_end)
-                & (reduced_factors.index <= test_end),
-                sleeve_factors,
-            ].dropna(how="all")
-            if (
-                len(X_train) < config.min_train_days
-                or len(X_test) < config.min_test_days
-            ):
-                continue
-
-            for conid in sleeve_conids:
-                y = returns_wide.get(conid)
-                if y is None:
-                    continue
-                y_excess = y.subtract(baseline_returns, fill_value=0.0)
-                train = pd.concat([X_train, y_excess.rename("target")], axis=1).dropna()
-                test = pd.concat([X_test, y_excess.rename("target")], axis=1).dropna()
+    total_model_fits = sum(
+        len(sleeve_conids) * len(train_test_windows)
+        for _, sleeve_conids, _ in sleeve_specs
+    )
+    with make_progress_bar(
+        show_progress=show_progress,
+        total=total_model_fits,
+        desc="Research model fits",
+        unit="fit",
+        leave=False,
+    ) as progress_bar:
+        for sleeve, sleeve_conids, sleeve_factors in sleeve_specs:
+            progress_bar.set_postfix_str(str(sleeve), refresh=False)
+            for train_end, test_end in train_test_windows:
+                X_train = reduced_factors.loc[
+                    reduced_factors.index <= train_end, sleeve_factors
+                ].dropna(how="all")
+                X_test = reduced_factors.loc[
+                    (reduced_factors.index > train_end)
+                    & (reduced_factors.index <= test_end),
+                    sleeve_factors,
+                ].dropna(how="all")
                 if (
-                    len(train) < config.min_train_days
-                    or len(test) < config.min_test_days
+                    len(X_train) < config.min_train_days
+                    or len(X_test) < config.min_test_days
                 ):
+                    progress_bar.update(len(sleeve_conids))
                     continue
 
-                X_train_fit = np.asarray(train[sleeve_factors].to_numpy(), dtype=float)
-                y_train_fit = np.asarray(train["target"].to_numpy(), dtype=float)
-                X_test_fit = np.asarray(test[sleeve_factors].to_numpy(), dtype=float)
-                y_test_fit = np.asarray(test["target"].to_numpy(), dtype=float)
-
-                try:
-                    pipeline, intercept, coefs = _fit_elastic_net(
-                        X_train_fit, y_train_fit
-                    )
-                except ValueError:
-                    continue
-
-                preds = pipeline.predict(X_test_fit)
-                denom = float(np.sum((y_test_fit - y_test_fit.mean()) ** 2))
-                r2_test = (
-                    float(1.0 - np.sum((y_test_fit - preds) ** 2) / denom)
-                    if denom > 0
-                    else np.nan
-                )
-
-                selected = []
-                for factor_id, beta in zip(sleeve_factors, coefs):
-                    if abs(beta) <= 1e-8:
+                for conid in sleeve_conids:
+                    y = returns_wide.get(conid)
+                    if y is None:
+                        progress_bar.update(1)
                         continue
-                    selected.append(factor_id)
-                    selection_rows.append(
+                    y_excess = y.subtract(baseline_returns, fill_value=0.0)
+                    train = pd.concat(
+                        [X_train, y_excess.rename("target")], axis=1
+                    ).dropna()
+                    test = pd.concat(
+                        [X_test, y_excess.rename("target")], axis=1
+                    ).dropna()
+                    if (
+                        len(train) < config.min_train_days
+                        or len(test) < config.min_test_days
+                    ):
+                        progress_bar.update(1)
+                        continue
+
+                    X_train_fit = np.asarray(
+                        train[sleeve_factors].to_numpy(), dtype=float
+                    )
+                    y_train_fit = np.asarray(train["target"].to_numpy(), dtype=float)
+                    X_test_fit = np.asarray(
+                        test[sleeve_factors].to_numpy(), dtype=float
+                    )
+                    y_test_fit = np.asarray(test["target"].to_numpy(), dtype=float)
+
+                    try:
+                        pipeline, intercept, coefs = _fit_elastic_net(
+                            X_train_fit, y_train_fit
+                        )
+                    except ValueError:
+                        progress_bar.update(1)
+                        continue
+
+                    preds = pipeline.predict(X_test_fit)
+                    denom = float(np.sum((y_test_fit - y_test_fit.mean()) ** 2))
+                    r2_test = (
+                        float(1.0 - np.sum((y_test_fit - preds) ** 2) / denom)
+                        if denom > 0
+                        else np.nan
+                    )
+
+                    selected = []
+                    for factor_id, beta in zip(sleeve_factors, coefs):
+                        if abs(beta) <= 1e-8:
+                            continue
+                        selected.append(factor_id)
+                        selection_rows.append(
+                            {
+                                "sleeve": sleeve,
+                                "conid": conid,
+                                "train_end": pd.Timestamp(train_end),
+                                "test_end": pd.Timestamp(test_end),
+                                "factor_id": factor_id,
+                                "beta": float(beta),
+                                "abs_beta": float(abs(beta)),
+                                "sign": float(np.sign(beta)),
+                            }
+                        )
+
+                    research_rows.append(
                         {
                             "sleeve": sleeve,
                             "conid": conid,
                             "train_end": pd.Timestamp(train_end),
                             "test_end": pd.Timestamp(test_end),
-                            "factor_id": factor_id,
-                            "beta": float(beta),
-                            "abs_beta": float(abs(beta)),
-                            "sign": float(np.sign(beta)),
+                            "alpha": float(intercept),
+                            "selected_factor_count": int(len(selected)),
+                            "selected_factors": "|".join(sorted(selected)),
+                            "test_r2": r2_test,
                         }
                     )
-
-                research_rows.append(
-                    {
-                        "sleeve": sleeve,
-                        "conid": conid,
-                        "train_end": pd.Timestamp(train_end),
-                        "test_end": pd.Timestamp(test_end),
-                        "alpha": float(intercept),
-                        "selected_factor_count": int(len(selected)),
-                        "selected_factors": "|".join(sorted(selected)),
-                        "test_r2": r2_test,
-                    }
-                )
+                    progress_bar.update(1)
 
     model_results = pd.DataFrame(research_rows)
     selections = pd.DataFrame(selection_rows)
@@ -836,6 +908,7 @@ def run_factor_research_data(panel, prices, config):
         baseline_returns=baseline_returns,
         persistence=persistence,
         config=config,
+        show_progress=show_progress,
     )
 
     return {
@@ -851,7 +924,13 @@ def run_factor_research_data(panel, prices, config):
 
 
 def compute_current_betas_data(
-    panel, prices, reduced_factors, baseline_returns, persistence, config
+    panel,
+    prices,
+    reduced_factors,
+    baseline_returns,
+    persistence,
+    config,
+    show_progress=False,
 ):
     returns_wide = _build_returns_wide(prices)
     if returns_wide.empty or reduced_factors.empty or persistence.empty:
@@ -867,54 +946,80 @@ def compute_current_betas_data(
     )
 
     rows = []
-    for sleeve, sleeve_panel in latest_panel.groupby("sleeve"):
-        persistent_factors = persistence.loc[
+    beta_fit_total = sum(
+        len(sleeve_panel)
+        for sleeve, sleeve_panel in latest_panel.groupby("sleeve")
+        if not persistence.loc[
             (persistence["sleeve"] == sleeve) & (persistence["is_persistent"]),
             "factor_id",
-        ].tolist()
-        if not persistent_factors:
-            continue
-
-        X = reduced_factors.loc[
-            reduced_factors.index >= start_date, persistent_factors
-        ].dropna()
-        if len(X) < config.min_test_days:
-            continue
-
-        for conid in sleeve_panel["conid"].astype(str):
-            y = returns_wide.get(conid)
-            if y is None:
+        ].empty
+    )
+    with make_progress_bar(
+        show_progress=show_progress,
+        total=beta_fit_total,
+        desc="Current beta fits",
+        unit="fit",
+        leave=False,
+    ) as progress_bar:
+        for sleeve, sleeve_panel in latest_panel.groupby("sleeve"):
+            progress_bar.set_postfix_str(str(sleeve), refresh=False)
+            persistent_factors = persistence.loc[
+                (persistence["sleeve"] == sleeve) & (persistence["is_persistent"]),
+                "factor_id",
+            ].tolist()
+            if not persistent_factors:
                 continue
-            y_excess = y.subtract(baseline_returns, fill_value=0.0)
-            data = pd.concat([X, y_excess.rename("target")], axis=1).dropna()
-            if len(data) < config.min_test_days:
+
+            sleeve_conids = sleeve_panel["conid"].astype(str).tolist()
+            X = reduced_factors.loc[
+                reduced_factors.index >= start_date, persistent_factors
+            ].dropna()
+            if len(X) < config.min_test_days:
+                progress_bar.update(len(sleeve_conids))
                 continue
 
-            X_fit = data[persistent_factors].values
-            y_fit = data["target"].values
-            model = LinearRegression()
-            model.fit(X_fit, y_fit)
+            for conid in sleeve_conids:
+                y = returns_wide.get(conid)
+                if y is None:
+                    progress_bar.update(1)
+                    continue
+                y_excess = y.subtract(baseline_returns, fill_value=0.0)
+                data = pd.concat([X, y_excess.rename("target")], axis=1).dropna()
+                if len(data) < config.min_test_days:
+                    progress_bar.update(1)
+                    continue
 
-            rows.append(
-                {
-                    "conid": conid,
-                    "sleeve": sleeve,
-                    "window_start": _to_timestamp(data.index.min()),
-                    "window_end": _to_timestamp(data.index.max()),
-                    "n_obs": int(len(data)),
-                    "alpha": float(model.intercept_),
-                    "r2": float(model.score(X_fit, y_fit)),
-                    **{
-                        f"beta__{factor_id}": float(beta)
-                        for factor_id, beta in zip(persistent_factors, model.coef_)
-                    },
-                }
-            )
+                X_fit = data[persistent_factors].values
+                y_fit = data["target"].values
+                model = LinearRegression()
+                model.fit(X_fit, y_fit)
+
+                rows.append(
+                    {
+                        "conid": conid,
+                        "sleeve": sleeve,
+                        "window_start": _to_timestamp(data.index.min()),
+                        "window_end": _to_timestamp(data.index.max()),
+                        "n_obs": int(len(data)),
+                        "alpha": float(model.intercept_),
+                        "r2": float(model.score(X_fit, y_fit)),
+                        **{
+                            f"beta__{factor_id}": float(beta)
+                            for factor_id, beta in zip(persistent_factors, model.coef_)
+                        },
+                    }
+                )
+                progress_bar.update(1)
 
     return pd.DataFrame(rows)
 
 
-def build_analysis_panel(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs):
+def build_analysis_panel(
+    sqlite_path=SQLITE_DB_PATH,
+    output_dir=None,
+    show_progress=False,
+    **config_kwargs,
+):
     config = AnalysisConfig(
         sqlite_path=Path(sqlite_path),
         output_dir=Path(output_dir or (DATA_DIR / "analysis")),
@@ -922,11 +1027,18 @@ def build_analysis_panel(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_k
     )
     price_config = PricePreprocessConfig(outlier_z_threshold=config.outlier_z_threshold)
     price_result = preprocess_price_history(
-        load_price_history(config.sqlite_path), config=price_config
+        load_price_history(config.sqlite_path),
+        config=price_config,
+        show_progress=show_progress,
     )
     save_price_preprocess_results(price_result, output_dir=config.output_dir)
     snapshot_features = load_snapshot_features(config.sqlite_path)
-    panel = build_analysis_panel_data(snapshot_features, price_result, config)
+    panel = build_analysis_panel_data(
+        snapshot_features,
+        price_result,
+        config,
+        show_progress=show_progress,
+    )
 
     with transaction(config.sqlite_path) as tx:
         panel_path = _write_output(
@@ -946,7 +1058,12 @@ def build_analysis_panel(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_k
     }
 
 
-def run_factor_research(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs):
+def run_factor_research(
+    sqlite_path=SQLITE_DB_PATH,
+    output_dir=None,
+    show_progress=False,
+    **config_kwargs,
+):
     config = AnalysisConfig(
         sqlite_path=Path(sqlite_path),
         output_dir=Path(output_dir or (DATA_DIR / "analysis")),
@@ -954,12 +1071,24 @@ def run_factor_research(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kw
     )
     price_config = PricePreprocessConfig(outlier_z_threshold=config.outlier_z_threshold)
     price_result = preprocess_price_history(
-        load_price_history(config.sqlite_path), config=price_config
+        load_price_history(config.sqlite_path),
+        config=price_config,
+        show_progress=show_progress,
     )
     save_price_preprocess_results(price_result, output_dir=config.output_dir)
     snapshot_features = load_snapshot_features(config.sqlite_path)
-    panel = build_analysis_panel_data(snapshot_features, price_result, config)
-    research = run_factor_research_data(panel, price_result["prices"], config)
+    panel = build_analysis_panel_data(
+        snapshot_features,
+        price_result,
+        config,
+        show_progress=show_progress,
+    )
+    research = run_factor_research_data(
+        panel,
+        price_result["prices"],
+        config,
+        show_progress=show_progress,
+    )
 
     factor_returns_wide = research["factor_returns"].copy()
     factor_returns_long = pd.DataFrame()
@@ -1043,9 +1172,17 @@ def run_factor_research(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kw
     }
 
 
-def compute_current_betas(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs):
+def compute_current_betas(
+    sqlite_path=SQLITE_DB_PATH,
+    output_dir=None,
+    show_progress=False,
+    **config_kwargs,
+):
     result = run_factor_research(
-        sqlite_path=sqlite_path, output_dir=output_dir, **config_kwargs
+        sqlite_path=sqlite_path,
+        output_dir=output_dir,
+        show_progress=show_progress,
+        **config_kwargs,
     )
     return {
         "status": result["status"],
@@ -1054,12 +1191,23 @@ def compute_current_betas(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_
     }
 
 
-def run_analysis_pipeline(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs):
+def run_analysis_pipeline(
+    sqlite_path=SQLITE_DB_PATH,
+    output_dir=None,
+    show_progress=False,
+    **config_kwargs,
+):
     panel_result = build_analysis_panel(
-        sqlite_path=sqlite_path, output_dir=output_dir, **config_kwargs
+        sqlite_path=sqlite_path,
+        output_dir=output_dir,
+        show_progress=show_progress,
+        **config_kwargs,
     )
     research_result = run_factor_research(
-        sqlite_path=sqlite_path, output_dir=output_dir, **config_kwargs
+        sqlite_path=sqlite_path,
+        output_dir=output_dir,
+        show_progress=show_progress,
+        **config_kwargs,
     )
     return {
         "status": "ok",

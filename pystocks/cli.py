@@ -33,11 +33,11 @@ class PyStocksCLI:
             )
         )
 
-    def preprocess_prices(self) -> Any:
+    def preprocess_prices(self, show_progress: bool = True) -> Any:
         """Build clean daily return artifacts and price eligibility tables."""
         from .preprocess.price import run_price_preprocess
 
-        return run_price_preprocess()
+        return run_price_preprocess(show_progress=show_progress)
 
     def preprocess_dividends(self) -> Any:
         """Build cleaned dividend-event artifacts for total-return analysis."""
@@ -51,29 +51,29 @@ class PyStocksCLI:
 
         return run_snapshot_preprocess()
 
-    def build_analysis_panel(self) -> Any:
+    def build_analysis_panel(self, show_progress: bool = True) -> Any:
         """Build the point-in-time analysis snapshot panel."""
         from .analysis import build_analysis_panel
 
-        return build_analysis_panel()
+        return build_analysis_panel(show_progress=show_progress)
 
-    def run_factor_research(self) -> Any:
+    def run_factor_research(self, show_progress: bool = True) -> Any:
         """Build factor returns, run sleeve research, and persist outputs."""
         from .analysis import run_factor_research
 
-        return run_factor_research()
+        return run_factor_research(show_progress=show_progress)
 
-    def compute_factor_betas(self) -> Any:
+    def compute_factor_betas(self, show_progress: bool = True) -> Any:
         """Compute current ETF factor betas from persistent factors."""
         from .analysis import compute_current_betas
 
-        return compute_current_betas()
+        return compute_current_betas(show_progress=show_progress)
 
-    def run_analysis(self) -> Any:
+    def run_analysis(self, show_progress: bool = True) -> Any:
         """Run the full analysis pipeline."""
         from .analysis import run_analysis_pipeline
 
-        return run_analysis_pipeline()
+        return run_analysis_pipeline(show_progress=show_progress)
 
     def refresh_fundamentals_views(self) -> dict[str, str]:
         """Run lightweight SQLite maintenance for the fundamentals store."""
@@ -87,6 +87,7 @@ class PyStocksCLI:
         verbose: bool = False,
         force: bool = False,
         conids_file: str | None = None,
+        show_progress: bool = True,
     ) -> dict[str, Any]:
         """Run ingestion and analysis pipeline: products -> fundamentals -> prices -> analysis."""
         print("Starting full pipeline...")
@@ -104,10 +105,10 @@ class PyStocksCLI:
         )
 
         print("3. Preprocessing prices...")
-        result["prices"] = self.preprocess_prices()
+        result["prices"] = self.preprocess_prices(show_progress=show_progress)
 
         print("4. Running analysis...")
-        result["analysis"] = self.run_analysis()
+        result["analysis"] = self.run_analysis(show_progress=show_progress)
 
         print("Pipeline complete.")
         print(result)

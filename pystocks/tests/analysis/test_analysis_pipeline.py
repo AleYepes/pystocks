@@ -211,3 +211,41 @@ def test_cluster_factor_returns_prefers_composite_representative():
     assert "equity__composite__value" in keepers
     assert "equity__composite__value" in reduced.columns
     assert "equity__raw__ratio_key__price_book" not in reduced.columns
+
+
+def test_cluster_factor_returns_show_progress_emits_stage_label(capsys):
+    index = pd.date_range("2026-01-01", periods=150, freq="B")
+    factor_returns = pd.DataFrame(
+        {
+            "equity__composite__value": pd.Series(range(150), index=index, dtype=float),
+            "equity__raw__ratio_key__price_book": pd.Series(
+                range(150), index=index, dtype=float
+            ),
+        }
+    )
+    factor_meta = pd.DataFrame(
+        [
+            {
+                "factor_id": "equity__composite__value",
+                "sleeve": "equity",
+                "family": "composite",
+                "kind": "composite",
+            },
+            {
+                "factor_id": "equity__raw__ratio_key__price_book",
+                "sleeve": "equity",
+                "family": "ratio_key",
+                "kind": "raw",
+            },
+        ]
+    )
+
+    cluster_factor_returns(
+        factor_returns,
+        factor_meta,
+        AnalysisConfig(min_train_days=50),
+        show_progress=True,
+    )
+
+    captured = capsys.readouterr()
+    assert "Factor clustering" in captured.err

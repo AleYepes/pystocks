@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
+from ..progress import track_progress
 from ..storage import load_price_history as _load_price_history
 
 
@@ -40,9 +41,17 @@ def _compute_internal_gap_days(dates):
     return int(gap_days.max())
 
 
-def _compute_eligibility(df, config: PricePreprocessConfig):
+def _compute_eligibility(df, config: PricePreprocessConfig, show_progress=False):
     rows = []
-    for conid, group in df.groupby("conid"):
+    group_count = int(df["conid"].nunique()) if not df.empty else 0
+    for conid, group in track_progress(
+        df.groupby("conid"),
+        show_progress=show_progress,
+        total=group_count,
+        desc="Price eligibility",
+        unit="conid",
+        leave=True,
+    ):
         valid = group[group["is_clean_price"]].copy()
 
         total_rows = int(len(group))
@@ -182,7 +191,7 @@ def _mark_price_level_anomalies(
     return flagged
 
 
-def preprocess_price_history(price_df=None, config=None):
+def preprocess_price_history(price_df=None, config=None, show_progress=False):
     config = config or PricePreprocessConfig()
     price_df = load_price_history() if price_df is None else price_df.copy()
 
@@ -204,7 +213,9 @@ def preprocess_price_history(price_df=None, config=None):
         )
         return {
             "prices": empty,
-            "eligibility": _compute_eligibility(empty, config),
+            "eligibility": _compute_eligibility(
+                empty, config, show_progress=show_progress
+            ),
             "config": config,
         }
 
@@ -229,7 +240,15 @@ def preprocess_price_history(price_df=None, config=None):
 
     df["raw_return"] = df.groupby("conid")["price_value"].pct_change(fill_method=None)
     stale_mask = pd.Series(False, index=df.index)
-    for _, group in df.groupby("conid"):
+    group_count = int(df["conid"].nunique())
+    for _, group in track_progress(
+        df.groupby("conid"),
+        show_progress=show_progress,
+        total=group_count,
+        desc="Price stale checks",
+        unit="conid",
+        leave=True,
+    ):
         stale_mask.loc[group.index] = _mark_stale_rows(
             group, config.stale_run_max_days
         ).to_numpy()
@@ -239,7 +258,14 @@ def preprocess_price_history(price_df=None, config=None):
         df["is_valid_price"] & ~df["is_stale_price"]
     )
     outlier_mask = pd.Series(False, index=df.index)
-    for _, group in df.assign(candidate_return=candidate_returns).groupby("conid"):
+    for _, group in track_progress(
+        df.assign(candidate_return=candidate_returns).groupby("conid"),
+        show_progress=show_progress,
+        total=group_count,
+        desc="Price outlier checks",
+        unit="conid",
+        leave=True,
+    ):
         outlier_mask.loc[group.index] = _robust_outlier_mask(
             group["candidate_return"],
             config.outlier_z_threshold,
@@ -249,7 +275,14 @@ def preprocess_price_history(price_df=None, config=None):
         df["is_valid_price"] & ~df["is_stale_price"] & ~df["is_outlier_return"]
     )
     price_level_anomaly_mask = pd.Series(False, index=df.index)
-    for _, group in df.groupby("conid"):
+    for _, group in track_progress(
+        df.groupby("conid"),
+        show_progress=show_progress,
+        total=group_count,
+        desc="Price anomaly checks",
+        unit="conid",
+        leave=True,
+    ):
         price_level_anomaly_mask.loc[group.index] = _mark_price_level_anomalies(
             group,
             base_clean_mask.loc[group.index],
@@ -281,7 +314,7 @@ def preprocess_price_history(price_df=None, config=None):
         "is_clean_price",
     ]
     prices = df[price_cols].copy()
-    eligibility = _compute_eligibility(prices, config)
+    eligibility = _compute_eligibility(prices, config, show_progress=show_progress)
 
     return {
         "prices": prices,
@@ -305,9 +338,18 @@ def save_price_preprocess_results(result, output_dir=None):
     }
 
 
-def run_price_preprocess(sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs):
+def run_price_preprocess(
+    sqlite_path=SQLITE_DB_PATH,
+    output_dir=None,
+    show_progress=False,
+    **config_kwargs,
+):
     config = PricePreprocessConfig(**config_kwargs)
-    result = preprocess_price_history(load_price_history(sqlite_path), config=config)
+    result = preprocess_price_history(
+        load_price_history(sqlite_path),
+        config=config,
+        show_progress=show_progress,
+    )
     paths = save_price_preprocess_results(result, output_dir=output_dir)
 
     eligibility = result["eligibility"]

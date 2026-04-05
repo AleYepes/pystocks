@@ -139,3 +139,34 @@ def test_preprocess_price_history_does_not_flag_split_like_step_as_price_level_a
 
     assert not bool(prices.loc[pd.Timestamp("2024-01-02"), "is_price_level_anomaly"])
     assert bool(prices.loc[pd.Timestamp("2024-01-02"), "is_clean_price"])
+
+
+def test_preprocess_price_history_show_progress_emits_stage_labels(capsys):
+    price_df = pd.DataFrame(
+        [
+            {
+                "conid": "x",
+                "trade_date": "2024-01-01",
+                "price": 100.0,
+                "open": 100.0,
+                "high": 100.0,
+                "low": 100.0,
+                "close": 100.0,
+            },
+            {
+                "conid": "x",
+                "trade_date": "2024-01-02",
+                "price": 101.0,
+                "open": 101.0,
+                "high": 101.0,
+                "low": 101.0,
+                "close": 101.0,
+            },
+        ]
+    )
+
+    preprocess_price_history(price_df=price_df, show_progress=True)
+
+    captured = capsys.readouterr()
+    assert "Price stale checks" in captured.err
+    assert "Price eligibility" in captured.err
