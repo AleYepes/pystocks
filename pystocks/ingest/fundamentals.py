@@ -20,6 +20,7 @@ from ..storage.ops_state import (
 from .session import IBKRSession
 
 logger = logging.getLogger(__name__)
+_SKIP_MISSING_TOTAL_NET_ASSETS = "skip_missing_total_net_assets"
 
 
 def _load_conids_from_file(path):
@@ -36,6 +37,95 @@ def _load_conids_from_file(path):
         seen.add(value)
         out.append(value)
     return out
+
+
+def _build_telemetry():
+    return {
+        "run_started_at": datetime.now(UTC).isoformat(),
+        "endpoint_calls": Counter(),
+        "endpoint_useful_payloads": Counter(),
+        "status_codes": defaultdict(Counter),
+    }
+
+
+def _configure_logging(verbose):
+    log_level = logging.INFO if verbose else logging.WARNING
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s")
+    root_logger.setLevel(log_level)
+    logger.setLevel(log_level)
+
+
+def _result_payload(
+    *,
+    status,
+    total_targeted,
+    processed_conids,
+    saved_snapshots,
+    inserted_events,
+    overwritten_events,
+    unchanged_events,
+    series_raw_rows_written,
+    series_latest_rows_upserted,
+    auth_retries,
+    aborted,
+    telemetry_path=None,
+    latest_telemetry_path=None,
+):
+    result = {
+        "status": str(status),
+        "total_targeted_conids": int(total_targeted),
+        "processed_conids": int(processed_conids),
+        "saved_snapshots": int(saved_snapshots),
+        "inserted_events": int(inserted_events),
+        "overwritten_events": int(overwritten_events),
+        "unchanged_events": int(unchanged_events),
+        "series_raw_rows_written": int(series_raw_rows_written),
+        "series_latest_rows_upserted": int(series_latest_rows_upserted),
+        "auth_retries": int(auth_retries),
+        "aborted": bool(aborted),
+    }
+    if telemetry_path is not None:
+        result["telemetry_path"] = str(telemetry_path)
+    if latest_telemetry_path is not None:
+        result["latest_telemetry_path"] = str(latest_telemetry_path)
+    return result
+
+
+def _select_conids_to_scrape(limit, start_index, conids_file, force):
+    scraped_recently = [] if force else get_scraped_conids()
+    logger.info(
+        "Skipping %s instruments already scraped in the last 7 days.",
+        len(scraped_recently),
+    )
+
+    selected_conids = _load_conids_from_file(conids_file)
+    if selected_conids is not None:
+        if not selected_conids:
+            return [], {"status": "no_conids_in_file", "path": conids_file}
+        conids_to_scrape = selected_conids
+        if not force:
+            conids_to_scrape = [
+                conid for conid in conids_to_scrape if conid not in scraped_recently
+            ]
+        logger.info(
+            "Using explicit conid target list: %s items.", len(conids_to_scrape)
+        )
+    else:
+        all_conids = get_all_instrument_conids()
+        if not all_conids:
+            return [], {"status": "no_products"}
+        conids_to_scrape = [
+            conid for conid in all_conids if conid not in scraped_recently
+        ]
+
+    if limit:
+        conids_to_scrape = conids_to_scrape[start_index : start_index + limit]
+    else:
+        conids_to_scrape = conids_to_scrape[start_index:]
+
+    return conids_to_scrape, None
 
 
 class FundamentalScraper:
@@ -64,20 +154,25 @@ class FundamentalScraper:
         "esg": "impact/esg",
     }
 
-    def __init__(self, session=None):
+    def __init__(
+        self,
+        session=None,
+        store=None,
+        *,
+        research_dir=RESEARCH_DIR,
+        telemetry=None,
+        esg_account_id=None,
+        latest_price_series_effective_at_by_conid=None,
+    ):
         self.session = session or IBKRSession()
-        self.esg_account_id = self.session.get_primary_account_id()
+        self.store = store
+        self.esg_account_id = esg_account_id
         self._warned_missing_esg_account = False
-        self.research_dir = RESEARCH_DIR
-        self.research_dir.mkdir(parents=True, exist_ok=True)
-        self.store = FundamentalsStore()
-        self.telemetry = {
-            "run_started_at": datetime.now(UTC).isoformat(),
-            "endpoint_calls": Counter(),
-            "endpoint_useful_payloads": Counter(),
-            "status_codes": defaultdict(Counter),
-        }
-        init_db()
+        self.research_dir = Path(research_dir)
+        self.telemetry = telemetry or _build_telemetry()
+        self._latest_price_series_effective_at_by_conid = dict(
+            latest_price_series_effective_at_by_conid or {}
+        )
 
     def _endpoint_family(self, endpoint):
         endpoint = endpoint.lstrip("/")
@@ -225,8 +320,22 @@ class FundamentalScraper:
         to_str = to_dt.strftime("%Y-%m-%d %H:%M")
         return f"sma/request?type=search&conid={conid}&from={from_str}&to={to_str}&bar_size=1D&tz=-60"
 
+    def _get_latest_price_series_effective_at(self, conid):
+        cache_key = str(conid)
+        cache = getattr(self, "_latest_price_series_effective_at_by_conid", None)
+        if cache is None:
+            cache = {}
+            self._latest_price_series_effective_at_by_conid = cache
+        if cache_key in cache:
+            return cache[cache_key]
+        if self.store is None:
+            return None
+        latest_effective_at = self.store.get_latest_price_series_effective_at(cache_key)
+        cache[cache_key] = latest_effective_at
+        return latest_effective_at
+
     def _select_price_chart_period(self, conid, as_of_date=None):
-        latest_effective_at = self.store.get_latest_price_series_effective_at(conid)
+        latest_effective_at = self._get_latest_price_series_effective_at(conid)
         if latest_effective_at is None:
             return "MAX"
 
@@ -250,9 +359,10 @@ class FundamentalScraper:
         return f"mf_performance_chart/{conid}?chart_period={chart_period}"
 
     def _build_esg_endpoint(self, conid):
-        account_id = self.session.get_primary_account_id()
-        if account_id:
-            self.esg_account_id = account_id
+        if self.esg_account_id is None:
+            account_id = self.session.get_primary_account_id()
+            if account_id:
+                self.esg_account_id = account_id
 
         if self.esg_account_id:
             return f"impact/esg/{conid}?accounts={self.esg_account_id}"
@@ -308,7 +418,12 @@ class FundamentalScraper:
         skip, reason = self._should_skip_fanout(landing_data)
         if skip:
             logger.info("Skipping fanout for conid=%s: %s", conid, reason)
-            return None
+            return {
+                **combined_data,
+                "_skip_fanout": True,
+                "_skip_reason": str(reason),
+                "_skip_status": _SKIP_MISSING_TOTAL_NET_ASSETS,
+            }
 
         price_chart_period = self._select_price_chart_period(conid)
         fixed_task_items = [
@@ -431,6 +546,7 @@ class FundamentalScraper:
             telemetry_path.parent.mkdir(parents=True, exist_ok=True)
         else:
             ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            self.research_dir.mkdir(parents=True, exist_ok=True)
             telemetry_path = self.research_dir / f"fundamentals_run_telemetry_{ts}.json"
 
         latest_path = self.research_dir / "fundamentals_run_telemetry_latest.json"
@@ -452,17 +568,13 @@ async def main(
     telemetry_output=None,
     verbose=False,
 ):
-    log_level = logging.INFO if verbose else logging.WARNING
-    root_logger = logging.getLogger()
-    if not root_logger.handlers:
-        logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s")
-    root_logger.setLevel(log_level)
-    logger.setLevel(log_level)
+    _configure_logging(verbose)
+    init_db()
 
-    scraper = FundamentalScraper()
-    has_valid_session = await scraper.session.validate_auth_state()
+    session = IBKRSession()
+    has_valid_session = await session.validate_auth_state()
     if not has_valid_session:
-        authenticated = await scraper.session.login(
+        authenticated = await session.login(
             headless=reauth_headless,
             force_browser=True,
         )
@@ -470,38 +582,62 @@ async def main(
             logger.error(
                 "Unable to authenticate IBKR session. Aborting fundamentals scrape."
             )
-            return
+            return _result_payload(
+                status="auth_failed",
+                total_targeted=0,
+                processed_conids=0,
+                saved_snapshots=0,
+                inserted_events=0,
+                overwritten_events=0,
+                unchanged_events=0,
+                series_raw_rows_written=0,
+                series_latest_rows_upserted=0,
+                auth_retries=0,
+                aborted=True,
+            )
 
-    scraped_recently = [] if force else get_scraped_conids()
-    logger.info(
-        f"Skipping {len(scraped_recently)} instruments already scraped in the last 7 days."
+    conids_to_scrape, selection_error = _select_conids_to_scrape(
+        limit=limit,
+        start_index=start_index,
+        conids_file=conids_file,
+        force=force,
     )
-
-    selected_conids = _load_conids_from_file(conids_file)
-    if selected_conids is not None:
-        if not selected_conids:
-            logger.error(f"No conids found in file: {conids_file}")
-            return
-        conids_to_scrape = selected_conids
-        if not force:
-            conids_to_scrape = [
-                c for c in conids_to_scrape if c not in scraped_recently
-            ]
-        logger.info(f"Using explicit conid target list: {len(conids_to_scrape)} items.")
-    else:
-        all_conids = get_all_instrument_conids()
-        if not all_conids:
+    if selection_error is not None:
+        if selection_error["status"] == "no_products":
             logger.error(
                 "No products found in SQLite products table. "
                 "Run `python -m pystocks.cli scrape_products` first."
             )
-            return
-        conids_to_scrape = [c for c in all_conids if c not in scraped_recently]
+        else:
+            logger.error("No conids found in file: %s", selection_error["path"])
+        return _result_payload(
+            status=str(selection_error["status"]),
+            total_targeted=0,
+            processed_conids=0,
+            saved_snapshots=0,
+            inserted_events=0,
+            overwritten_events=0,
+            unchanged_events=0,
+            series_raw_rows_written=0,
+            series_latest_rows_upserted=0,
+            auth_retries=0,
+            aborted=False,
+        )
 
-    if limit:
-        conids_to_scrape = conids_to_scrape[start_index : start_index + limit]
-    else:
-        conids_to_scrape = conids_to_scrape[start_index:]
+    store = FundamentalsStore()
+    latest_price_series_effective_at_by_conid = (
+        store.get_latest_price_series_effective_at_map(conids_to_scrape)
+        if conids_to_scrape
+        else {}
+    )
+    scraper = FundamentalScraper(
+        session=session,
+        store=store,
+        research_dir=RESEARCH_DIR,
+        telemetry=_build_telemetry(),
+        esg_account_id=session.get_primary_account_id(),
+        latest_price_series_effective_at_by_conid=latest_price_series_effective_at_by_conid,
+    )
 
     logger.info(f"Starting scrape for {len(conids_to_scrape)} instruments.")
     total_targeted = len(conids_to_scrape)
@@ -535,7 +671,20 @@ async def main(
                             needs_reauth = True
                             break
 
-                        if data:
+                        if data and data.get("_skip_fanout"):
+                            update_instrument_fundamentals_status(
+                                conid,
+                                str(
+                                    data.get("_skip_status")
+                                    or _SKIP_MISSING_TOTAL_NET_ASSETS
+                                ),
+                                mark_scraped=True,
+                            )
+                        elif data:
+                            if scraper.store is None:
+                                raise RuntimeError(
+                                    "FundamentalScraper store must be configured by the runner."
+                                )
                             store_result = scraper.store.persist_combined_snapshot(
                                 data,
                             )
@@ -572,7 +721,6 @@ async def main(
 
                         processed_conids += 1
                         pbar.update(1)
-                        await asyncio.sleep(0.1)
             except FileNotFoundError:
                 needs_reauth = True
             except Exception as e:
@@ -597,6 +745,7 @@ async def main(
                 logger.error("Reauthentication failed.")
                 aborted = True
                 break
+            scraper.esg_account_id = scraper.session.get_primary_account_id()
     finally:
         pbar.close()
 
@@ -617,10 +766,26 @@ async def main(
         if telemetry_path != latest_path:
             logger.info(f"Updated latest telemetry pointer at {latest_path}")
 
+    return _result_payload(
+        status="ok" if not aborted else "aborted",
+        total_targeted=total_targeted,
+        processed_conids=processed_conids,
+        saved_snapshots=saved_snapshots,
+        inserted_events=inserted_events,
+        overwritten_events=overwritten_events,
+        unchanged_events=unchanged_events,
+        series_raw_rows_written=series_raw_rows_written,
+        series_latest_rows_upserted=series_latest_rows_upserted,
+        auth_retries=auth_retries,
+        aborted=aborted,
+        telemetry_path=telemetry_path,
+        latest_telemetry_path=latest_path,
+    )
+
 
 async def run_fundamentals_update(
     limit: int | None = 100, verbose: bool = False, **kwargs: Any
-) -> None:
+) -> dict[str, Any]:
     return await main(limit=limit, verbose=verbose, **kwargs)
 
 

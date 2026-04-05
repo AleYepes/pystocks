@@ -170,6 +170,39 @@ def test_preprocess_snapshot_features_ratio_pivot_is_deterministic_and_flags_dup
     assert row["duplicate_row_count"] == 1
 
 
+def test_preprocess_snapshot_features_drops_storage_only_columns():
+    result = preprocess_snapshot_features(
+        tables={
+            "profile_and_fees": pd.DataFrame(
+                [
+                    {
+                        "conid": "a",
+                        "effective_at": "2026-01-31",
+                        "asset_type": "Equity",
+                        "total_net_assets_value": "$100M",
+                        "storage_only_flag": "ignore-me",
+                    }
+                ]
+            ),
+            "holdings_asset_type": pd.DataFrame(
+                [
+                    {
+                        "conid": "a",
+                        "effective_at": "2026-01-31",
+                        "equity": 1.0,
+                        "storage_only_weight": 0.5,
+                    }
+                ]
+            ),
+        }
+    )
+
+    features = result["features"]
+
+    assert "profile__storage_only_flag" not in features.columns
+    assert "holding_asset__storage_only_weight" not in features.columns
+
+
 def test_build_analysis_panel_uses_processed_snapshot_features():
     snapshot_result = preprocess_snapshot_features(
         tables={

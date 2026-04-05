@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import networkx as nx
 import numpy as np
@@ -96,6 +96,19 @@ def _prepare_analysis_inputs(config, show_progress=False):
     save_price_preprocess_results(price_result, output_dir=config.output_dir)
     snapshot_features = load_snapshot_features(config.sqlite_path)
     return snapshot_features, price_result
+
+
+def _empty_cluster_frame():
+    return _empty_frame(
+        [
+            "factor_id",
+            "sleeve",
+            "cluster_id",
+            "cluster_representative",
+            "cluster_size",
+            "keep_factor",
+        ]
+    )
 
 
 def _build_price_features(prices, show_progress=False):
@@ -648,15 +661,7 @@ def build_factor_returns(panel, prices, config, show_progress=False):
 
 def cluster_factor_returns(factor_returns, factor_meta, config, show_progress=False):
     if factor_returns.empty or factor_meta.empty:
-        return _empty_frame(
-            [
-                "factor_id",
-                "cluster_id",
-                "cluster_representative",
-                "cluster_size",
-                "keep_factor",
-            ]
-        ), pd.DataFrame()
+        return _empty_cluster_frame(), pd.DataFrame()
 
     cluster_rows = []
     keepers = []
@@ -717,6 +722,9 @@ def cluster_factor_returns(factor_returns, factor_meta, config, show_progress=Fa
                     }
                 )
 
+    if not cluster_rows:
+        return _empty_cluster_frame(), pd.DataFrame()
+
     cluster_df = pd.DataFrame(cluster_rows).sort_values(
         ["sleeve", "cluster_id", "factor_id"]
     )
@@ -750,6 +758,28 @@ def _fit_elastic_net(X_train, y_train):
     return typed_pipeline, intercept, coefs
 
 
+def _build_research_windows(
+    panel, reduced_factors
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    if panel.empty or reduced_factors.empty:
+        return []
+
+    rebalance_dates: list[pd.Timestamp] = []
+    for value in sorted(pd.to_datetime(panel["rebalance_date"].dropna().unique())):
+        if pd.isna(value):
+            continue
+        rebalance_dates.append(cast(pd.Timestamp, pd.Timestamp(value)))
+    if len(rebalance_dates) < 2:
+        return []
+
+    first_factor_date = pd.to_datetime(reduced_factors.index.min())
+    windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    for train_end, test_end in zip(rebalance_dates[:-1], rebalance_dates[1:]):
+        if test_end > first_factor_date:
+            windows.append((train_end, test_end))
+    return windows
+
+
 def run_factor_research_data(panel, prices, config, show_progress=False):
     factor_returns, factor_meta, baseline_returns, baseline_members = (
         build_factor_returns(panel, prices, config, show_progress=show_progress)
@@ -772,11 +802,10 @@ def run_factor_research_data(panel, prices, config, show_progress=False):
             "current_betas": empty,
         }
 
-    unique_snapshots = sorted(pd.to_datetime(panel["effective_at"].dropna().unique()))
     research_rows = []
     selection_rows = []
 
-    train_test_windows = list(zip(unique_snapshots[2:-1], unique_snapshots[3:]))
+    train_test_windows = _build_research_windows(panel, reduced_factors)
     sleeve_specs = []
     for sleeve in sorted(panel["sleeve"].dropna().unique()):
         sleeve_conids = sorted(
@@ -870,8 +899,8 @@ def run_factor_research_data(panel, prices, config, show_progress=False):
                             {
                                 "sleeve": sleeve,
                                 "conid": conid,
-                                "train_end": pd.Timestamp(train_end),
-                                "test_end": pd.Timestamp(test_end),
+                                "train_end": train_end,
+                                "test_end": test_end,
                                 "factor_id": factor_id,
                                 "beta": float(beta),
                                 "abs_beta": float(abs(beta)),
@@ -883,8 +912,8 @@ def run_factor_research_data(panel, prices, config, show_progress=False):
                         {
                             "sleeve": sleeve,
                             "conid": conid,
-                            "train_end": pd.Timestamp(train_end),
-                            "test_end": pd.Timestamp(test_end),
+                            "train_end": train_end,
+                            "test_end": test_end,
                             "alpha": float(intercept),
                             "selected_factor_count": int(len(selected)),
                             "selected_factors": "|".join(sorted(selected)),

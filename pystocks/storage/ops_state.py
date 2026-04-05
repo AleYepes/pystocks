@@ -1,4 +1,5 @@
 import sqlite3
+from collections.abc import Iterable
 from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
@@ -39,11 +40,22 @@ def _series_or_default(
     return series.fillna(default)
 
 
-def upsert_instruments_from_products(products_df: pd.DataFrame | None) -> int:
-    if products_df is None or products_df.empty:
+def upsert_instruments_from_products(
+    products_df: pd.DataFrame | Iterable[dict[str, object]] | None,
+) -> int:
+    if products_df is None:
         return 0
 
-    df = products_df.copy()
+    if isinstance(products_df, pd.DataFrame):
+        if products_df.empty:
+            return 0
+        df = products_df.copy()
+    else:
+        records = list(products_df)
+        if not records:
+            return 0
+        df = pd.DataFrame(records)
+
     if "conid" not in df.columns:
         raise ValueError("products_df must include a 'conid' column")
 

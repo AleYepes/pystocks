@@ -1,3 +1,5 @@
+import asyncio
+
 from pystocks.ingest.fundamentals import FundamentalScraper
 
 
@@ -68,3 +70,25 @@ def test_esg_endpoint_reloads_account_id_from_session_state():
     scraper.session.account = "U19746488"
     endpoint_with_account = scraper._build_esg_endpoint("564156940")
     assert endpoint_with_account == "impact/esg/564156940?accounts=U19746488"
+
+
+def test_scrape_conid_returns_structured_skip_payload_for_landing_only_instrument():
+    scraper = FundamentalScraper()
+
+    async def fake_fetch_endpoint(_client, endpoint):
+        assert endpoint == "landing/123?widgets=objective,keyProfile"
+        return {
+            "key_profile": {
+                "data": {
+                    "ticker": "ABC",
+                }
+            }
+        }
+
+    scraper.fetch_endpoint = fake_fetch_endpoint
+
+    result = asyncio.run(scraper.scrape_conid(object(), "123"))
+
+    assert result["conid"] == "123"
+    assert result["_skip_fanout"] is True
+    assert result["_skip_status"] == "skip_missing_total_net_assets"

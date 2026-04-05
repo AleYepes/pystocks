@@ -3,6 +3,7 @@ import pandas as pd
 import pystocks.analysis as analysis_module
 from pystocks.analysis import (
     AnalysisConfig,
+    _build_research_windows,
     build_analysis_panel,
     build_analysis_panel_data,
     cluster_factor_returns,
@@ -253,6 +254,69 @@ def test_cluster_factor_returns_show_progress_emits_stage_label(capsys):
 
     captured = capsys.readouterr()
     assert "Factor clustering" in captured.err
+
+
+def test_cluster_factor_returns_returns_empty_frames_when_history_is_too_short():
+    index = pd.date_range("2026-01-01", periods=2, freq="B")
+    factor_returns = pd.DataFrame(
+        {
+            "equity__raw__ratio_key__price_book": pd.Series(
+                [0.01, 0.02],
+                index=index,
+                dtype=float,
+            )
+        }
+    )
+    factor_meta = pd.DataFrame(
+        [
+            {
+                "factor_id": "equity__raw__ratio_key__price_book",
+                "sleeve": "equity",
+                "family": "ratio_key",
+                "kind": "raw",
+            }
+        ]
+    )
+
+    cluster_df, reduced = cluster_factor_returns(
+        factor_returns,
+        factor_meta,
+        AnalysisConfig(min_train_days=50),
+    )
+
+    assert cluster_df.empty
+    assert list(cluster_df.columns) == [
+        "factor_id",
+        "sleeve",
+        "cluster_id",
+        "cluster_representative",
+        "cluster_size",
+        "keep_factor",
+    ]
+    assert reduced.empty
+
+
+def test_build_research_windows_allows_sparse_histories_without_hidden_gate():
+    panel = pd.DataFrame(
+        [
+            {"rebalance_date": pd.Timestamp("2026-01-31")},
+            {"rebalance_date": pd.Timestamp("2026-02-28")},
+            {"rebalance_date": pd.Timestamp("2026-03-31")},
+        ]
+    )
+    reduced_factors = pd.DataFrame(
+        {
+            "equity__market": [0.01, 0.02],
+        },
+        index=pd.to_datetime(["2026-02-10", "2026-03-05"]),
+    )
+
+    windows = _build_research_windows(panel, reduced_factors)
+
+    assert windows == [
+        (pd.Timestamp("2026-01-31"), pd.Timestamp("2026-02-28")),
+        (pd.Timestamp("2026-02-28"), pd.Timestamp("2026-03-31")),
+    ]
 
 
 def _stub_price_result():

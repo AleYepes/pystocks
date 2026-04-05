@@ -4,7 +4,7 @@ import logging
 import math
 import re
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import zstandard as zstd
@@ -783,6 +783,31 @@ class FundamentalsStore:
             return None
         parsed = _parse_date_candidate(row["max_effective_at"])
         return parsed
+
+    def get_latest_price_series_effective_at_map(self, conids):
+        conid_values = [str(conid) for conid in conids if str(conid).strip()]
+        if not conid_values:
+            return {}
+
+        placeholders = ", ".join(["?"] * len(conid_values))
+        try:
+            with self._get_conn() as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT conid, MAX(effective_at) AS max_effective_at
+                    FROM price_chart_series
+                    WHERE conid IN ({placeholders})
+                    GROUP BY conid
+                    """,
+                    conid_values,
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+
+        out: dict[str, date | None] = {conid: None for conid in conid_values}
+        for row in rows:
+            out[str(row["conid"])] = _parse_date_candidate(row["max_effective_at"])
+        return out
 
     def _resolve_effective_dates(self, endpoint_payloads, _observed_at):
         ratios_payload = endpoint_payloads.get("ratios")

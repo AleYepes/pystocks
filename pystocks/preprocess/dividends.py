@@ -214,9 +214,9 @@ def preprocess_dividend_events(
     merged["implied_yield_vs_previous_price"] = (
         merged["amount"] / merged["previous_clean_price"]
     )
-    merged["trailing_dividend_sum_365d"] = _compute_trailing_dividend_sum(
-        merged.sort_values(["conid", "event_date"]).reset_index(drop=True)
-    )
+    trailing_input = merged.sort_values(["conid", "event_date"]).copy()
+    trailing_values = _compute_trailing_dividend_sum(trailing_input)
+    merged["trailing_dividend_sum_365d"] = trailing_values.reindex(merged.index)
     merged["is_missing_amount"] = merged["amount"].isna()
     merged["is_nonpositive_amount"] = merged["amount"].notna() & (
         merged["amount"] <= 0.0

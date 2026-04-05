@@ -17,10 +17,72 @@ class SnapshotPreprocessConfig:
 
 
 SNAPSHOT_TABLE_COLUMNS = {
-    "profile_and_fees": ["conid", "effective_at"],
-    "holdings_asset_type": ["conid", "effective_at"],
-    "holdings_debtor_quality": ["conid", "effective_at"],
-    "holdings_maturity": ["conid", "effective_at"],
+    "profile_and_fees": [
+        "conid",
+        "effective_at",
+        "asset_type",
+        "classification",
+        "distribution_details",
+        "domicile",
+        "fiscal_date",
+        "fund_category",
+        "fund_management_company",
+        "fund_manager_benchmark",
+        "fund_market_cap_focus",
+        "geographical_focus",
+        "inception_date",
+        "management_approach",
+        "management_expenses",
+        "manager_tenure",
+        "maturity_date",
+        "objective_type",
+        "portfolio_manager",
+        "redemption_charge_actual",
+        "redemption_charge_max",
+        "scheme",
+        "total_expense_ratio",
+        "total_net_assets_value",
+        "total_net_assets_date",
+        "objective",
+        "jap_fund_warning",
+        "theme_name",
+    ],
+    "holdings_asset_type": [
+        "conid",
+        "effective_at",
+        "equity",
+        "cash",
+        "fixed_income",
+        "other",
+    ],
+    "holdings_debtor_quality": [
+        "conid",
+        "effective_at",
+        "quality_aaa",
+        "quality_aa",
+        "quality_a",
+        "quality_bbb",
+        "quality_bb",
+        "quality_b",
+        "quality_ccc",
+        "quality_cc",
+        "quality_c",
+        "quality_d",
+        "quality_not_rated",
+        "quality_not_available",
+    ],
+    "holdings_maturity": [
+        "conid",
+        "effective_at",
+        "maturity_less_than_1_year",
+        "maturity_1_to_3_years",
+        "maturity_3_to_5_years",
+        "maturity_5_to_10_years",
+        "maturity_10_to_20_years",
+        "maturity_20_to_30_years",
+        "maturity_greater_than_30_years",
+        "maturity_other",
+    ],
     "holdings_industry": ["conid", "effective_at", "industry", "value_num"],
     "holdings_currency": ["conid", "effective_at", "code", "currency", "value_num"],
     "holdings_investor_country": [
@@ -44,9 +106,28 @@ SNAPSHOT_TABLE_COLUMNS = {
     ],
     "ratios_dividend": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
     "ratios_zscore": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
-    "dividends_industry_metrics": ["conid", "effective_at"],
-    "morningstar_summary": ["conid", "effective_at"],
-    "lipper_ratings": ["conid", "effective_at", "period", "metric_id", "rating_value"],
+    "dividends_industry_metrics": [
+        "conid",
+        "effective_at",
+        "dividend_yield",
+        "annual_dividend",
+        "dividend_ttm",
+        "dividend_yield_ttm",
+        "currency",
+    ],
+    "morningstar_summary": [
+        "conid",
+        "effective_at",
+        "medalist_rating",
+        "process",
+        "people",
+        "parent",
+        "morningstar_rating",
+        "sustainability_rating",
+        "category",
+        "category_index",
+    ],
+    "lipper_ratings": ["conid", "effective_at", "period", "metric_id", "value_num"],
 }
 
 
@@ -113,9 +194,15 @@ def _normalize_snapshot_frame(df):
 def _normalize_snapshot_tables(tables):
     normalized = {}
     for name in SNAPSHOT_TABLE_COLUMNS:
-        normalized[name] = _normalize_snapshot_frame(
-            tables.get(name, _empty_table(name))
-        )
+        frame = tables.get(name, _empty_table(name))
+        selected_columns = [
+            column for column in SNAPSHOT_TABLE_COLUMNS[name] if column in frame.columns
+        ]
+        if selected_columns:
+            frame = frame.loc[:, selected_columns].copy()
+        else:
+            frame = _empty_table(name)
+        normalized[name] = _normalize_snapshot_frame(frame)
     return normalized
 
 

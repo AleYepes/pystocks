@@ -110,22 +110,92 @@ def load_snapshot_feature_tables(
 ) -> dict[str, pd.DataFrame]:
     return {
         "profile_and_fees": _load_snapshot_frame(
-            "SELECT * FROM profile_and_fees",
+            """
+            SELECT
+                conid,
+                effective_at,
+                asset_type,
+                classification,
+                distribution_details,
+                domicile,
+                fiscal_date,
+                fund_category,
+                fund_management_company,
+                fund_manager_benchmark,
+                fund_market_cap_focus,
+                geographical_focus,
+                inception_date,
+                management_approach,
+                management_expenses,
+                manager_tenure,
+                maturity_date,
+                objective_type,
+                portfolio_manager,
+                redemption_charge_actual,
+                redemption_charge_max,
+                scheme,
+                total_expense_ratio,
+                total_net_assets_value,
+                total_net_assets_date,
+                objective,
+                jap_fund_warning,
+                theme_name
+            FROM profile_and_fees
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),
         "holdings_asset_type": _load_snapshot_frame(
-            "SELECT * FROM holdings_asset_type",
+            """
+            SELECT
+                conid,
+                effective_at,
+                equity,
+                cash,
+                fixed_income,
+                other
+            FROM holdings_asset_type
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),
         "holdings_debtor_quality": _load_snapshot_frame(
-            "SELECT * FROM holdings_debtor_quality",
+            """
+            SELECT
+                conid,
+                effective_at,
+                quality_aaa,
+                quality_aa,
+                quality_a,
+                quality_bbb,
+                quality_bb,
+                quality_b,
+                quality_ccc,
+                quality_cc,
+                quality_c,
+                quality_d,
+                quality_not_rated,
+                quality_not_available
+            FROM holdings_debtor_quality
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),
         "holdings_maturity": _load_snapshot_frame(
-            "SELECT * FROM holdings_maturity",
+            """
+            SELECT
+                conid,
+                effective_at,
+                maturity_less_than_1_year,
+                maturity_1_to_3_years,
+                maturity_3_to_5_years,
+                maturity_5_to_10_years,
+                maturity_10_to_20_years,
+                maturity_20_to_30_years,
+                maturity_greater_than_30_years,
+                maturity_other
+            FROM holdings_maturity
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),
@@ -161,42 +231,112 @@ def load_snapshot_feature_tables(
             tx=tx,
         ),
         "holdings_top10": _load_snapshot_frame(
-            "SELECT * FROM holdings_top10",
+            """
+            SELECT
+                conid,
+                effective_at,
+                name,
+                holding_weight_num
+            FROM holdings_top10
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),
         "ratios_key_ratios": _load_snapshot_frame(
-            "SELECT * FROM ratios_key_ratios",
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                vs_num
+            FROM ratios_key_ratios
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),
         "ratios_financials": _load_snapshot_frame(
-            "SELECT * FROM ratios_financials",
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                vs_num
+            FROM ratios_financials
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),
         "ratios_fixed_income": _load_snapshot_frame(
-            "SELECT * FROM ratios_fixed_income",
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                vs_num
+            FROM ratios_fixed_income
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),
         "ratios_dividend": _load_snapshot_frame(
-            "SELECT * FROM ratios_dividend",
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                vs_num
+            FROM ratios_dividend
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),
         "ratios_zscore": _load_snapshot_frame(
-            "SELECT * FROM ratios_zscore",
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                vs_num
+            FROM ratios_zscore
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),
         "dividends_industry_metrics": _load_snapshot_frame(
-            "SELECT * FROM dividends_industry_metrics",
+            """
+            SELECT
+                conid,
+                effective_at,
+                dividend_yield,
+                annual_dividend,
+                dividend_ttm,
+                dividend_yield_ttm,
+                currency
+            FROM dividends_industry_metrics
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),
         "morningstar_summary": _load_snapshot_frame(
-            "SELECT * FROM morningstar_summary",
+            """
+            SELECT
+                conid,
+                effective_at,
+                medalist_rating,
+                process,
+                people,
+                parent,
+                morningstar_rating,
+                sustainability_rating,
+                category,
+                category_index
+            FROM morningstar_summary
+            """,
             sqlite_path=sqlite_path,
             tx=tx,
         ),

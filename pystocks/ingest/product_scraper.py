@@ -2,7 +2,6 @@ import asyncio
 import logging
 
 import httpx
-import pandas as pd
 from tqdm import tqdm
 
 from ..config import SQLITE_DB_PATH
@@ -78,8 +77,16 @@ async def scrape_ibkr_products():
             logger.error("Direct API access failed")
             return
 
-    df = pd.DataFrame(all_products).drop_duplicates(subset=["conid"], keep="last")
-    n_upserted = upsert_instruments_from_products(df)
+    deduped_products: dict[str, dict] = {}
+    for product in all_products:
+        if not isinstance(product, dict):
+            continue
+        conid = str(product.get("conid") or "").strip()
+        if not conid:
+            continue
+        deduped_products[conid] = product
+
+    n_upserted = upsert_instruments_from_products(deduped_products.values())
     logger.info(
         f"Upserted {n_upserted} products into SQLite products table at {SQLITE_DB_PATH}"
     )

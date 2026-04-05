@@ -145,3 +145,60 @@ def test_preprocess_dividend_events_flags_duplicate_signatures():
         False,
         False,
     ]
+
+
+def test_preprocess_dividend_events_keeps_trailing_sums_aligned_by_conid():
+    dividend_df = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "symbol": "A",
+                "event_date": "2024-01-10",
+                "amount": 1.0,
+                "dividend_currency": "USD",
+                "product_currency": "USD",
+                "description": "Regular Dividend",
+                "event_type": "ACTUAL",
+            },
+            {
+                "conid": "b",
+                "symbol": "B",
+                "event_date": "2024-01-11",
+                "amount": 2.0,
+                "dividend_currency": "USD",
+                "product_currency": "USD",
+                "description": "Regular Dividend",
+                "event_type": "ACTUAL",
+            },
+            {
+                "conid": "a",
+                "symbol": "A",
+                "event_date": "2024-02-10",
+                "amount": 3.0,
+                "dividend_currency": "USD",
+                "product_currency": "USD",
+                "description": "Regular Dividend",
+                "event_type": "ACTUAL",
+            },
+        ]
+    )
+    price_reference = pd.DataFrame(
+        [
+            {"conid": "a", "trade_date": "2024-01-09", "clean_price": 100.0},
+            {"conid": "a", "trade_date": "2024-02-09", "clean_price": 101.0},
+            {"conid": "b", "trade_date": "2024-01-10", "clean_price": 99.0},
+        ]
+    )
+
+    result = preprocess_dividend_events(
+        dividend_df=dividend_df,
+        price_reference=price_reference,
+    )
+    trailing = (
+        result["events"]
+        .sort_values(["conid", "event_date"])
+        .loc[:, ["conid", "event_date", "trailing_dividend_sum_365d"]]
+        .reset_index(drop=True)
+    )
+
+    assert trailing["trailing_dividend_sum_365d"].tolist() == [1.0, 4.0, 2.0]
