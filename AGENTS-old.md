@@ -1,43 +1,36 @@
-# Pystocks
+# Repository Guidelines
 
-This repository is an ETF ingestion and factor analysis pipeline to calculate efficient frontier portfolios.
+## Project Structure & Module Organization
+`pystocks/` is the active codebase. Keep ingestion logic in `pystocks/ingest/` (`session.py`, `product_scraper.py`, `fundamentals.py`), SQLite schema and normalization in `pystocks/storage/`, preprocessing in `pystocks/preprocess/`, and factor research in `pystocks/analysis/`. Tests live under `pystocks/tests/` and mirror the runtime modules: `ingest`, `storage`, `preprocess`, `analysis`, and `diagnostics`. Use `docs/` for operational notes and samples. Treat `src/` and `notebooks/` as historical reference unless a task explicitly targets them.
 
-## Refactoring from the ground up
-- Use `pystocks/` modules as the new production source of truth.
-- Treat `src/` and `notebooks/` as historical/reference unless explicitly requested.
+## Build, Test, and Development Commands
+Install dependencies with `./venv/bin/pip install -r requirements.txt` and hooks with `./venv/bin/pre-commit install`.
 
-## New Execution Flow
-1. Validate/login session: `pystocks/session.py`
-2. Scrape product universe: `pystocks/product_scraper.py`
-3. Scrape fundamentals/series payloads: `pystocks/fundamentals.py`
-4. SQLite materialization + maintenance: `pystocks/fundamentals_store.py`
-5. Series preprocessing:
-   - prices: `pystocks/preprocess/price.py`
-   - dividends: `pystocks/preprocess/dividends.py`
-6. Snapshot-feature preprocessing: `pystocks/preprocess/snapshots.py`
-7. Daily factor analysis: `pystocks/analysis.py`
+Common CLI entrypoints:
+- `./venv/bin/python -m pystocks.cli scrape_products`
+- `./venv/bin/python -m pystocks.cli scrape_fundamentals --limit 100 --conids_file docs/sample_conids.txt`
+- `./venv/bin/python -m pystocks.cli preprocess_prices`
+- `./venv/bin/python -m pystocks.cli preprocess_dividends`
+- `./venv/bin/python -m pystocks.cli preprocess_snapshots`
+- `./venv/bin/python -m pystocks.cli run_analysis`
+- `./venv/bin/python -m pystocks.cli run_pipeline --limit 100`
 
-- Compatibility wrappers may still exist, but new work should land in `pystocks/preprocess/`.
-- One-command full run: `python -m pystocks.cli run_pipeline`
-- Standalone preprocess entrypoints:
-  - `python -m pystocks.cli preprocess_prices`
-  - `python -m pystocks.cli preprocess_dividends`
-  - `python -m pystocks.cli preprocess_snapshots`
+Quality checks:
+- `./venv/bin/python -m ruff check . --fix`
+- `./venv/bin/python -m ruff format .`
+- `./venv/bin/python -m pyright`
+- `./venv/bin/python -m pytest -q`
 
-## Data Semantics
-- Treat raw `*_snapshots` tables as storage metadata, not analysis-ready features.
-- Treat dated endpoint tables keyed by `(conid, effective_at)` as snapshot features for rebalance-date analysis.
-- Treat prices, dividends, and sentiment as series features.
-- Snapshot feature work belongs in `pystocks/preprocess/snapshots.py`, not in `fundamentals_store.py` unless the task is about storage normalization.
+Run `./venv/bin/python -m pystocks.cli refresh_fundamentals_views` after storage or SQLite view changes.
 
-## Code Guidelines
-- Do not write comments unless the code requires critical info that cannot be easily infered.
-- Do not add backfill or migration logic unless explicitly requested.
-- Prefer SQLite + parquet flows over CSV duplication.
-- Prefer extending `pystocks/preprocess/` over adding new root-level preprocessing scripts.
-- Keep price, dividend, sentiment, and snapshot preprocessing concerns separate unless the task explicitly requires integration.
-- Never run destructive git commands unless explicitly requested.
+## Coding Style & Naming Conventions
+Target Python 3.12. Use 4-space indentation, double quotes, and snake_case for modules, functions, variables, and test names. Let Ruff handle formatting and import sorting; do not hand-format around it. Prefer extending the existing pipeline modules over adding root-level scripts. Keep price, dividend, snapshot, and analysis responsibilities separate unless the task explicitly requires integration.
 
-## Validation Before Handoff
-- Run: `./venv/bin/python -m pytest -q`
-- If storage/view logic changed, run: `python -m pystocks.cli refresh_fundamentals_views`
+## Testing Guidelines
+Use `pytest`. Add tests near the affected area, for example `pystocks/tests/storage/test_holdings_storage.py`. Name files `test_*.py` and prefer behavior-focused test names. Cover schema shape, effective-date rules, idempotency, and pipeline wiring when touching storage or CLI flow.
+
+## Commit & Pull Request Guidelines
+Recent commits use short conventional prefixes such as `refactor:`, `build:`, `docs:`, and `chore:`. Keep each commit scoped to one concern and write an imperative summary. PRs should state which pipeline stage changed, note schema or artifact impacts, and list the validation commands you ran.
+
+## Data & Architecture Notes
+The canonical store is `data/pystocks.sqlite`. Raw payload blobs are retained, but analysis should use normalized endpoint tables and preprocess outputs. Effective dates are currently anchored from `ratios.as_of_date`; do not add migrations or backfill logic unless explicitly requested.

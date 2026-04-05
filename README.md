@@ -2,6 +2,9 @@
 
 ETF factor analysis pipeline to calculate efficient frontier portfolios.
 
+`pystocks/` is the active production codebase. Treat `src/` and `notebooks/` as
+historical/reference material unless a task explicitly targets them.
+
 ## Current runtime scope
 - Auth/session: `pystocks/ingest/session.py`
 - Product universe scrape: `pystocks/ingest/product_scraper.py`
@@ -57,6 +60,12 @@ Run the code quality stack locally before committing:
 `ruff` is the formatter, linter, and import sorter. `pyright` handles fast static type checking for the active `pystocks/` codebase.
 Pyright is intentionally scoped away from a small set of existing pandas-heavy modules with known type debt so the check is enforceable in day-to-day development.
 
+If you change storage or SQLite-backed analysis outputs, also run:
+
+```bash
+./venv/bin/python -m pystocks.cli refresh_fundamentals_views
+```
+
 ## Data layout
 - Canonical DB: `data/pystocks.sqlite`
 - Telemetry JSON artifacts: `data/research/fundamentals_run_telemetry_*.json`
@@ -68,3 +77,9 @@ Pyright is intentionally scoped away from a small set of existing pandas-heavy m
 - Raw payload blob table (`raw_payload_blobs`) keyed by payload hash
 - JSON telemetry is file-based only; ingest telemetry is not persisted in SQLite
 - Series tables are endpoint-specific; use the schema as the source of truth rather than assuming every endpoint has both `*_series_raw` and `*_series_latest`
+
+## Data semantics
+- Effective dates for persisted endpoint snapshots are currently anchored from `ratios.as_of_date`.
+- Raw `*_snapshots` tables are storage metadata, not analysis-ready features.
+- Snapshot features are rebuilt from normalized SQLite tables in `pystocks/preprocess/snapshots.py`.
+- Price, dividend, sentiment, and ownership histories are handled as series data; analysis currently consumes price and snapshot preprocess outputs directly.
