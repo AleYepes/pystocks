@@ -51,6 +51,12 @@ class PyStocksCLI:
 
         return run_snapshot_preprocess()
 
+    def refresh_supplementary_data(self) -> Any:
+        """Fetch and preprocess supplementary macro and risk-free datasets."""
+        from .ingest.supplementary import refresh_supplementary_data
+
+        return refresh_supplementary_data()
+
     def build_analysis_panel(self, show_progress: bool = True) -> Any:
         """Build the point-in-time analysis snapshot panel."""
         from .analysis import build_analysis_panel
@@ -59,6 +65,12 @@ class PyStocksCLI:
 
     def run_factor_research(self, show_progress: bool = True) -> Any:
         """Build factor returns, run sleeve research, and persist outputs."""
+        from .analysis import run_factor_research
+
+        return run_factor_research(show_progress=show_progress)
+
+    def run_walk_forward_research(self, show_progress: bool = True) -> Any:
+        """Run the full walk-forward factor research pipeline."""
         from .analysis import run_factor_research
 
         return run_factor_research(show_progress=show_progress)

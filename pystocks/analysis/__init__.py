@@ -1,11 +1,13 @@
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportOperatorIssue=false, reportGeneralTypeIssues=false
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import networkx as nx
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import ElasticNetCV, LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -18,6 +20,12 @@ from ..preprocess.price import (
 )
 from ..preprocess.snapshots import (
     load_snapshot_features as load_preprocessed_snapshot_features,
+)
+from ..preprocess.supplementary import (
+    load_risk_free_daily as load_preprocessed_risk_free_daily,
+)
+from ..preprocess.supplementary import (
+    load_world_bank_country_features as load_preprocessed_world_bank_country_features,
 )
 from ..progress import make_progress_bar, track_progress
 from ..storage.txn import transaction
@@ -38,6 +46,49 @@ class AnalysisConfig:
     selection_frequency_threshold: float = 0.15
     min_selection_count: int = 2
     outlier_z_threshold: float = 50.0
+    training_window_years: tuple[int, ...] = (3, 4)
+    walk_forward_step_months: int = 12
+    use_risk_free_excess: bool = True
+    require_supplementary_data: bool = True
+    include_macro_features: bool = True
+    include_dynamic_fundamental_trends: bool = True
+    return_alignment_max_gap_days: int = 0
+    sparse_feature_max_ratio: float = 0.995
+
+
+SUPERSECTOR_MAP = {
+    "defensive": [
+        "industry__consumer_non_cyclicals",
+        "industry__utilities",
+        "industry__healthcare",
+        "industry__telecommunication_services",
+        "industry__academic_educational_services",
+    ],
+    "cyclical": [
+        "industry__technology",
+        "industry__consumer_cyclicals",
+        "industry__industrials",
+        "industry__financials",
+        "industry__real_estate",
+    ],
+    "commodities": [
+        "industry__basic_materials",
+        "industry__energy",
+    ],
+}
+
+MACRO_FEATURE_COLUMNS = [
+    "population_level",
+    "population_growth",
+    "gdp_pcap_level",
+    "gdp_pcap_growth",
+    "economic_output_gdp_level",
+    "economic_output_gdp_growth",
+    "foreign_direct_investment_level",
+    "foreign_direct_investment_growth",
+    "share_trade_volume_level",
+    "share_trade_volume_growth",
+]
 
 
 def _empty_frame(columns):
@@ -73,7 +124,7 @@ def _series_or_zero(df, column):
         return pd.Series(
             pd.to_numeric(df[column], errors="coerce"), index=df.index
         ).fillna(0.0)
-    return pd.Series(0.0, index=df.index)
+    return pd.Series(0.0, index=df.index, dtype=float)
 
 
 def _text_series(df, column):
@@ -82,8 +133,55 @@ def _text_series(df, column):
     return pd.Series("", index=df.index, dtype=object)
 
 
+def _safe_numeric(df, column):
+    if column not in df.columns:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    return pd.to_numeric(df[column], errors="coerce")
+
+
+def _mean_if_present(df, columns):
+    present = [col for col in columns if col in df.columns]
+    if not present:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    return df[present].apply(pd.to_numeric, errors="coerce").mean(axis=1, skipna=True)
+
+
+def _sum_if_present(df, columns):
+    present = [col for col in columns if col in df.columns]
+    if not present:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    return df[present].apply(pd.to_numeric, errors="coerce").sum(axis=1, skipna=True)
+
+
+def _rolling_compound(values: pd.Series, window: int, min_periods: int) -> pd.Series:
+    return (1.0 + values.fillna(0.0)).rolling(window, min_periods=min_periods).apply(
+        np.prod, raw=True
+    ) - 1.0
+
+
+def _bounded_align_return_frame(returns_wide, max_gap_days):
+    if returns_wide.empty or int(max_gap_days) <= 0:
+        return returns_wide
+    aligned = returns_wide.copy()
+    for column in aligned.columns:
+        aligned[column] = aligned[column].interpolate(
+            method="linear",
+            limit=int(max_gap_days),
+            limit_area="inside",
+        )
+    return aligned
+
+
 def load_snapshot_features(sqlite_path=SQLITE_DB_PATH):
     return load_preprocessed_snapshot_features(sqlite_path=sqlite_path)
+
+
+def load_risk_free_daily(sqlite_path=SQLITE_DB_PATH):
+    return load_preprocessed_risk_free_daily(sqlite_path=sqlite_path)
+
+
+def load_world_bank_country_features(sqlite_path=SQLITE_DB_PATH):
+    return load_preprocessed_world_bank_country_features(sqlite_path=sqlite_path)
 
 
 def _prepare_analysis_inputs(config, show_progress=False):
@@ -95,7 +193,20 @@ def _prepare_analysis_inputs(config, show_progress=False):
     )
     save_price_preprocess_results(price_result, output_dir=config.output_dir)
     snapshot_features = load_snapshot_features(config.sqlite_path)
-    return snapshot_features, price_result
+    risk_free_daily = load_risk_free_daily(config.sqlite_path)
+    world_bank_country_features = load_world_bank_country_features(config.sqlite_path)
+
+    if config.require_supplementary_data:
+        if config.use_risk_free_excess and risk_free_daily.empty:
+            raise RuntimeError(
+                "Missing supplementary risk-free data. Run refresh_supplementary_data first."
+            )
+        if config.include_macro_features and world_bank_country_features.empty:
+            raise RuntimeError(
+                "Missing supplementary World Bank features. Run refresh_supplementary_data first."
+            )
+
+    return snapshot_features, price_result, risk_free_daily, world_bank_country_features
 
 
 def _empty_cluster_frame():
@@ -119,7 +230,7 @@ def _build_price_features(prices, show_progress=False):
     clean = clean.sort_values(["conid", "trade_date"])
     frames = []
     group_count = int(clean["conid"].nunique())
-    for conid, group in track_progress(
+    for _, group in track_progress(
         clean.groupby("conid"),
         show_progress=show_progress,
         total=group_count,
@@ -128,41 +239,52 @@ def _build_price_features(prices, show_progress=False):
         leave=False,
     ):
         g = group.copy()
+        returns = pd.to_numeric(g["clean_return"], errors="coerce")
         g["price_feature__momentum_21"] = g["clean_price"].pct_change(21)
         g["price_feature__momentum_63"] = g["clean_price"].pct_change(63)
         g["price_feature__momentum_126"] = g["clean_price"].pct_change(126)
         g["price_feature__momentum_252"] = g["clean_price"].pct_change(252)
-        g["price_feature__volatility_21"] = g["clean_return"].rolling(
+        g["price_feature__momentum_3mo"] = returns.rolling(63, min_periods=21).mean()
+        g["price_feature__momentum_6mo"] = returns.rolling(126, min_periods=42).mean()
+        g["price_feature__momentum_1y"] = returns.rolling(252, min_periods=84).mean()
+        g["price_feature__rs_3mo"] = _rolling_compound(returns, 63, 21)
+        g["price_feature__rs_6mo"] = _rolling_compound(returns, 126, 42)
+        g["price_feature__rs_1y"] = _rolling_compound(returns, 252, 84)
+        g["price_feature__volatility_21"] = returns.rolling(
             21, min_periods=10
         ).std() * np.sqrt(252.0)
-        g["price_feature__volatility_63"] = g["clean_return"].rolling(
+        g["price_feature__volatility_63"] = returns.rolling(
             63, min_periods=21
         ).std() * np.sqrt(252.0)
-        g["price_feature__downside_volatility_63"] = g["clean_return"].where(
-            g["clean_return"] < 0.0
+        g["price_feature__downside_volatility_63"] = returns.where(
+            returns < 0.0
         ).rolling(63, min_periods=21).std() * np.sqrt(252.0)
         rolling_peak = g["clean_price"].rolling(126, min_periods=21).max()
         drawdown = g["clean_price"] / rolling_peak - 1.0
         g["price_feature__max_drawdown_126"] = drawdown.rolling(
             126, min_periods=21
         ).min()
-        frames.append(
-            g[
-                [
-                    "conid",
-                    "trade_date",
-                    "price_feature__momentum_21",
-                    "price_feature__momentum_63",
-                    "price_feature__momentum_126",
-                    "price_feature__momentum_252",
-                    "price_feature__volatility_21",
-                    "price_feature__volatility_63",
-                    "price_feature__downside_volatility_63",
-                    "price_feature__max_drawdown_126",
-                ]
-            ]
-        )
-    return pd.concat(frames, ignore_index=True)
+        frames.append(g)
+
+    price_feature_columns = [
+        "conid",
+        "trade_date",
+        "price_feature__momentum_21",
+        "price_feature__momentum_63",
+        "price_feature__momentum_126",
+        "price_feature__momentum_252",
+        "price_feature__momentum_3mo",
+        "price_feature__momentum_6mo",
+        "price_feature__momentum_1y",
+        "price_feature__rs_3mo",
+        "price_feature__rs_6mo",
+        "price_feature__rs_1y",
+        "price_feature__volatility_21",
+        "price_feature__volatility_63",
+        "price_feature__downside_volatility_63",
+        "price_feature__max_drawdown_126",
+    ]
+    return pd.concat(frames, ignore_index=True)[price_feature_columns]
 
 
 def _build_rebalance_dates(snapshot_features, prices, freq):
@@ -193,70 +315,132 @@ def _merge_price_features(latest, price_features):
         right_on="trade_date",
         direction="backward",
     )
-    merged = merged.rename(columns={"trade_date": "feature_trade_date"})
-    return merged
+    return merged.rename(columns={"trade_date": "feature_trade_date"})
 
 
-def build_analysis_panel_data(
-    snapshot_features, price_result, config, show_progress=False
-):
-    prices = price_result["prices"]
-    eligibility = price_result["eligibility"]
-    price_features = _build_price_features(prices, show_progress=show_progress)
-    rebalance_dates = _build_rebalance_dates(
-        snapshot_features, prices, config.rebalance_freq
-    )
-    eligible_conids = set(eligibility.loc[eligibility["eligible"], "conid"].astype(str))
+def _add_dynamic_fundamental_features(df):
+    out = df.copy()
 
-    panels = []
-    for rebalance_date in track_progress(
-        rebalance_dates,
-        show_progress=show_progress,
-        total=len(rebalance_dates),
-        desc="Analysis rebalance dates",
-        unit="date",
-        leave=False,
-    ):
-        eligible_snapshots = snapshot_features.loc[
-            snapshot_features["effective_at"] <= rebalance_date
-        ]
-        if eligible_snapshots.empty:
-            continue
-        latest = (
-            eligible_snapshots.sort_values(["conid", "effective_at"])
-            .groupby("conid", as_index=False)
-            .tail(1)
-            .copy()
+    def _slope(col_a, col_b, time_a, time_b):
+        if col_a not in out.columns or col_b not in out.columns:
+            return pd.Series(np.nan, index=out.index, dtype=float)
+        return (
+            pd.to_numeric(out[col_a], errors="coerce")
+            - pd.to_numeric(out[col_b], errors="coerce")
+        ) / float(time_a - time_b)
+
+    slope_specs = [
+        (
+            "trend__eps_growth_slope",
+            "ratio_key__eps_growth_1yr",
+            "ratio_key__eps_growth_5yr",
+            1,
+            5,
+        ),
+        (
+            "trend__return_on_assets_slope",
+            "ratio_key__return_on_assets_1yr",
+            "ratio_key__return_on_assets_3yr",
+            1,
+            3,
+        ),
+        (
+            "trend__return_on_capital_slope",
+            "ratio_key__return_on_capital",
+            "ratio_key__return_on_capital_3yr",
+            1,
+            3,
+        ),
+        (
+            "trend__return_on_equity_slope",
+            "ratio_key__return_on_equity_1yr",
+            "ratio_key__return_on_equity_3yr",
+            1,
+            3,
+        ),
+        (
+            "trend__return_on_investment_slope",
+            "ratio_key__return_on_investment_1yr",
+            "ratio_key__return_on_investment_3yr",
+            1,
+            3,
+        ),
+    ]
+    for new_col, col_a, col_b, time_a, time_b in slope_specs:
+        out[new_col] = _slope(col_a, col_b, time_a, time_b)
+
+    if {
+        "ratio_key__eps_growth_1yr",
+        "ratio_key__eps_growth_3yr",
+        "ratio_key__eps_growth_5yr",
+    }.issubset(out.columns):
+        slope_1_3 = _slope(
+            "ratio_key__eps_growth_1yr", "ratio_key__eps_growth_3yr", 1, 3
         )
-        latest = latest.loc[latest["conid"].isin(eligible_conids)].copy()
+        slope_3_5 = _slope(
+            "ratio_key__eps_growth_3yr", "ratio_key__eps_growth_5yr", 3, 5
+        )
+        out["trend__eps_growth_second_derivative"] = (slope_1_3 - slope_3_5) / -2.0
+
+    return out
+
+
+def _add_supersector_features(df):
+    out = df.copy()
+    for name, columns in SUPERSECTOR_MAP.items():
+        present = [column for column in columns if column in out.columns]
+        if present:
+            out[f"supersector__{name}"] = (
+                out[present].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+            )
+    return out
+
+
+def _add_macro_features(panel, world_bank_country_features):
+    if panel.empty:
+        return panel.copy()
+    if world_bank_country_features is None or world_bank_country_features.empty:
+        return panel.copy()
+
+    out = panel.copy()
+    country_columns = [col for col in out.columns if col.startswith("country__")]
+    if not country_columns:
+        return out
+
+    world_bank = world_bank_country_features.copy()
+    world_bank["economy_code"] = world_bank["economy_code"].astype(str).str.upper()
+    world_bank["effective_at"] = pd.to_datetime(world_bank["effective_at"])
+
+    enriched_parts = []
+    for rebalance_date, panel_slice in out.groupby("rebalance_date", sort=True):
+        latest = (
+            world_bank.loc[world_bank["effective_at"] <= rebalance_date]
+            .sort_values(["economy_code", "effective_at"])
+            .groupby("economy_code", as_index=False)
+            .tail(1)
+        )
         if latest.empty:
+            enriched_parts.append(panel_slice)
             continue
-        latest["rebalance_date"] = rebalance_date
-        latest["snapshot_age_days"] = (rebalance_date - latest["effective_at"]).dt.days
-        latest = latest.merge(eligibility, on="conid", how="left")
-        latest = _merge_price_features(latest, price_features)
-        panels.append(latest)
 
-    if not panels:
-        return pd.DataFrame()
+        latest = latest.set_index("economy_code")
+        work = panel_slice.copy()
+        for macro_column in MACRO_FEATURE_COLUMNS:
+            weighted = pd.Series(0.0, index=work.index, dtype=float)
+            for country_column in country_columns:
+                code = country_column.replace("country__", "").upper()
+                if code not in latest.index or macro_column not in latest.columns:
+                    continue
+                weight = pd.to_numeric(work[country_column], errors="coerce").fillna(
+                    0.0
+                )
+                value = pd.to_numeric(latest.loc[code, macro_column], errors="coerce")
+                if np.isscalar(value):
+                    weighted = weighted.add(weight * float(value), fill_value=0.0)
+            work[f"macro__{macro_column}"] = weighted
+        enriched_parts.append(work)
 
-    panel = pd.concat(panels, ignore_index=True)
-    panel = _add_composite_features(panel)
-    return panel.sort_values(["rebalance_date", "conid"]).reset_index(drop=True)
-
-
-def _mean_if_present(df, columns):
-    present = [col for col in columns if col in df.columns]
-    if not present:
-        return pd.Series(np.nan, index=df.index)
-    return df[present].mean(axis=1, skipna=True)
-
-
-def _sum_if_present(df, columns):
-    present = [col for col in columns if col in df.columns]
-    if not present:
-        return pd.Series(np.nan, index=df.index)
-    return df[present].sum(axis=1, skipna=True)
+    return pd.concat(enriched_parts, ignore_index=True)
 
 
 def _add_composite_features(panel):
@@ -295,9 +479,12 @@ def _add_composite_features(panel):
     df["composite__momentum"] = _mean_if_present(
         df,
         [
-            "price_feature__momentum_63",
-            "price_feature__momentum_126",
-            "price_feature__momentum_252",
+            "price_feature__momentum_3mo",
+            "price_feature__momentum_6mo",
+            "price_feature__momentum_1y",
+            "price_feature__rs_3mo",
+            "price_feature__rs_6mo",
+            "price_feature__rs_1y",
         ],
     )
     df["composite__income"] = _mean_if_present(
@@ -353,17 +540,93 @@ def _add_composite_features(panel):
     return df
 
 
-def _build_returns_wide(prices):
+def build_analysis_panel_data(
+    snapshot_features,
+    price_result,
+    config,
+    world_bank_country_features=None,
+    show_progress=False,
+):
+    prices = price_result["prices"]
+    eligibility = price_result["eligibility"]
+    price_features = _build_price_features(prices, show_progress=show_progress)
+    rebalance_dates = _build_rebalance_dates(
+        snapshot_features, prices, config.rebalance_freq
+    )
+    eligible_conids = set(eligibility.loc[eligibility["eligible"], "conid"].astype(str))
+
+    if (
+        config.require_supplementary_data
+        and config.include_macro_features
+        and (world_bank_country_features is None or world_bank_country_features.empty)
+    ):
+        raise RuntimeError(
+            "Missing supplementary World Bank features. Run refresh_supplementary_data first."
+        )
+
+    panels = []
+    for rebalance_date in track_progress(
+        rebalance_dates,
+        show_progress=show_progress,
+        total=len(rebalance_dates),
+        desc="Analysis rebalance dates",
+        unit="date",
+        leave=False,
+    ):
+        eligible_snapshots = snapshot_features.loc[
+            snapshot_features["effective_at"] <= rebalance_date
+        ]
+        if eligible_snapshots.empty:
+            continue
+        latest = (
+            eligible_snapshots.sort_values(["conid", "effective_at"])
+            .groupby("conid", as_index=False)
+            .tail(1)
+            .copy()
+        )
+        latest = latest.loc[latest["conid"].isin(eligible_conids)].copy()
+        if latest.empty:
+            continue
+        latest["rebalance_date"] = rebalance_date
+        latest["snapshot_age_days"] = (rebalance_date - latest["effective_at"]).dt.days
+        latest = latest.merge(eligibility, on="conid", how="left")
+        latest = _merge_price_features(latest, price_features)
+        panels.append(latest)
+
+    if not panels:
+        return pd.DataFrame()
+
+    panel = pd.concat(panels, ignore_index=True)
+    panel = _add_composite_features(panel)
+    if config.include_dynamic_fundamental_trends:
+        panel = _add_dynamic_fundamental_features(panel)
+    panel = _add_supersector_features(panel)
+    if config.include_macro_features:
+        panel = _add_macro_features(panel, world_bank_country_features)
+    return panel.sort_values(["rebalance_date", "conid"]).reset_index(drop=True)
+
+
+def _build_returns_wide(prices, max_gap_days=0):
     clean = prices.loc[
         prices["is_clean_price"], ["conid", "trade_date", "clean_return"]
     ].copy()
     if clean.empty:
         return pd.DataFrame()
-    return (
+    wide = (
         clean.pivot(index="trade_date", columns="conid", values="clean_return")
         .sort_index()
         .sort_index(axis=1)
     )
+    return _bounded_align_return_frame(wide, max_gap_days)
+
+
+def _build_risk_free_series(risk_free_daily):
+    if risk_free_daily is None or risk_free_daily.empty:
+        return pd.Series(dtype=float, name="daily_nominal_rate")
+    rf = risk_free_daily.copy()
+    rf["trade_date"] = pd.to_datetime(rf["trade_date"])
+    rf["daily_nominal_rate"] = pd.to_numeric(rf["daily_nominal_rate"], errors="coerce")
+    return rf.set_index("trade_date")["daily_nominal_rate"].sort_index()
 
 
 def _normalized_weights(values):
@@ -378,31 +641,46 @@ def _normalized_weights(values):
     return series / total
 
 
-def _select_factor_columns(panel_slice, sleeve):
+def _drop_uninformative_factor_columns(panel_slice, candidate_columns, config):
+    keep = []
+    for column in candidate_columns:
+        values = pd.to_numeric(panel_slice[column], errors="coerce")
+        if values.notna().sum() == 0:
+            continue
+        if values.nunique(dropna=True) <= 1:
+            continue
+        nonzero_ratio = float(values.fillna(0.0).eq(0.0).mean())
+        if nonzero_ratio >= config.sparse_feature_max_ratio:
+            continue
+        keep.append(column)
+    return keep
+
+
+def _select_factor_columns(panel_slice, sleeve, config):
     numeric_cols = panel_slice.select_dtypes(include=[np.number, bool]).columns.tolist()
     excluded = {
         "valid_rows",
         "total_rows",
         "expected_business_days",
         "eligible",
+        "snapshot_age_days",
+        "max_internal_gap_days",
+        "feature_year",
+        "source_count",
     }
-    factor_cols = []
+    candidates = []
     for col in numeric_cols:
-        if col in excluded:
+        if col in excluded or col.startswith("beta__"):
             continue
         if (
             col.startswith("holding_maturity__")
             or col.startswith("holding_quality__")
             or col.startswith("debt_type__")
             or col.startswith("ratio_fixed_income__")
-        ):
-            if sleeve != "bond":
-                continue
-        if col.startswith("composite__") and col.endswith("concentration"):
-            factor_cols.append(col)
+        ) and sleeve != "bond":
             continue
-        factor_cols.append(col)
-    return factor_cols
+        candidates.append(col)
+    return _drop_uninformative_factor_columns(panel_slice, candidates, config)
 
 
 def _factor_direction(column):
@@ -426,6 +704,8 @@ def _factor_family(column):
 
 
 def _factor_kind(column):
+    if column.startswith("benchmark__"):
+        return "benchmark"
     return "composite" if column.startswith("composite__") else "raw"
 
 
@@ -447,10 +727,6 @@ def _build_long_short_series(
     if len(set(long_ids) & set(short_ids)) > 0:
         return None
 
-    available_ids = [conid for conid in returns_frame.columns if conid in valid.index]
-    if len(available_ids) < min_assets:
-        return None
-
     long_weights = _normalized_weights(size_weights.reindex(long_ids))
     short_weights = _normalized_weights(size_weights.reindex(short_ids))
     long_returns = (
@@ -464,6 +740,57 @@ def _build_long_short_series(
         .dot(short_weights)
     )
     return long_returns - short_returns
+
+
+def _build_benchmark_factors(
+    sleeve_slice,
+    interval_returns,
+    risk_free_series,
+    config,
+):
+    size_weights = sleeve_slice.set_index("conid")["profile__total_net_assets_num"]
+    benchmark_map = {}
+
+    market_weights = _normalized_weights(size_weights.reindex(sleeve_slice["conid"]))
+    market = (
+        interval_returns.reindex(columns=list(market_weights.index))
+        .fillna(0.0)
+        .dot(market_weights)
+    )
+    if not risk_free_series.empty and config.use_risk_free_excess:
+        market = market.subtract(risk_free_series.reindex(market.index).fillna(0.0))
+    benchmark_map["benchmark__market_excess"] = market
+
+    size_signal = -pd.to_numeric(
+        sleeve_slice.set_index("conid")["profile__total_net_assets_num"],
+        errors="coerce",
+    )
+    smb = _build_long_short_series(
+        size_signal,
+        interval_returns,
+        size_weights,
+        1.0,
+        config.quantile,
+        config.min_assets_per_factor,
+    )
+    if smb is not None:
+        benchmark_map["benchmark__smb"] = smb
+
+    if "composite__value" in sleeve_slice.columns:
+        hml = _build_long_short_series(
+            pd.to_numeric(
+                sleeve_slice.set_index("conid")["composite__value"], errors="coerce"
+            ),
+            interval_returns,
+            size_weights,
+            1.0,
+            config.quantile,
+            config.min_assets_per_factor,
+        )
+        if hml is not None:
+            benchmark_map["benchmark__hml"] = hml
+
+    return benchmark_map
 
 
 def _select_baseline_bond_members(panel_slice):
@@ -561,15 +888,22 @@ def _build_baseline_returns(panel, returns_wide, show_progress=False):
     return baseline, pd.DataFrame(membership_rows)
 
 
-def build_factor_returns(panel, prices, config, show_progress=False):
-    returns_wide = _build_returns_wide(prices)
+def build_factor_returns(
+    panel,
+    prices,
+    risk_free_daily,
+    config,
+    show_progress=False,
+):
+    returns_wide = _build_returns_wide(prices, config.return_alignment_max_gap_days)
+    risk_free_series = _build_risk_free_series(risk_free_daily)
     baseline_returns, baseline_members = _build_baseline_returns(
         panel, returns_wide, show_progress=show_progress
     )
     if panel.empty or returns_wide.empty:
         return pd.DataFrame(), pd.DataFrame(), baseline_returns, baseline_members
 
-    factor_map = {}
+    factor_map: dict[str, list[pd.Series]] = {}
     metadata = {}
     rebalance_dates = sorted(pd.to_datetime(panel["rebalance_date"]).unique())
 
@@ -588,43 +922,45 @@ def build_factor_returns(panel, prices, config, show_progress=False):
         if interval_returns.empty:
             continue
 
+        interval_risk_free = risk_free_series.loc[
+            (risk_free_series.index > start) & (risk_free_series.index <= end)
+        ]
         panel_slice = panel.loc[panel["rebalance_date"] == start].copy()
         for sleeve in sorted(panel_slice["sleeve"].dropna().unique()):
             sleeve_slice = panel_slice.loc[panel_slice["sleeve"] == sleeve].copy()
             if len(sleeve_slice) < config.min_assets_per_factor:
                 continue
 
+            benchmark_factors = _build_benchmark_factors(
+                sleeve_slice=sleeve_slice,
+                interval_returns=interval_returns,
+                risk_free_series=interval_risk_free,
+                config=config,
+            )
+            for factor_key, series in benchmark_factors.items():
+                factor_id = f"{sleeve}__{factor_key}"
+                factor_map.setdefault(factor_id, []).append(series.rename(factor_id))
+                metadata[factor_id] = {
+                    "factor_id": factor_id,
+                    "sleeve": sleeve,
+                    "family": factor_key.split("__", 1)[-1],
+                    "kind": "benchmark",
+                    "source_column": None,
+                }
+
             size_weights = sleeve_slice.set_index("conid")[
                 "profile__total_net_assets_num"
             ]
-            market_weights = _normalized_weights(
-                size_weights.reindex(sleeve_slice["conid"])
-            )
-            market_series = (
-                interval_returns.reindex(columns=list(market_weights.index))
-                .fillna(0.0)
-                .dot(market_weights)
-            )
-            market_factor_id = f"{sleeve}__market"
-            factor_map.setdefault(market_factor_id, []).append(
-                market_series.rename(market_factor_id)
-            )
-            metadata[market_factor_id] = {
-                "factor_id": market_factor_id,
-                "sleeve": sleeve,
-                "family": "market",
-                "kind": "market",
-                "source_column": None,
-            }
-
-            for column in _select_factor_columns(sleeve_slice, sleeve):
+            for column in _select_factor_columns(sleeve_slice, sleeve, config):
                 coverage = sleeve_slice[column].notna().mean()
                 if coverage < config.min_factor_coverage:
                     continue
 
                 factor_id = f"{sleeve}__{_factor_kind(column)}__{column}"
                 series = _build_long_short_series(
-                    sleeve_slice.set_index("conid")[column],
+                    pd.to_numeric(
+                        sleeve_slice.set_index("conid")[column], errors="coerce"
+                    ),
                     interval_returns,
                     size_weights,
                     _factor_direction(column),
@@ -702,7 +1038,7 @@ def cluster_factor_returns(factor_returns, factor_meta, config, show_progress=Fa
             )
             member_meta["kind_priority"] = (
                 member_meta["kind"]
-                .map({"composite": 0, "market": 1, "raw": 2})
+                .map({"composite": 0, "benchmark": 1, "raw": 2})
                 .fillna(3)
             )
             representative = member_meta.sort_values(
@@ -743,51 +1079,133 @@ def _fit_elastic_net(X_train, y_train):
     pipeline = Pipeline(
         [
             ("scaler", StandardScaler()),
-            (
-                "enet",
-                ElasticNetCV(**elastic_net_params),
-            ),
+            ("enet", ElasticNetCV(**elastic_net_params)),
         ]
     )
-    typed_pipeline = pipeline
-    typed_pipeline.fit(X_train, y_train)
-    scaler: Any = typed_pipeline.named_steps["scaler"]
-    model: Any = typed_pipeline.named_steps["enet"]
+    pipeline.fit(X_train, y_train)
+    scaler: Any = pipeline.named_steps["scaler"]
+    model: Any = pipeline.named_steps["enet"]
     coefs = model.coef_ / scaler.scale_
     intercept = model.intercept_ - np.dot(coefs, scaler.mean_)
-    return typed_pipeline, intercept, coefs
+    return pipeline, model, intercept, coefs
 
 
 def _build_research_windows(
-    panel, reduced_factors
-) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    panel, reduced_factors, config
+) -> list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, int]]:
     if panel.empty or reduced_factors.empty:
         return []
 
-    rebalance_dates: list[pd.Timestamp] = []
-    for value in sorted(pd.to_datetime(panel["rebalance_date"].dropna().unique())):
-        if pd.isna(value):
-            continue
-        rebalance_dates.append(cast(pd.Timestamp, pd.Timestamp(value)))
+    rebalance_dates = sorted(pd.to_datetime(panel["rebalance_date"].dropna().unique()))
     if len(rebalance_dates) < 2:
         return []
-
     first_factor_date = pd.to_datetime(reduced_factors.index.min())
-    windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+
+    windows = []
+    last_step_end = None
     for train_end, test_end in zip(rebalance_dates[:-1], rebalance_dates[1:]):
-        if test_end > first_factor_date:
-            windows.append((train_end, test_end))
+        if test_end <= first_factor_date:
+            continue
+        if last_step_end is not None:
+            month_gap = (test_end.year - last_step_end.year) * 12 + (
+                test_end.month - last_step_end.month
+            )
+            if month_gap < config.walk_forward_step_months:
+                continue
+        for years in sorted(set(int(year) for year in config.training_window_years)):
+            train_start = pd.Timestamp(train_end) - pd.DateOffset(years=years)
+            windows.append(
+                (
+                    pd.Timestamp(train_start),
+                    pd.Timestamp(train_end),
+                    pd.Timestamp(test_end),
+                    int(years),
+                )
+            )
+        last_step_end = pd.Timestamp(test_end)
     return windows
 
 
-def run_factor_research_data(panel, prices, config, show_progress=False):
+def _factor_diagnostics(factor_returns, reduced_factors, factor_meta):
+    if factor_returns.empty:
+        return pd.DataFrame()
+    diagnostics = pd.DataFrame(
+        {
+            "factor_id": factor_returns.columns.astype(str),
+            "coverage_ratio": factor_returns.notna().mean().to_numpy(dtype=float),
+            "mean_return": factor_returns.mean().to_numpy(dtype=float),
+            "volatility": factor_returns.std().to_numpy(dtype=float),
+            "selected_for_model": factor_returns.columns.isin(reduced_factors.columns),
+        }
+    )
+    if not factor_meta.empty:
+        diagnostics = diagnostics.merge(factor_meta, on="factor_id", how="left")
+    return diagnostics.sort_values("factor_id").reset_index(drop=True)
+
+
+def _build_expected_return_outputs(current_betas, reduced_factors):
+    if current_betas.empty or reduced_factors.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    factor_premia = reduced_factors.mean()
+    beta_columns = [col for col in current_betas.columns if col.startswith("beta__")]
+    long_rows = []
+    expected_rows = []
+    for _, row in current_betas.iterrows():
+        expected_return = float(row.get("alpha", 0.0))
+        for beta_column in beta_columns:
+            factor_id = beta_column.replace("beta__", "", 1)
+            beta_value = pd.to_numeric(row.get(beta_column), errors="coerce")
+            if not np.isfinite(beta_value):
+                continue
+            premium = float(
+                pd.to_numeric(factor_premia.get(factor_id), errors="coerce")
+            )
+            if np.isfinite(premium):
+                expected_return += float(beta_value) * premium
+            long_rows.append(
+                {
+                    "conid": row["conid"],
+                    "sleeve": row["sleeve"],
+                    "factor_id": factor_id,
+                    "beta": float(beta_value),
+                }
+            )
+        expected_rows.append(
+            {
+                "conid": row["conid"],
+                "sleeve": row["sleeve"],
+                "alpha": float(pd.to_numeric(row.get("alpha"), errors="coerce")),
+                "expected_return": float(expected_return),
+            }
+        )
+    return pd.DataFrame(expected_rows), pd.DataFrame(long_rows)
+
+
+def run_factor_research_data(
+    panel,
+    prices,
+    risk_free_daily,
+    config,
+    show_progress=False,
+):
     factor_returns, factor_meta, baseline_returns, baseline_members = (
-        build_factor_returns(panel, prices, config, show_progress=show_progress)
+        build_factor_returns(
+            panel,
+            prices,
+            risk_free_daily,
+            config,
+            show_progress=show_progress,
+        )
     )
     cluster_df, reduced_factors = cluster_factor_returns(
         factor_returns, factor_meta, config, show_progress=show_progress
     )
-    returns_wide = _build_returns_wide(prices)
+    factor_diagnostics = _factor_diagnostics(
+        factor_returns, reduced_factors, factor_meta
+    )
+    returns_wide = _build_returns_wide(prices, config.return_alignment_max_gap_days)
+    risk_free_series = _build_risk_free_series(risk_free_daily)
 
     if factor_returns.empty or reduced_factors.empty or returns_wide.empty:
         empty = pd.DataFrame()
@@ -795,17 +1213,19 @@ def run_factor_research_data(panel, prices, config, show_progress=False):
             "factor_returns": factor_returns,
             "factor_meta": factor_meta,
             "factor_clusters": cluster_df,
+            "factor_diagnostics": factor_diagnostics,
             "baseline_returns": baseline_returns,
             "baseline_members": baseline_members,
             "model_results": empty,
             "factor_persistence": empty,
             "current_betas": empty,
+            "asset_expected_returns": empty,
+            "asset_factor_betas": empty,
         }
 
     research_rows = []
     selection_rows = []
-
-    train_test_windows = _build_research_windows(panel, reduced_factors)
+    train_test_windows = _build_research_windows(panel, reduced_factors, config)
     sleeve_specs = []
     for sleeve in sorted(panel["sleeve"].dropna().unique()):
         sleeve_conids = sorted(
@@ -830,9 +1250,11 @@ def run_factor_research_data(panel, prices, config, show_progress=False):
     ) as progress_bar:
         for sleeve, sleeve_conids, sleeve_factors in sleeve_specs:
             progress_bar.set_postfix_str(str(sleeve), refresh=False)
-            for train_end, test_end in train_test_windows:
+            for train_start, train_end, test_end, window_years in train_test_windows:
                 X_train = reduced_factors.loc[
-                    reduced_factors.index <= train_end, sleeve_factors
+                    (reduced_factors.index > train_start)
+                    & (reduced_factors.index <= train_end),
+                    sleeve_factors,
                 ].dropna(how="all")
                 X_test = reduced_factors.loc[
                     (reduced_factors.index > train_end)
@@ -851,12 +1273,16 @@ def run_factor_research_data(panel, prices, config, show_progress=False):
                     if y is None:
                         progress_bar.update(1)
                         continue
-                    y_excess = y.subtract(baseline_returns, fill_value=0.0)
+                    if config.use_risk_free_excess:
+                        y_target = y.subtract(risk_free_series, fill_value=0.0)
+                    else:
+                        y_target = y.copy()
+
                     train = pd.concat(
-                        [X_train, y_excess.rename("target")], axis=1
+                        [X_train, y_target.rename("target")], axis=1
                     ).dropna()
                     test = pd.concat(
-                        [X_test, y_excess.rename("target")], axis=1
+                        [X_test, y_target.rename("target")], axis=1
                     ).dropna()
                     if (
                         len(train) < config.min_train_days
@@ -875,22 +1301,17 @@ def run_factor_research_data(panel, prices, config, show_progress=False):
                     y_test_fit = np.asarray(test["target"].to_numpy(), dtype=float)
 
                     try:
-                        pipeline, intercept, coefs = _fit_elastic_net(
+                        pipeline, model, intercept, coefs = _fit_elastic_net(
                             X_train_fit, y_train_fit
                         )
                     except ValueError:
                         progress_bar.update(1)
                         continue
 
-                    preds = pipeline.predict(X_test_fit)
-                    denom = float(np.sum((y_test_fit - y_test_fit.mean()) ** 2))
-                    r2_test = (
-                        float(1.0 - np.sum((y_test_fit - preds) ** 2) / denom)
-                        if denom > 0
-                        else np.nan
-                    )
-
+                    pred_train = pipeline.predict(X_train_fit)
+                    pred_test = pipeline.predict(X_test_fit)
                     selected = []
+                    nonzero = int(np.sum(np.abs(coefs) > 1e-8))
                     for factor_id, beta in zip(sleeve_factors, coefs):
                         if abs(beta) <= 1e-8:
                             continue
@@ -899,8 +1320,10 @@ def run_factor_research_data(panel, prices, config, show_progress=False):
                             {
                                 "sleeve": sleeve,
                                 "conid": conid,
+                                "train_start": train_start,
                                 "train_end": train_end,
                                 "test_end": test_end,
+                                "training_window_years": window_years,
                                 "factor_id": factor_id,
                                 "beta": float(beta),
                                 "abs_beta": float(abs(beta)),
@@ -908,18 +1331,32 @@ def run_factor_research_data(panel, prices, config, show_progress=False):
                             }
                         )
 
-                    research_rows.append(
-                        {
-                            "sleeve": sleeve,
-                            "conid": conid,
-                            "train_end": train_end,
-                            "test_end": test_end,
-                            "alpha": float(intercept),
-                            "selected_factor_count": int(len(selected)),
-                            "selected_factors": "|".join(sorted(selected)),
-                            "test_r2": r2_test,
-                        }
-                    )
+                    research_row = {
+                        "sleeve": sleeve,
+                        "conid": conid,
+                        "train_start": train_start,
+                        "train_end": train_end,
+                        "test_end": test_end,
+                        "training_window_years": window_years,
+                        "alpha": float(intercept),
+                        "enet_alpha": float(model.alpha_),
+                        "l1_ratio": float(model.l1_ratio_),
+                        "n_iter": int(model.n_iter_),
+                        "dual_gap": float(model.dual_gap_),
+                        "n_nonzero": nonzero,
+                        "selected_factor_count": int(len(selected)),
+                        "selected_factors": "|".join(sorted(selected)),
+                        "mse_train": float(mean_squared_error(y_train_fit, pred_train)),
+                        "mse_test": float(mean_squared_error(y_test_fit, pred_test)),
+                        "r2_train": float(r2_score(y_train_fit, pred_train)),
+                        "r2_test": float(r2_score(y_test_fit, pred_test)),
+                        "cv_mse_best": float(np.min(model.mse_path_.mean(axis=1))),
+                        "cv_mse_average": float(np.mean(model.mse_path_.mean(axis=1))),
+                        "cv_mse_worst": float(np.max(model.mse_path_.mean(axis=1))),
+                    }
+                    for factor_id, beta in zip(sleeve_factors, coefs):
+                        research_row[f"beta__{factor_id}"] = float(beta)
+                    research_rows.append(research_row)
                     progress_bar.update(1)
 
     model_results = pd.DataFrame(research_rows)
@@ -950,21 +1387,27 @@ def run_factor_research_data(panel, prices, config, show_progress=False):
         panel=panel,
         prices=prices,
         reduced_factors=reduced_factors,
-        baseline_returns=baseline_returns,
+        risk_free_daily=risk_free_daily,
         persistence=persistence,
         config=config,
         show_progress=show_progress,
+    )
+    asset_expected_returns, asset_factor_betas = _build_expected_return_outputs(
+        current_betas, reduced_factors
     )
 
     return {
         "factor_returns": factor_returns,
         "factor_meta": factor_meta,
         "factor_clusters": cluster_df,
+        "factor_diagnostics": factor_diagnostics,
         "baseline_returns": baseline_returns,
         "baseline_members": baseline_members,
         "model_results": model_results,
         "factor_persistence": persistence,
         "current_betas": current_betas,
+        "asset_expected_returns": asset_expected_returns,
+        "asset_factor_betas": asset_factor_betas,
     }
 
 
@@ -972,12 +1415,13 @@ def compute_current_betas_data(
     panel,
     prices,
     reduced_factors,
-    baseline_returns,
+    risk_free_daily,
     persistence,
     config,
     show_progress=False,
 ):
-    returns_wide = _build_returns_wide(prices)
+    returns_wide = _build_returns_wide(prices, config.return_alignment_max_gap_days)
+    risk_free_series = _build_risk_free_series(risk_free_daily)
     if returns_wide.empty or reduced_factors.empty or persistence.empty:
         return pd.DataFrame()
 
@@ -1015,30 +1459,31 @@ def compute_current_betas_data(
             if not persistent_factors:
                 continue
 
-            sleeve_conids = sleeve_panel["conid"].astype(str).tolist()
             X = reduced_factors.loc[
                 reduced_factors.index >= start_date, persistent_factors
             ].dropna()
             if len(X) < config.min_test_days:
-                progress_bar.update(len(sleeve_conids))
+                progress_bar.update(len(sleeve_panel))
                 continue
 
-            for conid in sleeve_conids:
+            for conid in sleeve_panel["conid"].astype(str).tolist():
                 y = returns_wide.get(conid)
                 if y is None:
                     progress_bar.update(1)
                     continue
-                y_excess = y.subtract(baseline_returns, fill_value=0.0)
-                data = pd.concat([X, y_excess.rename("target")], axis=1).dropna()
+                if config.use_risk_free_excess:
+                    y_target = y.subtract(risk_free_series, fill_value=0.0)
+                else:
+                    y_target = y.copy()
+                data = pd.concat([X, y_target.rename("target")], axis=1).dropna()
                 if len(data) < config.min_test_days:
                     progress_bar.update(1)
                     continue
 
-                X_fit = data[persistent_factors].values
-                y_fit = data["target"].values
                 model = LinearRegression()
+                X_fit = data[persistent_factors].to_numpy(dtype=float)
+                y_fit = data["target"].to_numpy(dtype=float)
                 model.fit(X_fit, y_fit)
-
                 rows.append(
                     {
                         "conid": conid,
@@ -1070,13 +1515,17 @@ def build_analysis_panel(
         output_dir=Path(output_dir or (DATA_DIR / "analysis")),
         **config_kwargs,
     )
-    snapshot_features, price_result = _prepare_analysis_inputs(
-        config, show_progress=show_progress
-    )
+    (
+        snapshot_features,
+        price_result,
+        _risk_free_daily,
+        world_bank_country_features,
+    ) = _prepare_analysis_inputs(config, show_progress=show_progress)
     panel = build_analysis_panel_data(
         snapshot_features,
         price_result,
         config,
+        world_bank_country_features=world_bank_country_features,
         show_progress=show_progress,
     )
 
@@ -1109,18 +1558,23 @@ def run_factor_research(
         output_dir=Path(output_dir or (DATA_DIR / "analysis")),
         **config_kwargs,
     )
-    snapshot_features, price_result = _prepare_analysis_inputs(
-        config, show_progress=show_progress
-    )
+    (
+        snapshot_features,
+        price_result,
+        risk_free_daily,
+        world_bank_country_features,
+    ) = _prepare_analysis_inputs(config, show_progress=show_progress)
     panel = build_analysis_panel_data(
         snapshot_features,
         price_result,
         config,
+        world_bank_country_features=world_bank_country_features,
         show_progress=show_progress,
     )
     research = run_factor_research_data(
         panel,
         price_result["prices"],
+        risk_free_daily,
         config,
         show_progress=show_progress,
     )
@@ -1163,6 +1617,13 @@ def run_factor_research(
                 config.sqlite_path,
                 tx=tx,
             ),
+            "factor_diagnostics_path": _write_output(
+                "analysis_factor_diagnostics",
+                research["factor_diagnostics"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
             "factor_persistence_path": _write_output(
                 "analysis_factor_persistence",
                 research["factor_persistence"],
@@ -1180,6 +1641,20 @@ def run_factor_research(
             "current_betas_path": _write_output(
                 "analysis_current_betas",
                 research["current_betas"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "asset_expected_returns_path": _write_output(
+                "analysis_asset_expected_returns",
+                research["asset_expected_returns"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "asset_factor_betas_path": _write_output(
+                "analysis_asset_factor_betas",
+                research["asset_factor_betas"],
                 config.output_dir,
                 config.sqlite_path,
                 tx=tx,

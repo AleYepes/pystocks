@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 
 import pystocks.analysis as analysis_module
@@ -9,6 +10,7 @@ from pystocks.analysis import (
     cluster_factor_returns,
     run_analysis_pipeline,
     run_factor_research,
+    run_factor_research_data,
 )
 
 
@@ -156,7 +158,11 @@ def test_build_analysis_panel_uses_latest_snapshot_at_or_before_rebalance_date()
         ]
     )
     price_result = {"prices": prices, "eligibility": eligibility}
-    config = AnalysisConfig(rebalance_freq="M")
+    config = AnalysisConfig(
+        rebalance_freq="M",
+        include_macro_features=False,
+        require_supplementary_data=False,
+    )
 
     panel = build_analysis_panel_data(snapshot_features, price_result, config)
 
@@ -171,6 +177,111 @@ def test_build_analysis_panel_uses_latest_snapshot_at_or_before_rebalance_date()
     assert row_feb["ratio_key__price_book"] == 2.0
     assert row_mar["ratio_key__price_book"] == 2.0
     assert row_mar["snapshot_age_days"] == 5
+
+
+def test_build_analysis_panel_adds_macro_features_from_country_weights():
+    snapshot_features = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "effective_at": pd.Timestamp("2026-01-31"),
+                "profile__asset_type": "Equity",
+                "profile__total_net_assets_num": 100.0,
+                "country__usa": 0.6,
+                "country__can": 0.4,
+            }
+        ]
+    )
+    price_result = {
+        "prices": pd.DataFrame(
+            [
+                {
+                    "conid": "a",
+                    "trade_date": pd.Timestamp("2026-01-31"),
+                    "clean_price": 10.0,
+                    "clean_return": 0.01,
+                    "is_clean_price": True,
+                }
+            ]
+        ),
+        "eligibility": pd.DataFrame([{"conid": "a", "eligible": True}]),
+    }
+    world_bank_country_features = pd.DataFrame(
+        [
+            {
+                "economy_code": "USA",
+                "effective_at": pd.Timestamp("2025-12-31"),
+                "population_level": 10.0,
+                "population_growth": 1.0,
+                "gdp_pcap_level": 30.0,
+                "gdp_pcap_growth": 3.0,
+                "economic_output_gdp_level": 0.7,
+                "economic_output_gdp_growth": 0.1,
+                "foreign_direct_investment_level": 0.2,
+                "foreign_direct_investment_growth": 0.02,
+                "share_trade_volume_level": 0.5,
+                "share_trade_volume_growth": 0.05,
+                "observed_at": pd.Timestamp("2026-01-05"),
+            },
+            {
+                "economy_code": "CAN",
+                "effective_at": pd.Timestamp("2025-12-31"),
+                "population_level": 20.0,
+                "population_growth": 2.0,
+                "gdp_pcap_level": 40.0,
+                "gdp_pcap_growth": 4.0,
+                "economic_output_gdp_level": 0.3,
+                "economic_output_gdp_growth": 0.2,
+                "foreign_direct_investment_level": 0.1,
+                "foreign_direct_investment_growth": 0.01,
+                "share_trade_volume_level": 0.25,
+                "share_trade_volume_growth": 0.03,
+                "observed_at": pd.Timestamp("2026-01-05"),
+            },
+        ]
+    )
+    config = AnalysisConfig(rebalance_freq="M", require_supplementary_data=True)
+
+    panel = build_analysis_panel_data(
+        snapshot_features,
+        price_result,
+        config,
+        world_bank_country_features=world_bank_country_features,
+    )
+
+    row = panel.iloc[0]
+    assert row["macro__population_level"] == 14.0
+    assert row["macro__gdp_pcap_growth"] == 3.4
+
+
+def test_build_analysis_panel_requires_macro_features_when_enabled():
+    with np.testing.assert_raises_regex(RuntimeError, "World Bank"):
+        build_analysis_panel_data(
+            pd.DataFrame(
+                [
+                    {
+                        "conid": "a",
+                        "effective_at": pd.Timestamp("2026-01-31"),
+                    }
+                ]
+            ),
+            {
+                "prices": pd.DataFrame(
+                    [
+                        {
+                            "conid": "a",
+                            "trade_date": pd.Timestamp("2026-01-31"),
+                            "clean_price": 10.0,
+                            "clean_return": 0.0,
+                            "is_clean_price": True,
+                        }
+                    ]
+                ),
+                "eligibility": pd.DataFrame([{"conid": "a", "eligible": True}]),
+            },
+            AnalysisConfig(require_supplementary_data=True),
+            world_bank_country_features=pd.DataFrame(),
+        )
 
 
 def test_cluster_factor_returns_prefers_composite_representative():
@@ -296,26 +407,60 @@ def test_cluster_factor_returns_returns_empty_frames_when_history_is_too_short()
     assert reduced.empty
 
 
-def test_build_research_windows_allows_sparse_histories_without_hidden_gate():
+def test_build_research_windows_uses_fixed_training_windows():
     panel = pd.DataFrame(
         [
+            {"rebalance_date": pd.Timestamp("2023-01-31")},
+            {"rebalance_date": pd.Timestamp("2024-01-31")},
+            {"rebalance_date": pd.Timestamp("2025-01-31")},
             {"rebalance_date": pd.Timestamp("2026-01-31")},
-            {"rebalance_date": pd.Timestamp("2026-02-28")},
-            {"rebalance_date": pd.Timestamp("2026-03-31")},
         ]
     )
     reduced_factors = pd.DataFrame(
-        {
-            "equity__market": [0.01, 0.02],
-        },
-        index=pd.to_datetime(["2026-02-10", "2026-03-05"]),
+        {"equity__benchmark__market_excess": [0.01, 0.02, 0.03]},
+        index=pd.to_datetime(["2023-02-01", "2024-02-01", "2025-02-01"]),
     )
+    config = AnalysisConfig(training_window_years=(3, 4), walk_forward_step_months=12)
 
-    windows = _build_research_windows(panel, reduced_factors)
+    windows = _build_research_windows(panel, reduced_factors, config)
 
     assert windows == [
-        (pd.Timestamp("2026-01-31"), pd.Timestamp("2026-02-28")),
-        (pd.Timestamp("2026-02-28"), pd.Timestamp("2026-03-31")),
+        (
+            pd.Timestamp("2020-01-31"),
+            pd.Timestamp("2023-01-31"),
+            pd.Timestamp("2024-01-31"),
+            3,
+        ),
+        (
+            pd.Timestamp("2019-01-31"),
+            pd.Timestamp("2023-01-31"),
+            pd.Timestamp("2024-01-31"),
+            4,
+        ),
+        (
+            pd.Timestamp("2021-01-31"),
+            pd.Timestamp("2024-01-31"),
+            pd.Timestamp("2025-01-31"),
+            3,
+        ),
+        (
+            pd.Timestamp("2020-01-31"),
+            pd.Timestamp("2024-01-31"),
+            pd.Timestamp("2025-01-31"),
+            4,
+        ),
+        (
+            pd.Timestamp("2022-01-31"),
+            pd.Timestamp("2025-01-31"),
+            pd.Timestamp("2026-01-31"),
+            3,
+        ),
+        (
+            pd.Timestamp("2021-01-31"),
+            pd.Timestamp("2025-01-31"),
+            pd.Timestamp("2026-01-31"),
+            4,
+        ),
     ]
 
 
@@ -329,7 +474,7 @@ def _stub_price_result():
 
 
 def test_build_analysis_panel_preprocesses_inputs_once(tmp_path, monkeypatch):
-    counts = {"prices": 0, "snapshots": 0}
+    counts = {"prices": 0, "snapshots": 0, "risk_free": 0, "macro": 0}
 
     monkeypatch.setattr(
         analysis_module, "load_price_history", lambda sqlite_path: pd.DataFrame()
@@ -358,8 +503,47 @@ def test_build_analysis_panel_preprocesses_inputs_once(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         analysis_module,
+        "load_risk_free_daily",
+        lambda sqlite_path: (
+            counts.__setitem__("risk_free", counts["risk_free"] + 1)
+            or pd.DataFrame(
+                {
+                    "trade_date": [pd.Timestamp("2026-01-31")],
+                    "daily_nominal_rate": [0.0],
+                }
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "load_world_bank_country_features",
+        lambda sqlite_path: (
+            counts.__setitem__("macro", counts["macro"] + 1)
+            or pd.DataFrame(
+                [
+                    {
+                        "economy_code": "USA",
+                        "effective_at": pd.Timestamp("2025-12-31"),
+                        "population_level": 1.0,
+                        "population_growth": 0.0,
+                        "gdp_pcap_level": 1.0,
+                        "gdp_pcap_growth": 0.0,
+                        "economic_output_gdp_level": 1.0,
+                        "economic_output_gdp_growth": 0.0,
+                        "foreign_direct_investment_level": 1.0,
+                        "foreign_direct_investment_growth": 0.0,
+                        "share_trade_volume_level": 1.0,
+                        "share_trade_volume_growth": 0.0,
+                        "observed_at": pd.Timestamp("2026-01-01"),
+                    }
+                ]
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
         "build_analysis_panel_data",
-        lambda snapshot_features, price_result, config, show_progress=False: (
+        lambda snapshot_features, price_result, config, world_bank_country_features=None, show_progress=False: (
             pd.DataFrame([{"conid": "a", "rebalance_date": pd.Timestamp("2026-01-31")}])
         ),
     )
@@ -369,13 +553,13 @@ def test_build_analysis_panel_preprocesses_inputs_once(tmp_path, monkeypatch):
         output_dir=tmp_path,
     )
 
-    assert counts == {"prices": 1, "snapshots": 1}
+    assert counts == {"prices": 1, "snapshots": 1, "risk_free": 1, "macro": 1}
     assert result["rows"] == 1
     assert (tmp_path / "analysis_snapshot_panel.parquet").exists()
 
 
 def test_run_factor_research_preprocesses_inputs_once(tmp_path, monkeypatch):
-    counts = {"prices": 0, "snapshots": 0}
+    counts = {"prices": 0, "snapshots": 0, "risk_free": 0, "macro": 0}
 
     monkeypatch.setattr(
         analysis_module, "load_price_history", lambda sqlite_path: pd.DataFrame()
@@ -404,23 +588,65 @@ def test_run_factor_research_preprocesses_inputs_once(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         analysis_module,
+        "load_risk_free_daily",
+        lambda sqlite_path: (
+            counts.__setitem__("risk_free", counts["risk_free"] + 1)
+            or pd.DataFrame(
+                {
+                    "trade_date": [pd.Timestamp("2026-01-31")],
+                    "daily_nominal_rate": [0.0],
+                }
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "load_world_bank_country_features",
+        lambda sqlite_path: (
+            counts.__setitem__("macro", counts["macro"] + 1)
+            or pd.DataFrame(
+                [
+                    {
+                        "economy_code": "USA",
+                        "effective_at": pd.Timestamp("2025-12-31"),
+                        "population_level": 1.0,
+                        "population_growth": 0.0,
+                        "gdp_pcap_level": 1.0,
+                        "gdp_pcap_growth": 0.0,
+                        "economic_output_gdp_level": 1.0,
+                        "economic_output_gdp_growth": 0.0,
+                        "foreign_direct_investment_level": 1.0,
+                        "foreign_direct_investment_growth": 0.0,
+                        "share_trade_volume_level": 1.0,
+                        "share_trade_volume_growth": 0.0,
+                        "observed_at": pd.Timestamp("2026-01-01"),
+                    }
+                ]
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
         "build_analysis_panel_data",
-        lambda snapshot_features, price_result, config, show_progress=False: (
+        lambda snapshot_features, price_result, config, world_bank_country_features=None, show_progress=False: (
             pd.DataFrame([{"conid": "a", "rebalance_date": pd.Timestamp("2026-01-31")}])
         ),
     )
     monkeypatch.setattr(
         analysis_module,
         "run_factor_research_data",
-        lambda panel, prices, config, show_progress=False: {
+        lambda panel, prices, risk_free_daily, config, show_progress=False: {
             "factor_returns": pd.DataFrame(),
             "factor_meta": pd.DataFrame(),
             "factor_clusters": pd.DataFrame(),
+            "factor_diagnostics": pd.DataFrame(),
             "baseline_returns": pd.DataFrame(),
             "baseline_members": pd.DataFrame(),
             "model_results": pd.DataFrame(),
             "factor_persistence": pd.DataFrame(),
             "current_betas": pd.DataFrame(),
+            "asset_expected_returns": pd.DataFrame(),
+            "asset_factor_betas": pd.DataFrame(),
         },
     )
     monkeypatch.setattr(
@@ -436,8 +662,149 @@ def test_run_factor_research_preprocesses_inputs_once(tmp_path, monkeypatch):
         output_dir=tmp_path,
     )
 
-    assert counts == {"prices": 1, "snapshots": 1}
+    assert counts == {"prices": 1, "snapshots": 1, "risk_free": 1, "macro": 1}
     assert result["snapshot_rows"] == 1
+
+
+def test_run_factor_research_data_uses_risk_free_excess(monkeypatch):
+    panel = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-01-31"),
+            },
+            {
+                "conid": "a",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-02-28"),
+            },
+            {
+                "conid": "a",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-03-31"),
+            },
+        ]
+    )
+    prices = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "trade_date": pd.Timestamp("2026-02-10"),
+                "clean_return": 0.02,
+                "is_clean_price": True,
+            },
+            {
+                "conid": "a",
+                "trade_date": pd.Timestamp("2026-03-10"),
+                "clean_return": 0.03,
+                "is_clean_price": True,
+            },
+        ]
+    )
+    risk_free_daily = pd.DataFrame(
+        [
+            {"trade_date": pd.Timestamp("2026-02-10"), "daily_nominal_rate": 0.01},
+            {"trade_date": pd.Timestamp("2026-03-10"), "daily_nominal_rate": 0.01},
+        ]
+    )
+    factor_returns = pd.DataFrame(
+        {"equity__benchmark__market_excess": [0.1, 0.2]},
+        index=pd.to_datetime(["2026-02-10", "2026-03-10"]),
+    )
+    factor_meta = pd.DataFrame(
+        [
+            {
+                "factor_id": "equity__benchmark__market_excess",
+                "sleeve": "equity",
+                "family": "market_excess",
+                "kind": "benchmark",
+            }
+        ]
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        analysis_module,
+        "build_factor_returns",
+        lambda *args, **kwargs: (
+            factor_returns,
+            factor_meta,
+            pd.Series(0.0, index=factor_returns.index),
+            pd.DataFrame(),
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "cluster_factor_returns",
+        lambda factor_returns, factor_meta, config, show_progress=False: (
+            pd.DataFrame(
+                [
+                    {
+                        "factor_id": "equity__benchmark__market_excess",
+                        "sleeve": "equity",
+                        "cluster_id": "equity_1",
+                        "cluster_representative": "equity__benchmark__market_excess",
+                        "cluster_size": 1,
+                        "keep_factor": True,
+                    }
+                ]
+            ),
+            factor_returns,
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "_build_research_windows",
+        lambda panel, reduced_factors, config: [
+            (
+                pd.Timestamp("2025-02-28"),
+                pd.Timestamp("2026-02-28"),
+                pd.Timestamp("2026-03-31"),
+                1,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "compute_current_betas_data",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+
+    def fake_fit(X_train, y_train):
+        captured["y_train"] = y_train.copy()
+
+        class _Model:
+            alpha_ = 0.1
+            l1_ratio_ = 0.5
+            n_iter_ = 10
+            dual_gap_ = 0.0
+            mse_path_ = np.array([[1.0, 2.0]])
+
+        class _Pipeline:
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        return _Pipeline(), _Model(), 0.0, np.array([0.25])
+
+    monkeypatch.setattr(analysis_module, "_fit_elastic_net", fake_fit)
+
+    result = run_factor_research_data(
+        panel,
+        prices,
+        risk_free_daily,
+        AnalysisConfig(
+            min_train_days=1,
+            min_test_days=1,
+            training_window_years=(1,),
+            walk_forward_step_months=1,
+            include_macro_features=False,
+            require_supplementary_data=False,
+        ),
+    )
+
+    assert np.allclose(captured["y_train"], np.array([0.01]))
+    assert not result["model_results"].empty
 
 
 def test_run_analysis_pipeline_delegates_to_run_factor_research(monkeypatch):

@@ -184,8 +184,38 @@ def test_build_analysis_panel_writes_parquet_output(tmp_path, monkeypatch):
     monkeypatch.setattr(
         analysis_module,
         "build_analysis_panel_data",
-        lambda snapshot_features, price_result, config, show_progress=False: (
+        lambda snapshot_features, price_result, config, world_bank_country_features=None, show_progress=False: (
             pd.DataFrame([{"conid": "a", "rebalance_date": pd.Timestamp("2026-01-31")}])
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "load_risk_free_daily",
+        lambda sqlite_path: pd.DataFrame(
+            {"trade_date": [pd.Timestamp("2026-01-31")], "daily_nominal_rate": [0.0]}
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "load_world_bank_country_features",
+        lambda sqlite_path: pd.DataFrame(
+            [
+                {
+                    "economy_code": "USA",
+                    "effective_at": pd.Timestamp("2025-12-31"),
+                    "population_level": 1.0,
+                    "population_growth": 0.0,
+                    "gdp_pcap_level": 1.0,
+                    "gdp_pcap_growth": 0.0,
+                    "economic_output_gdp_level": 1.0,
+                    "economic_output_gdp_growth": 0.0,
+                    "foreign_direct_investment_level": 1.0,
+                    "foreign_direct_investment_growth": 0.0,
+                    "share_trade_volume_level": 1.0,
+                    "share_trade_volume_growth": 0.0,
+                    "observed_at": pd.Timestamp("2026-01-01"),
+                }
+            ]
         ),
     )
 

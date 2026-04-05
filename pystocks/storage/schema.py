@@ -32,6 +32,60 @@ CREATE TABLE IF NOT EXISTS raw_payload_blobs (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS supplementary_fetch_log (
+    dataset TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    record_count INTEGER NOT NULL,
+    min_key TEXT,
+    max_key TEXT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS supplementary_risk_free_sources (
+    series_id TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    nominal_rate REAL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (series_id, trade_date)
+);
+
+CREATE TABLE IF NOT EXISTS supplementary_risk_free_daily (
+    trade_date TEXT PRIMARY KEY,
+    nominal_rate REAL,
+    daily_nominal_rate REAL,
+    source_count INTEGER NOT NULL,
+    observed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS supplementary_world_bank_raw (
+    economy_code TEXT NOT NULL,
+    indicator_id TEXT NOT NULL,
+    year INTEGER NOT NULL,
+    value REAL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (economy_code, indicator_id, year)
+);
+
+CREATE TABLE IF NOT EXISTS supplementary_world_bank_country_features (
+    economy_code TEXT NOT NULL,
+    effective_at TEXT NOT NULL,
+    feature_year INTEGER NOT NULL,
+    population_level REAL,
+    population_growth REAL,
+    gdp_pcap_level REAL,
+    gdp_pcap_growth REAL,
+    economic_output_gdp_level REAL,
+    economic_output_gdp_growth REAL,
+    foreign_direct_investment_level REAL,
+    foreign_direct_investment_growth REAL,
+    share_trade_volume_level REAL,
+    share_trade_volume_growth REAL,
+    observed_at TEXT NOT NULL,
+    PRIMARY KEY (economy_code, feature_year)
+);
+
 CREATE TABLE IF NOT EXISTS profile_and_fees_snapshots (
     conid TEXT NOT NULL,
     effective_at TEXT NOT NULL,
@@ -635,6 +689,10 @@ CREATE INDEX IF NOT EXISTS idx_price_series_effective_at ON price_chart_series(e
 CREATE INDEX IF NOT EXISTS idx_sentiment_series_effective_at ON sentiment_series(effective_at);
 CREATE INDEX IF NOT EXISTS idx_ownership_latest_trade_date ON ownership_trade_log_series_latest(trade_date);
 CREATE INDEX IF NOT EXISTS idx_dividends_events_series_effective_at ON dividends_events_series(effective_at);
+CREATE INDEX IF NOT EXISTS idx_supplementary_fetch_log_dataset ON supplementary_fetch_log(dataset, fetched_at);
+CREATE INDEX IF NOT EXISTS idx_supplementary_risk_free_sources_trade_date ON supplementary_risk_free_sources(trade_date);
+CREATE INDEX IF NOT EXISTS idx_supplementary_world_bank_raw_year ON supplementary_world_bank_raw(year);
+CREATE INDEX IF NOT EXISTS idx_supplementary_world_bank_country_features_effective_at ON supplementary_world_bank_country_features(effective_at);
 """
 
 _MIGRATION_DDL = """

@@ -25,6 +25,8 @@ def test_init_storage_creates_schema_and_is_idempotent(tmp_path):
     assert "raw_payload_blobs" in tables
     assert "price_chart_series" in tables
     assert "dividends_events_series" in tables
+    assert "supplementary_risk_free_daily" in tables
+    assert "supplementary_world_bank_country_features" in tables
     assert "ingest_runs" not in tables
     assert "ingest_run_endpoint_rollups" not in tables
     assert "endpoint_scalar_extras" not in tables

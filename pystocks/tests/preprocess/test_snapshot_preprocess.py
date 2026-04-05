@@ -395,7 +395,11 @@ def test_build_analysis_panel_uses_processed_snapshot_features():
     panel = build_analysis_panel_data(
         snapshot_result["features"],
         {"prices": prices, "eligibility": eligibility},
-        AnalysisConfig(rebalance_freq="M"),
+        AnalysisConfig(
+            rebalance_freq="M",
+            include_macro_features=False,
+            require_supplementary_data=False,
+        ),
     )
 
     row_feb = panel[
