@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
-from ..storage import load_dividend_events as _load_dividend_events
+from ..storage.readers import load_dividend_events as _load_dividend_events
 from .price import load_price_history, preprocess_price_history
 
 

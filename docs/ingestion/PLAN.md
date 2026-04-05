@@ -29,15 +29,6 @@
 - Columns: `compression` (`zstd`), `raw_size_bytes`, `compressed_size_bytes`, `payload_blob`, `created_at`.
 - No endpoint table stores full JSON text.
 
-3. `ingest_runs`
-- PK: `run_id`.
-- Columns: `run_started_at`, `run_finished_at`, `total_targeted_conids`, `processed_conids`, `saved_snapshots`, `inserted_events`, `overwritten_events`, `unchanged_events`, `series_raw_rows_written`, `series_latest_rows_upserted`, `auth_retries`, `aborted`.
-
-4. `ingest_run_endpoint_rollups`
-- PK: `(run_id, endpoint)`.
-- Columns: `call_count`, `useful_payload_count`, `useful_payload_rate`, `status_2xx`, `status_4xx`, `status_5xx`, `status_other`.
-- Replaces per-request log persistence; telemetry JSON remains.
-
 ### Endpoint Storage Contract
 - Every endpoint main snapshot table uses PK `(conid, effective_at)`, FK to `products(conid)`, FK to `raw_payload_blobs(payload_hash)`.
 - Shared metadata columns on each main snapshot table: `observed_at`, `payload_hash`, `source_file`, `inserted_at`, `updated_at`.
@@ -71,27 +62,19 @@
 - Core columns: `as_of_date`, `q_full_report_id`.
 - Child tables: `morningstar_summary`, `morningstar_commentary`.
 
-8. `performance_snapshots`
-- Core columns: `title_vs`.
-- Child table: `performance_metrics` with `section` (`cumulative|annualized|yield|risk|statistic`) and normalized numeric/format fields.
-
-9. `ownership_snapshots`
+8. `ownership_snapshots`
 - Core columns: ownership totals and normalized summary counts.
 - Child tables: `ownership_owners_types`, `ownership_holders` (`holder_group` = `institutional|insider`).
 
-10. `esg_snapshots`
+9. `esg_snapshots`
 - Core columns: `as_of_date`, `coverage`, `source`, `symbol`, `no_settings`.
 - Child table: `esg_nodes` with hierarchical `node_path`, `parent_path`, `depth`, `node_value`.
 
-11. `price_chart_snapshots`
+10. `price_chart_snapshots`
 - Core columns: `points_count`, `min_trade_date`, `max_trade_date`.
 
-12. `sentiment_snapshots`
+11. `sentiment_snapshots`
 - Core columns: `points_count`, `min_trade_date`, `max_trade_date`.
-
-13. Optional scalar overflow table for evolving fields
-- `endpoint_scalar_extras(endpoint, conid, effective_at, path, value_text, value_num, value_bool, value_date)`.
-- Strict rule: scalar leaves only; no serialized dict/list payloads.
 
 ### Series Storage Design (Expansion + Append Guaranteed)
 - Pattern for each series endpoint: `*_series_raw` + `*_series_latest`.
@@ -117,10 +100,10 @@
 - Append raw series rows and upsert latest rows.
 5. Refactor `pystocks/ingest/fundamentals.py` ingestion counters:
 - Replace `duplicate_events`/factor counters with `inserted_events`, `overwritten_events`, `unchanged_events`, `series_raw_rows_written`, `series_latest_rows_upserted`.
-- Persist run telemetry both to SQLite rollup tables and existing JSON files.
+- Persist run telemetry to JSON files.
 6. Update `cli.py`:
-- `run_pipeline` now runs only `scrape_products` then `scrape_fundamentals`.
-- Keep `preprocess_prices` and `run_analysis` commands but return deferred status message.
+- `run_pipeline` runs `scrape_products`, `scrape_fundamentals`, then analysis.
+- Keep `preprocess_prices`, `preprocess_snapshots`, and `preprocess_dividends` as standalone utility/export commands.
 - Repurpose `refresh_fundamentals_views` into a SQLite maintenance command (`VACUUM` + stats) while retaining command name for compatibility.
 7. Update docs (`README.md`, `docs/onboarding.md`, `docs/operational_checklist.md`) to SQLite architecture and commands.
 8. Mark old parquet/duckdb notebook flow as legacy; add a SQLite inspection notebook replacing parquet-centric walkthrough.
@@ -157,12 +140,11 @@
 - `update_instrument_fundamentals_status` behavior unchanged from current tests.
 
 5. Telemetry tests.
-- One ingest run writes exactly one `ingest_runs` row and endpoint rollups.
 - JSON telemetry file still emitted and keys populated.
 
 6. CLI contract tests.
-- `run_pipeline` ends after fundamentals ingest and returns success payload.
-- Deferred postprocessing commands return deterministic deferred status.
+- `run_pipeline` runs products, fundamentals, and analysis.
+- Standalone preprocess commands remain available and return deterministic output metadata.
 
 7. Full regression test run.
 - Execute `./venv/bin/python -m pytest -q`.

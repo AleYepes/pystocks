@@ -5,14 +5,15 @@ import numpy as np
 import pandas as pd
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
-from ..storage import load_snapshot_feature_tables as _load_snapshot_feature_tables
+from ..storage.readers import (
+    load_snapshot_feature_tables as _load_snapshot_feature_tables,
+)
 
 
 @dataclass
 class SnapshotPreprocessConfig:
     holdings_sum_tolerance: float = 0.05
     sparse_category_threshold: int = 1
-    include_deferred_families: bool = True
 
 
 SNAPSHOT_TABLE_COLUMNS = {
@@ -546,23 +547,20 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
         ratio_diagnostics.append(_ratio_diagnostics(df, table_name, key_cols))
         frames.append(_pivot_metric_frame(df, prefix, key_cols))
 
-    if config.include_deferred_families:
-        dividend_metrics = tables["dividends_industry_metrics"].copy()
-        if not dividend_metrics.empty:
-            frames.append(_prefix_frame(dividend_metrics, "dividend_metric"))
+    dividend_metrics = tables["dividends_industry_metrics"].copy()
+    if not dividend_metrics.empty:
+        frames.append(_prefix_frame(dividend_metrics, "dividend_metric"))
 
-        morningstar = tables["morningstar_summary"].copy()
-        if not morningstar.empty:
-            frames.append(_prefix_frame(morningstar, "morningstar"))
+    morningstar = tables["morningstar_summary"].copy()
+    if not morningstar.empty:
+        frames.append(_prefix_frame(morningstar, "morningstar"))
 
-        lipper = tables["lipper_ratings"].copy()
-        if not lipper.empty:
-            ratio_diagnostics.append(
-                _ratio_diagnostics(lipper, "lipper_ratings", ["period", "metric_id"])
-            )
-            frames.append(
-                _pivot_metric_frame(lipper, "lipper", ["period", "metric_id"])
-            )
+    lipper = tables["lipper_ratings"].copy()
+    if not lipper.empty:
+        ratio_diagnostics.append(
+            _ratio_diagnostics(lipper, "lipper_ratings", ["period", "metric_id"])
+        )
+        frames.append(_pivot_metric_frame(lipper, "lipper", ["period", "metric_id"]))
 
     frames = [frame for frame in frames if not frame.empty]
     if not frames:

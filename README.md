@@ -1,30 +1,36 @@
 # pystocks v0.3.0
 
-SQLite-first ETF ingestion pipeline for IBKR fundamentals and series snapshots.
+ETF factor analysis pipeline to calculate efficient frontier portfolios.
 
 ## Current runtime scope
 - Auth/session: `pystocks/ingest/session.py`
 - Product universe scrape: `pystocks/ingest/product_scraper.py`
 - Fundamentals + series scrape: `pystocks/ingest/fundamentals.py`
 - Endpoint-centric SQLite storage: `pystocks/storage/fundamentals_store.py`
-
-Postprocessing and analysis are intentionally deferred in this refactor.
+- Preprocessing: `pystocks/preprocess/`
+- Analysis: `pystocks/analysis/`
 
 ## CLI
 ```bash
-python -m pystocks.cli scrape_products
-python -m pystocks.cli scrape_fundamentals --limit 100
-python -m pystocks.cli run_pipeline --limit 100
+./venv/bin/python -m pystocks.cli scrape_products
+./venv/bin/python -m pystocks.cli scrape_fundamentals --limit 100
+./venv/bin/python -m pystocks.cli preprocess_prices
+./venv/bin/python -m pystocks.cli preprocess_dividends
+./venv/bin/python -m pystocks.cli preprocess_snapshots
+./venv/bin/python -m pystocks.cli build_analysis_panel
+./venv/bin/python -m pystocks.cli run_factor_research
+./venv/bin/python -m pystocks.cli run_analysis
+./venv/bin/python -m pystocks.cli run_pipeline --limit 100
 ```
 
-```
-python3 -m pystocks.cli scrape_fundamentals --conids_file=docs/sample_conids.txt
-python3 -m pystocks.cli run_pipeline --conids_file=docs/sample_conids.txt
-```
-
-`run_pipeline` now executes only:
+`run_pipeline` executes:
 1. `scrape_products`
 2. `scrape_fundamentals`
+3. `run_analysis`
+
+Price and snapshot preprocessing are performed inside the analysis invocation for that run. Standalone preprocess commands remain available for explicit export, debugging, and inspection workflows.
+
+Use `--conids_file docs/sample_conids.txt` with `scrape_fundamentals` or `run_pipeline` to target a fixed conid list.
 
 ## Development workflow
 Install dependencies with:
@@ -60,10 +66,5 @@ Pyright is intentionally scoped away from a small set of existing pandas-heavy m
 - Per-endpoint snapshot tables keyed by `(conid, effective_at)`
 - Endpoint child tables for nested payload structures
 - Raw payload blob table (`raw_payload_blobs`) keyed by payload hash
-- Series stored as:
-1. append-only `*_series_raw`
-2. deduped `*_series_latest`
-
-## Legacy note
-- Existing DuckDB/parquet stores are now legacy and not used by ingestion runtime.
-- They remain on disk until explicitly removed.
+- JSON telemetry is file-based only; ingest telemetry is not persisted in SQLite
+- Series tables are endpoint-specific; use the schema as the source of truth rather than assuming every endpoint has both `*_series_raw` and `*_series_latest`

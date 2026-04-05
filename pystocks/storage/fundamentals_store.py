@@ -668,18 +668,6 @@ def _extract_sentiment_search_rows(payload):
     return rows
 
 
-def _collect_scalar_paths(node, prefix=""):
-    out = []
-    if isinstance(node, dict):
-        for key, value in node.items():
-            key_name = _sanitize_segment(key)
-            path = f"{prefix}.{key_name}" if prefix else key_name
-            if isinstance(value, (dict, list)):
-                continue
-            out.append((path, value))
-    return out
-
-
 class FundamentalsStore:
     def __init__(self, sqlite_path=SQLITE_DB_PATH):
         self.sqlite_path = Path(sqlite_path)
@@ -917,37 +905,6 @@ class FundamentalsStore:
             f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
             [[row.get(c) for c in cols] for row in rows],
         )
-
-    def _store_endpoint_scalar_extras(
-        self, conn, endpoint, conid, effective_at, payload
-    ):
-        conn.execute(
-            """
-            DELETE FROM endpoint_scalar_extras
-            WHERE endpoint = ? AND conid = ? AND effective_at = ?
-            """,
-            [endpoint, str(conid), str(effective_at)],
-        )
-
-        if not isinstance(payload, dict):
-            return
-
-        rows = []
-        for path, value in _collect_scalar_paths(payload):
-            rows.append(
-                {
-                    "endpoint": endpoint,
-                    "conid": str(conid),
-                    "effective_at": str(effective_at),
-                    "path": path,
-                    "value_text": str(value) if value is not None else None,
-                    "value_num": _parse_number(value),
-                    "value_bool": _to_int_bool(value),
-                    "value_date": _to_iso_date(value),
-                }
-            )
-
-        self._insert_rows(conn, "endpoint_scalar_extras", rows)
 
     def _upsert_profile_fees(
         self,
@@ -2379,8 +2336,6 @@ class FundamentalsStore:
             payload,
         )
 
-        self._store_endpoint_scalar_extras(conn, endpoint, conid, effective_at, payload)
-
         series_raw_rows_written = 0
         series_latest_rows_upserted = 0
         if endpoint in SERIES_ENDPOINTS:
@@ -2508,107 +2463,3 @@ class FundamentalsStore:
             "status": status,
             "per_endpoint": per_endpoint,
         }
-
-    def persist_ingest_run(self, run_stats, endpoint_summary):
-        run_stats = run_stats or {}
-        endpoint_summary = endpoint_summary or []
-
-        with self._get_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO ingest_runs (
-                    run_started_at,
-                    run_finished_at,
-                    total_targeted_conids,
-                    processed_conids,
-                    saved_snapshots,
-                    inserted_events,
-                    overwritten_events,
-                    unchanged_events,
-                    series_raw_rows_written,
-                    series_latest_rows_upserted,
-                    auth_retries,
-                    aborted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    run_stats.get("run_started_at") or datetime.now(UTC).isoformat(),
-                    run_stats.get("run_finished_at") or datetime.now(UTC).isoformat(),
-                    int(run_stats.get("total_targeted_conids", 0)),
-                    int(run_stats.get("processed_conids", 0)),
-                    int(run_stats.get("saved_snapshots", 0)),
-                    int(run_stats.get("inserted_events", 0)),
-                    int(run_stats.get("overwritten_events", 0)),
-                    int(run_stats.get("unchanged_events", 0)),
-                    int(run_stats.get("series_raw_rows_written", 0)),
-                    int(run_stats.get("series_latest_rows_upserted", 0)),
-                    int(run_stats.get("auth_retries", 0)),
-                    1 if bool(run_stats.get("aborted", False)) else 0,
-                ],
-            )
-            lastrowid = cur.lastrowid
-            if lastrowid is None:
-                raise RuntimeError("Failed to persist telemetry run row.")
-            run_id = int(lastrowid)
-
-            for row in endpoint_summary:
-                endpoint = str(row.get("endpoint") or "")
-                if not endpoint:
-                    continue
-                call_count = int(row.get("call_count", 0))
-                useful_payload_count = int(row.get("useful_payload_count", 0))
-                useful_payload_rate = (
-                    float(row.get("useful_payload_rate", 0.0)) if call_count else 0.0
-                )
-                status_codes = row.get("status_codes") or {}
-
-                status_2xx = 0
-                status_4xx = 0
-                status_5xx = 0
-                status_other = 0
-                for code, count in status_codes.items():
-                    try:
-                        code_int = int(code)
-                    except Exception:
-                        status_other += int(count)
-                        continue
-
-                    if 200 <= code_int < 300:
-                        status_2xx += int(count)
-                    elif 400 <= code_int < 500:
-                        status_4xx += int(count)
-                    elif 500 <= code_int < 600:
-                        status_5xx += int(count)
-                    else:
-                        status_other += int(count)
-
-                conn.execute(
-                    """
-                    INSERT INTO ingest_run_endpoint_rollups (
-                        run_id,
-                        endpoint,
-                        call_count,
-                        useful_payload_count,
-                        useful_payload_rate,
-                        status_2xx,
-                        status_4xx,
-                        status_5xx,
-                        status_other
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        run_id,
-                        endpoint,
-                        call_count,
-                        useful_payload_count,
-                        useful_payload_rate,
-                        status_2xx,
-                        status_4xx,
-                        status_5xx,
-                        status_other,
-                    ],
-                )
-
-            conn.commit()
-            return run_id

@@ -6,7 +6,7 @@ import pandas as pd
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
 from ..progress import track_progress
-from ..storage import load_price_history as _load_price_history
+from ..storage.readers import load_price_history as _load_price_history
 
 
 @dataclass

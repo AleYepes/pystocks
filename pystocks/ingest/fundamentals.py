@@ -439,16 +439,6 @@ class FundamentalScraper:
         with open(latest_path, "w") as f:
             json.dump(payload, f, indent=2)
 
-        try:
-            run_stats = dict(payload.get("run_stats", {}))
-            run_stats["run_started_at"] = payload.get("run_started_at")
-            run_stats["run_finished_at"] = payload.get("run_finished_at")
-            self.store.persist_ingest_run(
-                run_stats=run_stats, endpoint_summary=endpoint_summary
-            )
-        except Exception as e:
-            logger.warning(f"Failed persisting run telemetry to SQLite: {e}")
-
         return telemetry_path, latest_path
 
 

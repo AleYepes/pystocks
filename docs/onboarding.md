@@ -166,10 +166,9 @@ Read those before making architectural changes.
 
 1. products
 2. fundamentals
-3. price preprocessing
-4. analysis
+3. analysis
 
-It does not currently run dividend or snapshot preprocessing as standalone steps.
+Price and snapshot preprocessing are performed inside the analysis invocation. Dividend and snapshot preprocessing remain available as standalone utility/export commands.
 
 ## Working Rules
 

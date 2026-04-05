@@ -1,9 +1,13 @@
 import pandas as pd
 
+import pystocks.analysis as analysis_module
 from pystocks.analysis import (
     AnalysisConfig,
+    build_analysis_panel,
     build_analysis_panel_data,
     cluster_factor_returns,
+    run_analysis_pipeline,
+    run_factor_research,
 )
 
 
@@ -249,3 +253,143 @@ def test_cluster_factor_returns_show_progress_emits_stage_label(capsys):
 
     captured = capsys.readouterr()
     assert "Factor clustering" in captured.err
+
+
+def _stub_price_result():
+    return {
+        "prices": pd.DataFrame(
+            [{"conid": "a", "trade_date": pd.Timestamp("2026-01-31"), "close": 10.0}]
+        ),
+        "eligibility": pd.DataFrame([{"conid": "a", "eligible": True}]),
+    }
+
+
+def test_build_analysis_panel_preprocesses_inputs_once(tmp_path, monkeypatch):
+    counts = {"prices": 0, "snapshots": 0}
+
+    monkeypatch.setattr(
+        analysis_module, "load_price_history", lambda sqlite_path: pd.DataFrame()
+    )
+
+    def fake_preprocess_price_history(price_df, config=None, show_progress=False):
+        counts["prices"] += 1
+        return _stub_price_result()
+
+    def fake_load_snapshot_features(sqlite_path):
+        counts["snapshots"] += 1
+        return pd.DataFrame(
+            [{"conid": "a", "effective_at": pd.Timestamp("2026-01-31")}]
+        )
+
+    monkeypatch.setattr(
+        analysis_module, "preprocess_price_history", fake_preprocess_price_history
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "save_price_preprocess_results",
+        lambda result, output_dir=None: {"prices_path": "prices.parquet"},
+    )
+    monkeypatch.setattr(
+        analysis_module, "load_snapshot_features", fake_load_snapshot_features
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "build_analysis_panel_data",
+        lambda snapshot_features, price_result, config, show_progress=False: (
+            pd.DataFrame([{"conid": "a", "rebalance_date": pd.Timestamp("2026-01-31")}])
+        ),
+    )
+
+    result = build_analysis_panel(
+        sqlite_path=tmp_path / "analysis.sqlite",
+        output_dir=tmp_path,
+    )
+
+    assert counts == {"prices": 1, "snapshots": 1}
+    assert result["rows"] == 1
+    assert (tmp_path / "analysis_snapshot_panel.parquet").exists()
+
+
+def test_run_factor_research_preprocesses_inputs_once(tmp_path, monkeypatch):
+    counts = {"prices": 0, "snapshots": 0}
+
+    monkeypatch.setattr(
+        analysis_module, "load_price_history", lambda sqlite_path: pd.DataFrame()
+    )
+
+    def fake_preprocess_price_history(price_df, config=None, show_progress=False):
+        counts["prices"] += 1
+        return _stub_price_result()
+
+    def fake_load_snapshot_features(sqlite_path):
+        counts["snapshots"] += 1
+        return pd.DataFrame(
+            [{"conid": "a", "effective_at": pd.Timestamp("2026-01-31")}]
+        )
+
+    monkeypatch.setattr(
+        analysis_module, "preprocess_price_history", fake_preprocess_price_history
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "save_price_preprocess_results",
+        lambda result, output_dir=None: {"prices_path": "prices.parquet"},
+    )
+    monkeypatch.setattr(
+        analysis_module, "load_snapshot_features", fake_load_snapshot_features
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "build_analysis_panel_data",
+        lambda snapshot_features, price_result, config, show_progress=False: (
+            pd.DataFrame([{"conid": "a", "rebalance_date": pd.Timestamp("2026-01-31")}])
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "run_factor_research_data",
+        lambda panel, prices, config, show_progress=False: {
+            "factor_returns": pd.DataFrame(),
+            "factor_meta": pd.DataFrame(),
+            "factor_clusters": pd.DataFrame(),
+            "baseline_returns": pd.DataFrame(),
+            "baseline_members": pd.DataFrame(),
+            "model_results": pd.DataFrame(),
+            "factor_persistence": pd.DataFrame(),
+            "current_betas": pd.DataFrame(),
+        },
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "_write_output",
+        lambda name, df, output_dir, sqlite_path, long_sql_df=None, tx=None: str(
+            tmp_path / f"{name}.parquet"
+        ),
+    )
+
+    result = run_factor_research(
+        sqlite_path=tmp_path / "analysis.sqlite",
+        output_dir=tmp_path,
+    )
+
+    assert counts == {"prices": 1, "snapshots": 1}
+    assert result["snapshot_rows"] == 1
+
+
+def test_run_analysis_pipeline_delegates_to_run_factor_research(monkeypatch):
+    sentinel = {"status": "ok", "factor_count": 3}
+
+    monkeypatch.setattr(
+        analysis_module,
+        "build_analysis_panel",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("build_analysis_panel should not be called")
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "run_factor_research",
+        lambda *args, **kwargs: sentinel,
+    )
+
+    assert run_analysis_pipeline() is sentinel

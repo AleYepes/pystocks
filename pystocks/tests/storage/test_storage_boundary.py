@@ -3,7 +3,8 @@ import sqlite3
 import pandas as pd
 import pytest
 
-from pystocks.storage import init_storage, replace_table, transaction
+from pystocks.storage.schema import init_storage
+from pystocks.storage.txn import transaction
 
 
 def test_init_storage_creates_schema_and_is_idempotent(tmp_path):
@@ -24,6 +25,9 @@ def test_init_storage_creates_schema_and_is_idempotent(tmp_path):
     assert "raw_payload_blobs" in tables
     assert "price_chart_series" in tables
     assert "dividends_events_series" in tables
+    assert "ingest_runs" not in tables
+    assert "ingest_run_endpoint_rollups" not in tables
+    assert "endpoint_scalar_extras" not in tables
 
 
 def test_storage_transaction_commits_multiple_writes(tmp_path):
@@ -75,11 +79,14 @@ def test_storage_transaction_rolls_back_on_error(tmp_path):
     assert product_count == 0
 
 
-def test_replace_table_writes_analysis_outputs(tmp_path):
+def test_storage_transaction_write_frame_writes_analysis_outputs(tmp_path):
     db_path = tmp_path / "storage.sqlite"
     frame = pd.DataFrame({"factor_id": ["value"], "score": [1.25]})
 
-    replace_table("analysis_factor_scores", frame, sqlite_path=db_path)
+    with transaction(db_path) as tx:
+        tx.write_frame(
+            "analysis_factor_scores", frame, if_exists="replace", index=False
+        )
 
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(

@@ -11,9 +11,6 @@ These tables manage the state of the ingestion process, raw data storage, and in
 | **`schema_meta`** | Tracks the current schema version and migration history. |
 | **`products`** | Central registry of instruments (`conid`). Stores ISIN, names, and last scrape status. |
 | **`raw_payload_blobs`** | Content-addressable storage. Stores Zstd-compressed unique JSON responses to prevent duplication. |
-| **`ingest_runs`** | High-level statistics for each execution session (targets, successes, failures). |
-| **`ingest_run_endpoint_rollups`** | Breakdown of API performance (status codes, payload utility) per endpoint per run. |
-| **`endpoint_scalar_extras`** | A flexible "overflow" table for simple key-value pairs that don't have dedicated columns. |
 | **`sqlite_sequence`** | SQLite internal table for managing `AUTOINCREMENT` primary keys. |
 
 ---
@@ -40,11 +37,9 @@ Data is partitioned by "family." Most families include a `_snapshots` table for 
 *   **`holdings_top10`** (Tall: Specific security holdings)
 *   **`holdings_geographic_weights`** (Tall: Regional exposure)
 
-### Ratios & Performance
+### Ratios
 *   **`ratios_snapshots`**
 *   **`ratios_key_ratios`**, **`ratios_financials`**, **`ratios_fixed_income`**, **`ratios_dividend`**, **`ratios_zscore`** (Tall: Metrics vs. industry averages)
-*   **`performance_snapshots`**
-*   **`performance`** (Tall: Risk/Return stats like Alpha, Beta, Sharpe)
 
 ### Ratings & Commentary
 *   **`lipper_ratings_snapshots`**

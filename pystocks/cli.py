@@ -4,7 +4,7 @@ from typing import Any
 import fire
 
 from .config import SQLITE_DB_PATH
-from .storage import open_connection
+from .storage._sqlite import open_connection
 
 
 class PyStocksCLI:
@@ -89,7 +89,7 @@ class PyStocksCLI:
         conids_file: str | None = None,
         show_progress: bool = True,
     ) -> dict[str, Any]:
-        """Run ingestion and analysis pipeline: products -> fundamentals -> prices -> analysis."""
+        """Run ingestion and analysis pipeline: products -> fundamentals -> analysis."""
         print("Starting full pipeline...")
         result: dict[str, Any] = {}
 
@@ -104,10 +104,7 @@ class PyStocksCLI:
             conids_file=conids_file,
         )
 
-        print("3. Preprocessing prices...")
-        result["prices"] = self.preprocess_prices(show_progress=show_progress)
-
-        print("4. Running analysis...")
+        print("3. Running analysis...")
         result["analysis"] = self.run_analysis(show_progress=show_progress)
 
         print("Pipeline complete.")

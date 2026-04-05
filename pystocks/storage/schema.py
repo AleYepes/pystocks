@@ -32,49 +32,6 @@ CREATE TABLE IF NOT EXISTS raw_payload_blobs (
     created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS ingest_runs (
-    run_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_started_at TEXT NOT NULL,
-    run_finished_at TEXT NOT NULL,
-    total_targeted_conids INTEGER NOT NULL,
-    processed_conids INTEGER NOT NULL,
-    saved_snapshots INTEGER NOT NULL,
-    inserted_events INTEGER NOT NULL,
-    overwritten_events INTEGER NOT NULL,
-    unchanged_events INTEGER NOT NULL,
-    series_raw_rows_written INTEGER NOT NULL,
-    series_latest_rows_upserted INTEGER NOT NULL,
-    auth_retries INTEGER NOT NULL,
-    aborted INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS ingest_run_endpoint_rollups (
-    run_id INTEGER NOT NULL,
-    endpoint TEXT NOT NULL,
-    call_count INTEGER NOT NULL,
-    useful_payload_count INTEGER NOT NULL,
-    useful_payload_rate REAL NOT NULL,
-    status_2xx INTEGER NOT NULL,
-    status_4xx INTEGER NOT NULL,
-    status_5xx INTEGER NOT NULL,
-    status_other INTEGER NOT NULL,
-    PRIMARY KEY (run_id, endpoint),
-    FOREIGN KEY (run_id) REFERENCES ingest_runs(run_id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS endpoint_scalar_extras (
-    endpoint TEXT NOT NULL,
-    conid TEXT NOT NULL,
-    effective_at TEXT NOT NULL,
-    path TEXT NOT NULL,
-    value_text TEXT,
-    value_num REAL,
-    value_bool INTEGER,
-    value_date TEXT,
-    PRIMARY KEY (endpoint, conid, effective_at, path),
-    FOREIGN KEY (conid) REFERENCES products(conid)
-);
-
 CREATE TABLE IF NOT EXISTS profile_and_fees_snapshots (
     conid TEXT NOT NULL,
     effective_at TEXT NOT NULL,
@@ -684,7 +641,9 @@ _MIGRATION_DDL = """
 DROP INDEX IF EXISTS idx_performance_snapshots_hash;
 DROP TABLE IF EXISTS performance_snapshots;
 DROP TABLE IF EXISTS performance;
-DELETE FROM endpoint_scalar_extras WHERE endpoint = 'performance';
+DROP TABLE IF EXISTS ingest_run_endpoint_rollups;
+DROP TABLE IF EXISTS ingest_runs;
+DROP TABLE IF EXISTS endpoint_scalar_extras;
 """
 
 _INITIALIZED_PATHS: set[str] = set()
@@ -696,7 +655,7 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         INSERT OR IGNORE INTO schema_meta (schema_version, applied_at)
-        VALUES (2, ?)
+        VALUES (3, ?)
         """,
         [datetime.now(UTC).isoformat()],
     )

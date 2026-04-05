@@ -8,10 +8,12 @@ Install dependencies with `./venv/bin/pip install -r requirements.txt`.
 Install hooks with `./venv/bin/pre-commit install`.
 
 Use the CLI for local runs:
-- `./venv/bin/python -m pystocks.cli run_pipeline --limit 100` runs products, fundamentals, price preprocessing, and analysis.
+- `./venv/bin/python -m pystocks.cli run_pipeline --limit 100` runs products, fundamentals, and analysis. Price/snapshot preprocessing happens inside analysis for that invocation.
 - `./venv/bin/python -m pystocks.cli preprocess_prices`
 - `./venv/bin/python -m pystocks.cli preprocess_dividends`
 - `./venv/bin/python -m pystocks.cli preprocess_snapshots`
+- `./venv/bin/python -m pystocks.cli build_analysis_panel`
+- `./venv/bin/python -m pystocks.cli run_factor_research`
 - `./venv/bin/python -m pystocks.cli run_analysis`
 - `./venv/bin/python -m pystocks.cli refresh_fundamentals_views` runs lightweight SQLite maintenance after storage/view changes.
 - `./venv/bin/python -m ruff check . --fix` lints, sorts imports, and applies safe fixes.
@@ -28,4 +30,4 @@ The test suite uses `pytest`. Name new tests `test_*.py` and keep them near the 
 Recent history uses short conventional prefixes such as `build:`, `refactor:`, `docs:`, and `fix:` followed by an imperative summary. Keep commits scoped to one concern. Pull requests should describe the pipeline stage touched, note any schema or artifact changes, link the related issue when applicable, and include the exact validation commands run.
 
 ## Data & Architecture Notes
-Treat raw `*_snapshots` tables as storage metadata, not analysis-ready features. Snapshot features are point-in-time tables keyed by `(conid, effective_at)`, while prices, dividends, and sentiment are series features. The canonical store is `data/pystocks.sqlite`.
+Treat raw `*_snapshots` tables as storage metadata, not analysis-ready features. Snapshot features are rebuilt from the semi-raw SQLite tables and reused in-memory within a single analysis invocation. Prices, dividends, and sentiment are series features. The canonical store is `data/pystocks.sqlite`, while fundamentals telemetry lives in JSON under `data/research/`.

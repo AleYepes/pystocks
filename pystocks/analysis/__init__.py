@@ -20,7 +20,7 @@ from ..preprocess.snapshots import (
     load_snapshot_features as load_preprocessed_snapshot_features,
 )
 from ..progress import make_progress_bar, track_progress
-from ..storage import replace_table, transaction
+from ..storage.txn import transaction
 
 
 @dataclass
@@ -59,7 +59,11 @@ def _write_output(name, df, output_dir, sqlite_path, long_sql_df=None, tx=None):
     parquet_df.to_parquet(parquet_path, index=False)
 
     sql_df = long_sql_df if long_sql_df is not None else parquet_df
-    replace_table(name, sql_df, sqlite_path=sqlite_path, tx=tx, index=False)
+    if tx is not None:
+        tx.write_frame(name, sql_df, if_exists="replace", index=False)
+    else:
+        with transaction(sqlite_path) as managed_tx:
+            managed_tx.write_frame(name, sql_df, if_exists="replace", index=False)
 
     return str(parquet_path)
 
@@ -80,6 +84,18 @@ def _text_series(df, column):
 
 def load_snapshot_features(sqlite_path=SQLITE_DB_PATH):
     return load_preprocessed_snapshot_features(sqlite_path=sqlite_path)
+
+
+def _prepare_analysis_inputs(config, show_progress=False):
+    price_config = PricePreprocessConfig(outlier_z_threshold=config.outlier_z_threshold)
+    price_result = preprocess_price_history(
+        load_price_history(config.sqlite_path),
+        config=price_config,
+        show_progress=show_progress,
+    )
+    save_price_preprocess_results(price_result, output_dir=config.output_dir)
+    snapshot_features = load_snapshot_features(config.sqlite_path)
+    return snapshot_features, price_result
 
 
 def _build_price_features(prices, show_progress=False):
@@ -1025,14 +1041,9 @@ def build_analysis_panel(
         output_dir=Path(output_dir or (DATA_DIR / "analysis")),
         **config_kwargs,
     )
-    price_config = PricePreprocessConfig(outlier_z_threshold=config.outlier_z_threshold)
-    price_result = preprocess_price_history(
-        load_price_history(config.sqlite_path),
-        config=price_config,
-        show_progress=show_progress,
+    snapshot_features, price_result = _prepare_analysis_inputs(
+        config, show_progress=show_progress
     )
-    save_price_preprocess_results(price_result, output_dir=config.output_dir)
-    snapshot_features = load_snapshot_features(config.sqlite_path)
     panel = build_analysis_panel_data(
         snapshot_features,
         price_result,
@@ -1069,14 +1080,9 @@ def run_factor_research(
         output_dir=Path(output_dir or (DATA_DIR / "analysis")),
         **config_kwargs,
     )
-    price_config = PricePreprocessConfig(outlier_z_threshold=config.outlier_z_threshold)
-    price_result = preprocess_price_history(
-        load_price_history(config.sqlite_path),
-        config=price_config,
-        show_progress=show_progress,
+    snapshot_features, price_result = _prepare_analysis_inputs(
+        config, show_progress=show_progress
     )
-    save_price_preprocess_results(price_result, output_dir=config.output_dir)
-    snapshot_features = load_snapshot_features(config.sqlite_path)
     panel = build_analysis_panel_data(
         snapshot_features,
         price_result,
@@ -1197,20 +1203,9 @@ def run_analysis_pipeline(
     show_progress=False,
     **config_kwargs,
 ):
-    panel_result = build_analysis_panel(
+    return run_factor_research(
         sqlite_path=sqlite_path,
         output_dir=output_dir,
         show_progress=show_progress,
         **config_kwargs,
     )
-    research_result = run_factor_research(
-        sqlite_path=sqlite_path,
-        output_dir=output_dir,
-        show_progress=show_progress,
-        **config_kwargs,
-    )
-    return {
-        "status": "ok",
-        "panel": panel_result,
-        "research": research_result,
-    }

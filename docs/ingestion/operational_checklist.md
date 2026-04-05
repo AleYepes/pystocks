@@ -37,8 +37,8 @@ PY
 ```
 
 Important:
-- `run_pipeline` currently runs only products + fundamentals.
-- `preprocess_prices` and `run_analysis` are deferred in this refactor.
+- `run_pipeline` runs products, fundamentals, and analysis.
+- Price and snapshot preprocessing happen inside the analysis invocation for that run.
 
 ## 3) Post-run validation
 1. Check telemetry artifacts:
