@@ -43,14 +43,6 @@ SNAPSHOT_TABLE_COLUMNS = {
     ],
     "ratios_dividend": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
     "ratios_zscore": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
-    "performance": [
-        "conid",
-        "effective_at",
-        "section",
-        "metric_id",
-        "value_num",
-        "vs_num",
-    ],
     "dividends_industry_metrics": ["conid", "effective_at"],
     "morningstar_summary": ["conid", "effective_at"],
     "lipper_ratings": ["conid", "effective_at", "period", "metric_id", "rating_value"],
@@ -555,17 +547,6 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
         frames.append(_pivot_metric_frame(df, prefix, key_cols))
 
     if config.include_deferred_families:
-        performance = tables["performance"].copy()
-        if not performance.empty:
-            ratio_diagnostics.append(
-                _ratio_diagnostics(performance, "performance", ["section", "metric_id"])
-            )
-            frames.append(
-                _pivot_metric_frame(
-                    performance, "performance", ["section", "metric_id"]
-                )
-            )
-
         dividend_metrics = tables["dividends_industry_metrics"].copy()
         if not dividend_metrics.empty:
             frames.append(_prefix_frame(dividend_metrics, "dividend_metric"))

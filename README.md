@@ -3,10 +3,10 @@
 SQLite-first ETF ingestion pipeline for IBKR fundamentals and series snapshots.
 
 ## Current runtime scope
-- Auth/session: `pystocks/session.py`
-- Product universe scrape: `pystocks/product_scraper.py`
-- Fundamentals + series scrape: `pystocks/fundamentals.py`
-- Endpoint-centric SQLite storage: `pystocks/fundamentals_store.py`
+- Auth/session: `pystocks/ingest/session.py`
+- Product universe scrape: `pystocks/ingest/product_scraper.py`
+- Fundamentals + series scrape: `pystocks/ingest/fundamentals.py`
+- Endpoint-centric SQLite storage: `pystocks/storage/fundamentals_store.py`
 
 Postprocessing and analysis are intentionally deferred in this refactor.
 

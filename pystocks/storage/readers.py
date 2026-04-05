@@ -190,11 +190,6 @@ def load_snapshot_feature_tables(
             sqlite_path=sqlite_path,
             tx=tx,
         ),
-        "performance": _load_snapshot_frame(
-            "SELECT * FROM performance",
-            sqlite_path=sqlite_path,
-            tx=tx,
-        ),
         "dividends_industry_metrics": _load_snapshot_frame(
             "SELECT * FROM dividends_industry_metrics",
             sqlite_path=sqlite_path,

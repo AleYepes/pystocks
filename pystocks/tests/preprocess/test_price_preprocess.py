@@ -1,6 +1,6 @@
 import pandas as pd
 
-from pystocks.price_preprocess import PricePreprocessConfig, preprocess_price_history
+from pystocks.preprocess.price import PricePreprocessConfig, preprocess_price_history
 
 
 def test_preprocess_price_history_flags_bridge_price_level_anomaly():

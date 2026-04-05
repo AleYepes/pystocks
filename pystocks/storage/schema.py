@@ -466,31 +466,6 @@ CREATE TABLE IF NOT EXISTS morningstar_commentary (
     FOREIGN KEY (conid) REFERENCES products(conid)
 );
 
-CREATE TABLE IF NOT EXISTS performance_snapshots (
-    conid TEXT NOT NULL,
-    effective_at TEXT NOT NULL,
-    observed_at TEXT NOT NULL,
-    payload_hash TEXT NOT NULL,
-    inserted_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (conid, effective_at),
-    FOREIGN KEY (conid) REFERENCES products(conid),
-    FOREIGN KEY (payload_hash) REFERENCES raw_payload_blobs(payload_hash)
-);
-
-CREATE TABLE IF NOT EXISTS performance (
-    conid TEXT NOT NULL,
-    effective_at TEXT NOT NULL,
-    section TEXT,
-    metric_id TEXT,
-    value_num REAL,
-    vs_num REAL,
-    min_num REAL,
-    max_num REAL,
-    avg_num REAL,
-    FOREIGN KEY (conid) REFERENCES products(conid)
-);
-
 CREATE TABLE IF NOT EXISTS ownership_snapshots (
     conid TEXT NOT NULL,
     effective_at TEXT NOT NULL,
@@ -694,7 +669,6 @@ CREATE INDEX IF NOT EXISTS idx_ratios_snapshots_hash ON ratios_snapshots(payload
 CREATE INDEX IF NOT EXISTS idx_lipper_snapshots_hash ON lipper_ratings_snapshots(payload_hash);
 CREATE INDEX IF NOT EXISTS idx_dividends_snapshots_hash ON dividends_snapshots(payload_hash);
 CREATE INDEX IF NOT EXISTS idx_morningstar_snapshots_hash ON morningstar_snapshots(payload_hash);
-CREATE INDEX IF NOT EXISTS idx_performance_snapshots_hash ON performance_snapshots(payload_hash);
 CREATE INDEX IF NOT EXISTS idx_ownership_snapshots_hash ON ownership_snapshots(payload_hash);
 CREATE INDEX IF NOT EXISTS idx_esg_snapshots_hash ON esg_snapshots(payload_hash);
 CREATE INDEX IF NOT EXISTS idx_price_snapshots_hash ON price_chart_snapshots(payload_hash);
@@ -706,15 +680,23 @@ CREATE INDEX IF NOT EXISTS idx_ownership_latest_trade_date ON ownership_trade_lo
 CREATE INDEX IF NOT EXISTS idx_dividends_events_series_effective_at ON dividends_events_series(effective_at);
 """
 
+_MIGRATION_DDL = """
+DROP INDEX IF EXISTS idx_performance_snapshots_hash;
+DROP TABLE IF EXISTS performance_snapshots;
+DROP TABLE IF EXISTS performance;
+DELETE FROM endpoint_scalar_extras WHERE endpoint = 'performance';
+"""
+
 _INITIALIZED_PATHS: set[str] = set()
 
 
 def apply_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA_DDL)
+    conn.executescript(_MIGRATION_DDL)
     conn.execute(
         """
         INSERT OR IGNORE INTO schema_meta (schema_version, applied_at)
-        VALUES (1, ?)
+        VALUES (2, ?)
         """,
         [datetime.now(UTC).isoformat()],
     )

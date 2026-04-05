@@ -20,6 +20,7 @@ _ACCOUNT_ID_RE = re.compile(r"^(?:U|DU|DF|F)?\d+$")
 _LOGIN_ERROR_TEXT_RE = re.compile(
     r"(invalid|incorrect|wrong|failed|error)", re.IGNORECASE
 )
+_ONE_BAR_AUTH_ENDPOINT = "/AccountManagement/OneBarAuthentication?json=1"
 
 
 class IBKRSession:
@@ -40,9 +41,8 @@ class IBKRSession:
             "X-Requested-With": "XMLHttpRequest",
         }
         self._auth_check_endpoints = [
-            # Prefer lightweight authenticated endpoints.
-            "/tws.proxy/portfolio/accounts",
-            "/tws.proxy/iserver/auth/status",
+            # This fundamentals endpoint is lightweight and currently returns 200
+            # for a valid authenticated session, unlike older portfolio/iserver probes.
             "/tws.proxy/fundamentals/landing/756733?widgets=objective",
         ]
 
@@ -51,6 +51,11 @@ class IBKRSession:
             return None
         with open(self.state_path) as f:
             return json.load(f)
+
+    def _save_state(self, state):
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.state_path, "w") as f:
+            json.dump(state, f, indent=2)
 
     def _cookies_from_state(self, state):
         cookies = {}
@@ -160,10 +165,25 @@ class IBKRSession:
             logger.warning(f"Automatic credential submit failed: {e}")
             return False
 
-    def get_primary_account_id(self):
-        state = self._load_state()
-        if not state:
+    def _choose_account_id(self, candidates):
+        valid = []
+        for candidate in candidates:
+            text = str(candidate or "").strip()
+            if _ACCOUNT_ID_RE.match(text):
+                valid.append(text)
+        if not valid:
             return None
+        unique = sorted(set(valid))
+        unique.sort(key=lambda x: (0 if x.startswith("U") else 1, -len(x), x))
+        return unique[0]
+
+    def _extract_primary_account_id_from_state(self, state):
+        if not isinstance(state, dict):
+            return None
+
+        explicit = self._choose_account_id([state.get("primary_account_id")])
+        if explicit:
+            return explicit
 
         acesws_candidates = []
         portfolio2_candidates = []
@@ -184,14 +204,79 @@ class IBKRSession:
                 if _ACCOUNT_ID_RE.match(account_id):
                     portfolio2_candidates.append(account_id)
 
-        def choose(candidates):
-            if not candidates:
-                return None
-            unique = sorted(set(candidates))
-            unique.sort(key=lambda x: (0 if x.startswith("U") else 1, -len(x), x))
-            return unique[0]
+        return self._choose_account_id(acesws_candidates) or self._choose_account_id(
+            portfolio2_candidates
+        )
 
-        return choose(acesws_candidates) or choose(portfolio2_candidates)
+    def _extract_primary_account_id_from_one_bar_payload(self, payload):
+        if not isinstance(payload, dict):
+            return None
+
+        account_id = self._choose_account_id([payload.get("mostRelevantAccount")])
+        if account_id:
+            return account_id
+
+        accounts = payload.get("portfolioAccounts")
+        if not isinstance(accounts, list):
+            return None
+
+        for account in accounts:
+            if not isinstance(account, dict):
+                continue
+            account_id = self._choose_account_id(
+                [account.get("accountId"), account.get("accountVan")]
+            )
+            if account_id:
+                return account_id
+
+        return None
+
+    async def _fetch_primary_account_id_from_state(self, state, timeout_s=20.0):
+        if not isinstance(state, dict):
+            return None
+        cookies = self._cookies_from_state(state)
+        if not cookies:
+            return None
+
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                cookies=cookies,
+                headers=self._headers,
+                timeout=timeout_s,
+            ) as client:
+                response = await client.get(_ONE_BAR_AUTH_ENDPOINT)
+        except Exception:
+            return None
+
+        if response.status_code != 200:
+            return None
+
+        try:
+            payload = response.json()
+        except Exception:
+            return None
+
+        return self._extract_primary_account_id_from_one_bar_payload(payload)
+
+    async def _hydrate_primary_account_id(self, state, timeout_s=20.0):
+        if not isinstance(state, dict):
+            return state
+
+        account_id = await self._fetch_primary_account_id_from_state(
+            state, timeout_s=timeout_s
+        )
+        if account_id is None:
+            account_id = self._extract_primary_account_id_from_state(state)
+        if account_id is None or state.get("primary_account_id") == account_id:
+            return state
+
+        updated = dict(state)
+        updated["primary_account_id"] = account_id
+        return updated
+
+    def get_primary_account_id(self):
+        return self._extract_primary_account_id_from_state(self._load_state())
 
     async def _validate_state_payload(self, state, timeout_s=20.0):
         """
@@ -237,7 +322,17 @@ class IBKRSession:
         Validates stored auth state by making authenticated API calls.
         """
         state = self._load_state()
-        return await self._validate_state_payload(state, timeout_s=timeout_s)
+        is_valid = await self._validate_state_payload(state, timeout_s=timeout_s)
+        if not is_valid or not isinstance(state, dict):
+            return is_valid
+
+        hydrated_state = await self._hydrate_primary_account_id(
+            state, timeout_s=timeout_s
+        )
+        if hydrated_state is not state:
+            self._save_state(hydrated_state)
+
+        return True
 
     async def _run_login_attempt(
         self, playwright, username, password, headless=False, timeout_ms=180000
@@ -263,7 +358,10 @@ class IBKRSession:
                 state = await context.storage_state()
                 is_valid = await self._validate_state_payload(state, timeout_s=10.0)
                 if is_valid:
-                    await context.storage_state(path=self.state_path)
+                    hydrated_state = await self._hydrate_primary_account_id(
+                        state, timeout_s=10.0
+                    )
+                    self._save_state(hydrated_state)
                     logger.info(
                         f"Login successful. Session state saved to {self.state_path}"
                     )

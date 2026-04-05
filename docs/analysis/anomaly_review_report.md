@@ -2,7 +2,7 @@
 
 ## Scope
 
-This review focused on the refactored analysis path in `pystocks/`, starting with `pystocks/price_preprocess.py` and comparing it to the legacy factor workflow in `src/analysis.py`.
+This review focused on the refactored analysis path in `pystocks/`, starting with `pystocks/preprocess/price.py` and comparing it to the legacy factor workflow in `src/analysis.py`.
 
 The findings below are based on direct inspection of `data/pystocks.sqlite` on March 31, 2026.
 
@@ -29,7 +29,7 @@ Problem:
 
 Solution implemented:
 
-- Added `is_price_level_anomaly` to `pystocks/price_preprocess.py`.
+- Added `is_price_level_anomaly` to `pystocks/preprocess/price.py`.
 - Added a bounded bridge-price check that looks for a short run of clean-looking rows trapped between two sign-reversing outlier returns.
 - The bridge rows are compared to clean anchors outside the outlier span.
 - This now catches the hidden middle bad row in the `105951695` case without stripping normal prices around it.
@@ -163,9 +163,9 @@ Problem:
 
 Solution proposed:
 
-- Do not fold this into `price_preprocess.py`.
+- Do not fold this into `preprocess/price.py`.
 - Add a separate snapshot preprocessing layer with explicit per-table rules.
-- Treat `price_preprocess.py` as series-only preprocessing.
+- Treat `preprocess/price.py` as series-only preprocessing.
 
 Reason:
 

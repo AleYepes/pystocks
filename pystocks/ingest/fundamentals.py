@@ -41,7 +41,6 @@ def _load_conids_from_file(path):
 class FundamentalScraper:
     """Scrapes fundamental data from IBKR Portal API."""
 
-    PERIODS_DESC = ["10Y", "5Y", "3Y", "1Y", "6M"]
     PRICE_CHART_PERIOD_WINDOWS = [
         ("1W", 14),
         ("1M", 45),
@@ -63,12 +62,12 @@ class FundamentalScraper:
         "sentiment_search": "sma/request?type=search",
         "ownership": "ownership",
         "esg": "impact/esg",
-        "performance": "mf_performance",
     }
 
     def __init__(self, session=None):
         self.session = session or IBKRSession()
         self.esg_account_id = self.session.get_primary_account_id()
+        self._warned_missing_esg_account = False
         self.research_dir = RESEARCH_DIR
         self.research_dir.mkdir(parents=True, exist_ok=True)
         self.store = FundamentalsStore()
@@ -101,8 +100,6 @@ class FundamentalScraper:
             return "mstar/fund/detail"
         if endpoint.startswith("mf_performance_chart/"):
             return "mf_performance_chart"
-        if endpoint.startswith("mf_performance/"):
-            return "mf_performance"
         if endpoint.startswith("ownership/"):
             return "ownership"
         if endpoint.startswith("impact/esg/"):
@@ -203,7 +200,6 @@ class FundamentalScraper:
             ],
             "mstar": ["summary", "commentary"],
             "price_chart": ["plot"],
-            "perf": ["cumulative", "annualized"],
             "owner": ["trade_log", "owners_types"],
             "sma_search": ["sentiment"],
         }
@@ -260,7 +256,13 @@ class FundamentalScraper:
 
         if self.esg_account_id:
             return f"impact/esg/{conid}?accounts={self.esg_account_id}"
-        return f"impact/esg/{conid}"
+        if not self._warned_missing_esg_account:
+            logger.warning(
+                "Skipping ESG endpoint because no IBKR account id could be derived "
+                "from session state."
+            )
+            self._warned_missing_esg_account = True
+        return None
 
     def _landing_has_total_net_assets(self, landing_data):
         """True when landing payload provides key_profile.data.total_net_assets."""
@@ -286,25 +288,9 @@ class FundamentalScraper:
             return True, "total_net_assets missing"
         return False, None
 
-    async def fetch_performance_with_period_fallback(self, client, conid):
-        """
-        Try largest->smallest period and return first performance payload with data.
-        Returns tuple: (payload_or_auth_error, selected_period_or_none)
-        """
-        for period in self.PERIODS_DESC:
-            endpoint = (
-                f"mf_performance/{conid}?risk_period={period}&statistic_period={period}"
-            )
-            data = await self.fetch_endpoint(client, endpoint)
-            if data == "__AUTH_ERROR__":
-                return "__AUTH_ERROR__", None
-            if self._has_payload_data(data, "perf"):
-                return data, period
-        return None, None
-
     async def scrape_conid(self, client, conid):
         """Scrapes fundamental data for a given conid."""
-        widgets = "objective,mstar,lipper_ratings,mf_key_ratios,risk_and_statistics,holdings,performance_and_peers,keyProfile,ownership,dividends,tear_sheet,news,fund_mstar,mf_esg,social_sentiment,securities_lending,sv,short_sale,ukuser"
+        widgets = "objective,keyProfile"
 
         landing_data = await self.fetch_endpoint(
             client, f"landing/{conid}?widgets={widgets}"
@@ -354,11 +340,10 @@ class FundamentalScraper:
                 self.fetch_endpoint(client, self._build_sma_search_endpoint(conid)),
             ),
             ("ownership", self.fetch_endpoint(client, f"ownership/{conid}")),
-            ("esg", self.fetch_endpoint(client, self._build_esg_endpoint(conid))),
         ]
-        period_task_items = [
-            ("performance", self.fetch_performance_with_period_fallback(client, conid)),
-        ]
+        esg_endpoint = self._build_esg_endpoint(conid)
+        if esg_endpoint:
+            fixed_task_items.append(("esg", self.fetch_endpoint(client, esg_endpoint)))
 
         fixed_results = {}
         if fixed_task_items:
@@ -366,15 +351,7 @@ class FundamentalScraper:
             values = await asyncio.gather(*tasks)
             fixed_results = dict(zip(names, values))
 
-        period_results = {}
-        if period_task_items:
-            names, tasks = zip(*period_task_items)
-            values = await asyncio.gather(*tasks)
-            period_results = dict(zip(names, values))
-
-        if "__AUTH_ERROR__" in fixed_results.values() or any(
-            r[0] == "__AUTH_ERROR__" for r in period_results.values()
-        ):
+        if "__AUTH_ERROR__" in fixed_results.values():
             return "__AUTH_ERROR__"
 
         for name, data in fixed_results.items():
@@ -391,14 +368,6 @@ class FundamentalScraper:
                     self._record_useful_payload(
                         self.RESULT_ENDPOINT_FAMILIES.get(name, name)
                     )
-
-        for name, (data, period) in period_results.items():
-            if data:
-                combined_data[name] = data
-                combined_data[f"{name}_period"] = period
-                self._record_useful_payload(
-                    self.RESULT_ENDPOINT_FAMILIES.get(name, name)
-                )
 
         return combined_data
 

@@ -841,37 +841,6 @@ def _extract_morningstar_features(payload):
     return _dedupe_feature_rows(rows)
 
 
-def _extract_performance_features(payload):
-    payload = _safe_dict(payload)
-    rows = []
-
-    for section in ("cumulative", "annualized", "yield", "risk", "statistic"):
-        for item in _safe_list(payload.get(section)):
-            item = _safe_dict(item)
-            metric = _metric_id(item)
-            base = f"performance_{_slug(section)}_{metric}"
-
-            value = _parse_number(item.get("value"))
-            if value is not None:
-                _add_feature(
-                    rows, base, "performance", value, f"{section}:{metric}:value"
-                )
-
-            for field in ("vs", "percentile", "min", "max", "avg"):
-                extra = _parse_number(item.get(field))
-                if extra is None:
-                    continue
-                _add_feature(
-                    rows,
-                    f"{base}_{field}",
-                    "performance",
-                    extra,
-                    f"{section}:{metric}:{field}",
-                )
-
-    return _dedupe_feature_rows(rows)
-
-
 def _extract_ownership_features(payload):
     payload = _safe_dict(payload)
     rows = []
@@ -958,7 +927,6 @@ _FACTOR_EXTRACTORS = {
     "lipper_ratings": _extract_lipper_ratings_features,
     "dividends": _extract_dividends_features,
     "morningstar": _extract_morningstar_features,
-    "performance": _extract_performance_features,
     "ownership": _extract_ownership_features,
     "esg": _extract_esg_features,
     # Time-series endpoints are handled in dedicated series tables in v1.

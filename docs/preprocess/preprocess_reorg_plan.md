@@ -71,11 +71,14 @@ pystocks/
     models.py
   cli.py
   config.py
-  fundamentals.py
+  ingest/
+    fundamentals.py
+    product_scraper.py
+    session.py
   fundamentals_normalizers.py
-  fundamentals_store.py
-  product_scraper.py
-  session.py
+  storage/
+    fundamentals_store.py
+    ops_state.py
 ```
 
 Minimal first step:
@@ -88,14 +91,11 @@ pystocks/
     dividends.py
 ```
 
-with compatibility imports left in place if needed during transition.
-
 ## Planned Work Order
 
 ### Phase 1. Move price preprocessing into a package
 
-- Move the current logic from `pystocks/price_preprocess.py` to `pystocks/preprocess/price.py`
-- Keep import compatibility for existing call sites
+- Move the current logic from the package root into `pystocks/preprocess/price.py`
 - Keep behavior unchanged except for import paths
 
 Acceptance:

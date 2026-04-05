@@ -6,8 +6,8 @@ This document describes the current target state for the refactored analysis flo
 
 Some parts already exist:
 
-- `pystocks/price_preprocess.py` builds row-level clean-price flags and eligibility outputs.
-- `pystocks/analysis.py` already builds a snapshot panel, factor returns, factor clustering, persistence outputs, and current betas.
+- `pystocks/preprocess/price.py` builds row-level clean-price flags and eligibility outputs.
+- `pystocks/analysis/__init__.py` already builds a snapshot panel, factor returns, factor clustering, persistence outputs, and current betas.
 - CLI entrypoints already exist in `pystocks/cli.py`.
 
 This plan now focuses on the gaps that still matter after the initial implementation and the SQLite anomaly review.
@@ -35,7 +35,7 @@ This plan now focuses on the gaps that still matter after the initial implementa
 
 ### Price preprocessing
 
-`pystocks/price_preprocess.py` now covers:
+`pystocks/preprocess/price.py` now covers:
 
 - invalid prices
 - stale runs
@@ -47,7 +47,7 @@ This is the correct place for series-level cleaning of `price_chart_series`.
 
 ### Analysis orchestration
 
-`pystocks/analysis.py` already handles:
+`pystocks/analysis/__init__.py` already handles:
 
 - as-of snapshot selection
 - monthly rebalance panel construction
@@ -79,7 +79,7 @@ The current code loads and merges snapshot tables directly inside `pystocks/anal
 Required action:
 
 - Add a dedicated snapshot preprocessing module.
-- Keep `pystocks/price_preprocess.py` series-only.
+- Keep `pystocks/preprocess/price.py` series-only.
 - Move snapshot hygiene, table-specific scaling rules, and point-in-time feature normalization into the new snapshot layer.
 
 Reason:
@@ -88,7 +88,7 @@ Reason:
 
 ### 2. Persist raw price anomaly signals from ingestion
 
-`pystocks/fundamentals_store.py` computes `debug_mismatch` for price rows, but that signal is not persisted into `price_chart_series`.
+`pystocks/storage/fundamentals_store.py` computes `debug_mismatch` for price rows, but that signal is not persisted into `price_chart_series`.
 
 Required action:
 

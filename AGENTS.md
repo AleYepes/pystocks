@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`pystocks/` is the production codebase. Follow the pipeline stages there: session auth, product scraping, fundamentals ingestion, SQLite storage, preprocessing under `pystocks/preprocess/`, and factor analysis in `pystocks/analysis.py`. Put new preprocessing work in `pystocks/preprocess/`, not in new root scripts. Tests live in `pystocks/tests/`. Reference material lives in `docs/` and image assets in `assets/`. Treat `src/` and `notebooks/` as historical unless a task explicitly targets them.
+`pystocks/` is the production codebase. Follow the pipeline stages there: session auth under `pystocks/ingest/`, product scraping under `pystocks/ingest/`, fundamentals ingestion under `pystocks/ingest/`, SQLite storage under `pystocks/storage/`, preprocessing under `pystocks/preprocess/`, and factor analysis under `pystocks/analysis/`. Put new preprocessing work in `pystocks/preprocess/`, not in new root scripts. Tests live in `pystocks/tests/`. Reference material lives in `docs/` and image assets in `assets/`. Treat `src/` and `notebooks/` as historical unless a task explicitly targets them.
 
 ## Build, Test, and Development Commands
 Install dependencies with `./venv/bin/pip install -r requirements.txt`.
@@ -19,7 +19,7 @@ Use the CLI for local runs:
 - `./venv/bin/python -m pyright` runs fast type checking on the currently enforced `pystocks/` subset.
 
 ## Coding Style & Naming Conventions
-Use Python with 4-space indentation, snake_case for modules, functions, and variables, and short, focused functions. Let `ruff format` own formatting and import ordering. Prefer extending existing modules over introducing parallel workflows. Keep storage concerns in `pystocks/fundamentals_store.py`, snapshot feature assembly in `pystocks/preprocess/snapshots.py`, and series preprocessing separated by domain. Avoid unnecessary comments, backfill logic, or destructive git operations.
+Use Python with 4-space indentation, snake_case for modules, functions, and variables, and short, focused functions. Let `ruff format` own formatting and import ordering. Prefer extending existing modules over introducing parallel workflows. Keep storage concerns in `pystocks/storage/fundamentals_store.py`, snapshot feature assembly in `pystocks/preprocess/snapshots.py`, and series preprocessing separated by domain. Avoid unnecessary comments, backfill logic, or destructive git operations.
 
 ## Testing Guidelines
 The test suite uses `pytest`. Name new tests `test_*.py` and keep them near the affected area under `pystocks/tests/`. Before handoff, run `./venv/bin/python -m ruff check . --fix`, `./venv/bin/python -m ruff format .`, `./venv/bin/python -m pyright`, and `./venv/bin/python -m pytest -q`. Pyright currently excludes a few legacy type-debt modules, so keep new work inside the checked surface when possible or tighten the config as you pay that debt down. If you change SQLite storage or view behavior, also run `./venv/bin/python -m pystocks.cli refresh_fundamentals_views`.

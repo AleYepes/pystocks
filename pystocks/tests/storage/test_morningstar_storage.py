@@ -143,7 +143,6 @@ def test_child_and_series_raw_tables_do_not_use_synthetic_id_columns():
                 "dividends_industry_metrics",
                 "morningstar_summary",
                 "morningstar_commentary",
-                "performance",
                 "ownership_owners_types",
                 "ownership_holders",
                 "esg",

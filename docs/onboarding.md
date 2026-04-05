@@ -13,18 +13,16 @@ Treat these as reference only unless the task explicitly asks for them:
 
 ## Current Pipeline
 
-1. Session/auth: `pystocks/session.py`
-2. Product universe scrape: `pystocks/product_scraper.py`
-3. Fundamentals and series scrape: `pystocks/fundamentals.py`
-4. SQLite materialization: `pystocks/fundamentals_store.py`
+1. Session/auth: `pystocks/ingest/session.py`
+2. Product universe scrape: `pystocks/ingest/product_scraper.py`
+3. Fundamentals and series scrape: `pystocks/ingest/fundamentals.py`
+4. SQLite materialization: `pystocks/storage/fundamentals_store.py`
 5. Series preprocessing:
    - prices: `pystocks/preprocess/price.py`
    - dividends: `pystocks/preprocess/dividends.py`
 6. Snapshot-feature preprocessing:
    - dated feature tables: `pystocks/preprocess/snapshots.py`
-7. Analysis and factor research: `pystocks/analysis.py`
-
-Compatibility wrappers still exist where needed, for example `pystocks/price_preprocess.py`.
+7. Analysis and factor research: `pystocks/analysis/__init__.py`
 
 ## Data Model
 
@@ -45,7 +43,6 @@ Important table families in SQLite:
   - `profile_and_fees`
   - `holdings_*`
   - `ratios_*`
-  - `performance`
   - `dividends_industry_metrics`
   - `morningstar_summary`
   - `lipper_ratings`
@@ -127,20 +124,20 @@ Still pending or incomplete:
 If the task is about:
 
 - ingestion/storage:
-  - `pystocks/fundamentals_store.py`
+  - `pystocks/storage/fundamentals_store.py`
   - endpoint storage tests under `pystocks/tests/`
 - price anomalies or return prep:
   - `pystocks/preprocess/price.py`
-  - `pystocks/tests/test_price_preprocess.py`
+  - `pystocks/tests/preprocess/test_price_preprocess.py`
 - dividend event quality:
   - `pystocks/preprocess/dividends.py`
-  - `pystocks/tests/test_dividend_preprocess.py`
+  - `pystocks/tests/preprocess/test_dividend_preprocess.py`
 - snapshot feature assembly:
   - `pystocks/preprocess/snapshots.py`
-  - `pystocks/tests/test_snapshot_preprocess.py`
+  - `pystocks/tests/preprocess/test_snapshot_preprocess.py`
 - factor research behavior:
-  - `pystocks/analysis.py`
-  - `pystocks/tests/test_analysis_pipeline.py`
+  - `pystocks/analysis/__init__.py`
+  - `pystocks/tests/analysis/test_analysis_pipeline.py`
 
 ## Key Docs
 

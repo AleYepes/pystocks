@@ -164,7 +164,6 @@ def test_ratios_split_into_section_tables_and_drop_fmt_fields():
 
             for table in [
                 "dividends_snapshots",
-                "performance_snapshots",
                 "ownership_snapshots",
                 "esg_snapshots",
                 "sentiment_snapshots",

@@ -105,7 +105,7 @@ Before editing code, create a short endpoint contract:
 2. Enumerate unique source field names and value shapes.
 3. Propose final table set and ownership boundaries.
 4. Define explicit source->column mapping + datatype rules.
-5. Implement schema changes in `pystocks/fundamentals_store.py`.
+5. Implement schema changes in `pystocks/storage/fundamentals_store.py`.
 6. Implement endpoint upsert transform logic.
 7. Remove legacy writes for dropped tables/columns.
 8. Update table/index/view references.
@@ -115,7 +115,7 @@ Before editing code, create a short endpoint contract:
 
 ## Why Explicit Schemas (vs Dynamic Creation)
 
-Recommendation: keep explicit declarations in `fundamentals_store`.
+Recommendation: keep explicit declarations in `storage/fundamentals_store`.
 
 Reasons:
 - Predictable schema and query contracts.

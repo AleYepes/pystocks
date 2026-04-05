@@ -60,9 +60,10 @@ def test_esg_endpoint_reloads_account_id_from_session_state():
     scraper = _scraper()
     scraper.session = DummySession()
     scraper.esg_account_id = None
+    scraper._warned_missing_esg_account = False
 
     endpoint_without_account = scraper._build_esg_endpoint("564156940")
-    assert endpoint_without_account == "impact/esg/564156940"
+    assert endpoint_without_account is None
 
     scraper.session.account = "U19746488"
     endpoint_with_account = scraper._build_esg_endpoint("564156940")

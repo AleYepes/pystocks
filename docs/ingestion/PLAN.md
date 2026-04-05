@@ -2,15 +2,15 @@
 
 ### Summary
 - Replace the current DuckDB + parquet + events.db storage stack with one SQLite database at `data/pystocks.sqlite`.
-- Keep ingestion and endpoint storage only in this refactor; explicitly defer `price_preprocess.py` and `analysis.py`.
+- Keep ingestion and endpoint storage only in this refactor; explicitly defer `pystocks/preprocess/price.py` and `pystocks/analysis/`.
 - Store each endpoint in explicit relational tables, endpoint by endpoint, with no stringified dict/list columns in normalized tables.
 - Keep exact raw payload retention via a dedicated compressed blob table.
 - Store series using a dual-table pattern: append-only raw rows plus deduped latest rows for fast querying and true time expansion.
 
 ### Scope and Non-Scope
-- In scope: `product_scraper.py`, `ops_state.py`, `fundamentals.py`, `fundamentals_store.py`, `cli.py`, tests for ingestion/storage, onboarding and operational docs.
+- In scope: `pystocks/ingest/product_scraper.py`, `pystocks/storage/ops_state.py`, `pystocks/ingest/fundamentals.py`, `pystocks/storage/fundamentals_store.py`, `pystocks/cli.py`, tests for ingestion/storage, onboarding and operational docs.
 - In scope: telemetry persisted to SQLite (run summary + endpoint rollups) and still emitted to JSON artifacts.
-- Out of scope: refactoring `price_preprocess.py` and `analysis.py` internals; factor panel / factor regression pipelines.
+- Out of scope: refactoring `pystocks/preprocess/price.py` and `pystocks/analysis/` internals; factor panel / factor regression pipelines.
 - Out of scope: historical migration from existing data files (fresh start only).
 
 ### Canonical SQLite File
@@ -106,16 +106,16 @@
 - Result: history is always appendable in raw tables; latest tables always represent current canonical state.
 
 ### Refactor Steps (Implementation Sequence)
-1. Create SQLite schema bootstrap in `fundamentals_store.py` or dedicated `sqlite_schema.py`; add schema versioning.
-2. Replace `ops_state.py` DuckDB logic with sqlite3 CRUD/upsert against `products`.
-3. Refactor `product_scraper.py` to write `products` in SQLite and return SQLite path in result payload.
+1. Create SQLite schema bootstrap in `pystocks/storage/fundamentals_store.py` or dedicated `sqlite_schema.py`; add schema versioning.
+2. Replace `pystocks/storage/ops_state.py` DuckDB logic with sqlite3 CRUD/upsert against `products`.
+3. Refactor `pystocks/ingest/product_scraper.py` to write `products` in SQLite and return SQLite path in result payload.
 4. Rebuild `FundamentalsStore.persist_combined_snapshot` for SQLite:
 - Keep effective date resolution logic.
 - Store raw blob once by hash.
 - Upsert endpoint main row by `(conid, effective_at)`.
 - Replace endpoint child rows transactionally on overwrite.
 - Append raw series rows and upsert latest rows.
-5. Refactor `fundamentals.py` ingestion counters:
+5. Refactor `pystocks/ingest/fundamentals.py` ingestion counters:
 - Replace `duplicate_events`/factor counters with `inserted_events`, `overwritten_events`, `unchanged_events`, `series_raw_rows_written`, `series_latest_rows_upserted`.
 - Persist run telemetry both to SQLite rollup tables and existing JSON files.
 6. Update `cli.py`:

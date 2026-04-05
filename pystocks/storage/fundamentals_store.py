@@ -30,7 +30,6 @@ ENDPOINT_KEYS = [
     "dividends",
     "morningstar",
     "price_chart",
-    "performance",
     "sentiment_search",
     "ownership",
     "esg",
@@ -839,7 +838,6 @@ class FundamentalsStore:
             "dividends": "dividends_snapshots",
             "morningstar": "morningstar_snapshots",
             "price_chart": "price_chart_snapshots",
-            "performance": "performance_snapshots",
             "sentiment_search": "sentiment_snapshots",
             "ownership": "ownership_snapshots",
             "esg": "esg_snapshots",
@@ -1656,58 +1654,6 @@ class FundamentalsStore:
             )
         self._insert_rows(conn, "morningstar_commentary", commentary_rows)
 
-    def _upsert_performance(
-        self,
-        conn,
-        conid,
-        effective_at,
-        observed_at,
-        payload_hash,
-        source_file,
-        now_iso,
-        payload,
-    ):
-        self._upsert_snapshot_row(
-            conn,
-            "performance_snapshots",
-            conid,
-            effective_at,
-            observed_at,
-            payload_hash,
-            source_file,
-            now_iso,
-            {},
-        )
-
-        self._delete_children(conn, ["performance"], conid, effective_at)
-
-        rows = []
-        for section in ("cumulative", "annualized", "yield", "risk", "statistic"):
-            values = (
-                payload.get(section, [])
-                if isinstance(payload.get(section), list)
-                else []
-            )
-            for item in values:
-                if not isinstance(item, dict):
-                    continue
-                rows.append(
-                    {
-                        "conid": str(conid),
-                        "effective_at": str(effective_at),
-                        "section": section,
-                        "metric_id": _sanitize_segment(
-                            item.get("name_tag") or item.get("id") or item.get("name")
-                        ),
-                        "value_num": _parse_number(item.get("value")),
-                        "vs_num": _parse_number(item.get("vs")),
-                        "min_num": _parse_number(item.get("min")),
-                        "max_num": _parse_number(item.get("max")),
-                        "avg_num": _parse_number(item.get("avg")),
-                    }
-                )
-        self._insert_rows(conn, "performance", rows)
-
     def _upsert_ownership(
         self,
         conn,
@@ -2416,7 +2362,6 @@ class FundamentalsStore:
             "dividends": self._upsert_dividends,
             "morningstar": self._upsert_morningstar,
             "price_chart": self._upsert_price_chart_snapshot,
-            "performance": self._upsert_performance,
             "sentiment_search": self._upsert_sentiment_snapshot,
             "ownership": self._upsert_ownership,
             "esg": self._upsert_esg,
