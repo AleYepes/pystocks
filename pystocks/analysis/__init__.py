@@ -54,6 +54,7 @@ class AnalysisConfig:
     include_dynamic_fundamental_trends: bool = True
     return_alignment_max_gap_days: int = 0
     sparse_feature_max_ratio: float = 0.995
+    persist_progress_bars: bool = True
 
 
 SUPERSECTOR_MAP = {
@@ -228,7 +229,9 @@ def _empty_cluster_frame():
     )
 
 
-def _build_price_features(prices, show_progress=False):
+def _build_price_features(
+    prices, show_progress=False, persist_progress_bars: bool = True
+):
     clean = prices.loc[prices["is_clean_price"]].copy()
     if clean.empty:
         return _empty_frame(["conid", "trade_date"])
@@ -242,7 +245,7 @@ def _build_price_features(prices, show_progress=False):
         total=group_count,
         desc="Price features",
         unit="conid",
-        leave=False,
+        leave=persist_progress_bars,
     ):
         g = group.copy()
         returns = pd.to_numeric(g["clean_return"], errors="coerce")
@@ -555,7 +558,11 @@ def build_analysis_panel_data(
 ):
     prices = price_result["prices"]
     eligibility = price_result["eligibility"]
-    price_features = _build_price_features(prices, show_progress=show_progress)
+    price_features = _build_price_features(
+        prices,
+        show_progress=show_progress,
+        persist_progress_bars=config.persist_progress_bars,
+    )
     rebalance_dates = _build_rebalance_dates(
         snapshot_features, prices, config.rebalance_freq
     )
@@ -577,7 +584,7 @@ def build_analysis_panel_data(
         total=len(rebalance_dates),
         desc="Analysis rebalance dates",
         unit="date",
-        leave=False,
+        leave=config.persist_progress_bars,
     ):
         eligible_snapshots = snapshot_features.loc[
             snapshot_features["effective_at"] <= rebalance_date
@@ -849,7 +856,12 @@ def _select_baseline_bond_members(panel_slice):
     return bond_slice.head(target_count)
 
 
-def _build_baseline_returns(panel, returns_wide, show_progress=False):
+def _build_baseline_returns(
+    panel,
+    returns_wide,
+    show_progress=False,
+    persist_progress_bars: bool = True,
+):
     if panel.empty or returns_wide.empty:
         return pd.Series(dtype=float), pd.DataFrame()
 
@@ -864,7 +876,7 @@ def _build_baseline_returns(panel, returns_wide, show_progress=False):
         total=len(intervals),
         desc="Baseline windows",
         unit="window",
-        leave=False,
+        leave=persist_progress_bars,
     ):
         panel_slice = panel.loc[panel["rebalance_date"] == start]
         selected = _select_baseline_bond_members(panel_slice)
@@ -904,7 +916,10 @@ def build_factor_returns(
     returns_wide = _build_returns_wide(prices, config.return_alignment_max_gap_days)
     risk_free_series = _build_risk_free_series(risk_free_daily)
     baseline_returns, baseline_members = _build_baseline_returns(
-        panel, returns_wide, show_progress=show_progress
+        panel,
+        returns_wide,
+        show_progress=show_progress,
+        persist_progress_bars=config.persist_progress_bars,
     )
     if panel.empty or returns_wide.empty:
         return pd.DataFrame(), pd.DataFrame(), baseline_returns, baseline_members
@@ -920,7 +935,7 @@ def build_factor_returns(
         total=len(intervals),
         desc="Factor return windows",
         unit="window",
-        leave=False,
+        leave=config.persist_progress_bars,
     ):
         interval_returns = returns_wide.loc[
             (returns_wide.index > start) & (returns_wide.index <= end)
@@ -1015,7 +1030,7 @@ def cluster_factor_returns(factor_returns, factor_meta, config, show_progress=Fa
         total=sleeve_count,
         desc="Factor clustering",
         unit="sleeve",
-        leave=False,
+        leave=config.persist_progress_bars,
     ):
         factor_ids = meta_slice["factor_id"].tolist()
         sleeve_returns = factor_returns.reindex(columns=factor_ids)
@@ -1252,7 +1267,7 @@ def run_factor_research_data(
         total=total_model_fits,
         desc="Research model fits",
         unit="fit",
-        leave=False,
+        leave=config.persist_progress_bars,
     ) as progress_bar:
         for sleeve, sleeve_conids, sleeve_factors in sleeve_specs:
             progress_bar.set_postfix_str(str(sleeve), refresh=False)
@@ -1454,7 +1469,7 @@ def compute_current_betas_data(
         total=beta_fit_total,
         desc="Current beta fits",
         unit="fit",
-        leave=False,
+        leave=config.persist_progress_bars,
     ) as progress_bar:
         for sleeve, sleeve_panel in latest_panel.groupby("sleeve"):
             progress_bar.set_postfix_str(str(sleeve), refresh=False)

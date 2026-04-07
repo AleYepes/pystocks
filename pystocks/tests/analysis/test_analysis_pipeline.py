@@ -286,6 +286,121 @@ def test_build_analysis_panel_requires_macro_features_when_enabled():
         )
 
 
+def test_build_analysis_panel_keeps_progress_bars_by_default(monkeypatch):
+    leaves: list[bool] = []
+
+    def fake_track_progress(
+        iterable,
+        *,
+        show_progress=False,
+        total=None,
+        desc=None,
+        unit=None,
+        leave=False,
+    ):
+        leaves.append(bool(leave))
+        return iterable
+
+    monkeypatch.setattr(analysis_module, "track_progress", fake_track_progress)
+
+    snapshot_features = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "effective_at": pd.Timestamp("2026-01-31"),
+                "profile__asset_type": "Equity",
+                "profile__total_net_assets_num": 100.0,
+            }
+        ]
+    )
+    price_result = {
+        "prices": pd.DataFrame(
+            [
+                {
+                    "conid": "a",
+                    "trade_date": pd.Timestamp("2026-01-31"),
+                    "clean_price": 10.0,
+                    "clean_return": 0.01,
+                    "is_clean_price": True,
+                }
+            ]
+        ),
+        "eligibility": pd.DataFrame([{"conid": "a", "eligible": True}]),
+    }
+
+    panel = build_analysis_panel_data(
+        snapshot_features,
+        price_result,
+        AnalysisConfig(
+            include_macro_features=False,
+            require_supplementary_data=False,
+        ),
+        show_progress=True,
+    )
+
+    assert not panel.empty
+    assert leaves
+    assert all(leaves)
+
+
+def test_build_analysis_panel_can_disable_persistent_progress_bars(monkeypatch):
+    leaves: list[bool] = []
+
+    def fake_track_progress(
+        iterable,
+        *,
+        show_progress=False,
+        total=None,
+        desc=None,
+        unit=None,
+        leave=False,
+    ):
+        leaves.append(bool(leave))
+        return iterable
+
+    monkeypatch.setattr(analysis_module, "track_progress", fake_track_progress)
+
+    snapshot_features = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "effective_at": pd.Timestamp("2026-01-31"),
+                "profile__asset_type": "Equity",
+                "profile__total_net_assets_num": 100.0,
+            }
+        ]
+    )
+    price_result = {
+        "prices": pd.DataFrame(
+            [
+                {
+                    "conid": "a",
+                    "trade_date": pd.Timestamp("2026-01-31"),
+                    "clean_price": 10.0,
+                    "clean_return": 0.01,
+                    "is_clean_price": True,
+                }
+            ]
+        ),
+        "eligibility": pd.DataFrame([{"conid": "a", "eligible": True}]),
+    }
+
+    panel = build_analysis_panel_data(
+        snapshot_features,
+        price_result,
+        AnalysisConfig(
+            include_macro_features=False,
+            require_supplementary_data=False,
+            persist_progress_bars=False,
+        ),
+        show_progress=True,
+    )
+
+    assert not panel.empty
+    assert leaves
+    assert not any(leaves)
+
+
 def test_cluster_factor_returns_prefers_composite_representative():
     index = pd.date_range("2026-01-01", periods=150, freq="B")
     factor_returns = pd.DataFrame(
