@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pycountry
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
 from ..storage.readers import (
@@ -25,6 +26,14 @@ WORLD_BANK_INDICATOR_MAP = {
     "NE.EXP.GNFS.ZS": "exports_goods_services",
 }
 
+RISK_FREE_SERIES_BY_ECONOMY = {
+    "USA": "DTB3",
+    "CAN": "IR3TIB01CAM156N",
+    "DEU": "IR3TIB01DEM156N",
+    "GBR": "IR3TIB01GBM156N",
+    "FRA": "IR3TIB01FRA156N",
+}
+
 
 @dataclass
 class SupplementaryPreprocessConfig:
@@ -35,6 +44,29 @@ class SupplementaryPreprocessConfig:
 
 def _empty_frame(columns):
     return pd.DataFrame({column: pd.Series(dtype="object") for column in columns})
+
+
+def _normalize_economy_code(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    upper = text.upper()
+    if len(upper) == 3 and upper.isalpha():
+        country = pycountry.countries.get(alpha_3=upper)
+        return country.alpha_3 if country else upper
+    if len(upper) == 2 and upper.isalpha():
+        country = pycountry.countries.get(alpha_2=upper)
+        return country.alpha_3 if country else upper
+    country = pycountry.countries.get(name=text)
+    if country:
+        return country.alpha_3
+    try:
+        matches = pycountry.countries.search_fuzzy(text)
+    except LookupError:
+        return upper
+    return matches[0].alpha_3 if matches else upper
 
 
 def load_risk_free_sources(sqlite_path=SQLITE_DB_PATH):
@@ -82,7 +114,89 @@ def load_world_bank_raw(sqlite_path=SQLITE_DB_PATH):
     return df
 
 
-def derive_risk_free_daily(source_df, config=None):
+def load_risk_free_country_weights(sqlite_path=SQLITE_DB_PATH):
+    df = query_frame(
+        """
+        WITH latest_country_snapshot AS (
+            SELECT
+                conid,
+                MAX(effective_at) AS effective_at
+            FROM holdings_investor_country
+            GROUP BY conid
+        )
+        SELECT
+            COALESCE(h.country_code, h.country) AS economy_code,
+            h.value_num
+        FROM holdings_investor_country h
+        INNER JOIN latest_country_snapshot latest
+            ON latest.conid = h.conid
+           AND latest.effective_at = h.effective_at
+        WHERE COALESCE(h.country_code, h.country) IS NOT NULL
+        """,
+        sqlite_path=sqlite_path,
+    )
+    if df.empty:
+        return pd.DataFrame(columns=["economy_code", "weight"])
+
+    weights = df.copy()
+    weights["economy_code"] = [
+        _normalize_economy_code(value) for value in weights["economy_code"].tolist()
+    ]
+    weights["value_num"] = pd.to_numeric(weights["value_num"], errors="coerce")
+    weights = weights.loc[
+        weights["economy_code"].notna() & weights["value_num"].notna()
+    ].copy()
+    if weights.empty:
+        return pd.DataFrame(columns=["economy_code", "weight"])
+
+    grouped = (
+        weights.groupby("economy_code", as_index=False)
+        .agg(weight=("value_num", "sum"))
+        .sort_values("economy_code")
+        .reset_index(drop=True)
+    )
+    total = float(grouped["weight"].sum())
+    if total <= 0.0:
+        return pd.DataFrame(columns=["economy_code", "weight"])
+    grouped["weight"] = grouped["weight"] / total
+    return grouped
+
+
+def build_risk_free_series_weights(country_weights, series_map=None):
+    series_map = series_map or RISK_FREE_SERIES_BY_ECONOMY
+    if country_weights is None:
+        return pd.Series(dtype=float)
+
+    if isinstance(country_weights, pd.DataFrame):
+        if country_weights.empty:
+            return pd.Series(dtype=float)
+        weight_series = pd.Series(
+            pd.to_numeric(country_weights["weight"], errors="coerce").to_numpy(),
+            index=country_weights["economy_code"].astype(str).str.upper(),
+            dtype=float,
+        )
+    else:
+        weight_series = pd.Series(country_weights, dtype=float)
+        weight_series.index = weight_series.index.astype(str).str.upper()
+
+    weight_series = weight_series.loc[weight_series.notna() & (weight_series > 0.0)]
+    if weight_series.empty:
+        return pd.Series(dtype=float)
+
+    series_weights = pd.Series(
+        {
+            series_id: float(weight_series.loc[economy_code])
+            for economy_code, series_id in series_map.items()
+            if economy_code in weight_series.index
+        },
+        dtype=float,
+    )
+    if series_weights.empty:
+        return pd.Series(dtype=float)
+    return series_weights / float(series_weights.sum())
+
+
+def derive_risk_free_daily(source_df, config=None, series_weights=None):
     config = config or SupplementaryPreprocessConfig()
     if source_df.empty:
         return _empty_frame(
@@ -98,22 +212,70 @@ def derive_risk_free_daily(source_df, config=None):
     df = source_df.copy()
     df["trade_date"] = pd.to_datetime(df["trade_date"])
     df["nominal_rate"] = pd.to_numeric(df["nominal_rate"], errors="coerce")
-    grouped = (
-        df.groupby("trade_date", as_index=False)
+    df["fetched_at"] = pd.to_datetime(df["fetched_at"], errors="coerce")
+    per_series = (
+        df.groupby(["trade_date", "series_id"], as_index=False)
         .agg(
             nominal_rate=("nominal_rate", "mean"),
-            source_count=("series_id", "nunique"),
             observed_at=("fetched_at", "max"),
         )
         .sort_values("trade_date")
         .reset_index(drop=True)
     )
-    grouped["nominal_rate"] = grouped["nominal_rate"].interpolate(
-        method="linear", limit_direction="both"
+
+    rates_wide = (
+        per_series.pivot(index="trade_date", columns="series_id", values="nominal_rate")
+        .sort_index()
+        .sort_index(axis=1)
     )
-    grouped["daily_nominal_rate"] = grouped["nominal_rate"] / float(
-        config.risk_free_trading_days
+    if rates_wide.empty:
+        return _empty_frame(
+            [
+                "trade_date",
+                "nominal_rate",
+                "daily_nominal_rate",
+                "source_count",
+                "observed_at",
+            ]
+        )
+
+    rates_wide = rates_wide.interpolate(
+        method="linear",
+        limit=int(config.interpolation_limit),
+        limit_direction="both",
     )
+
+    if series_weights is None or len(series_weights) == 0:
+        base_weights = pd.Series(1.0, index=rates_wide.columns, dtype=float)
+    else:
+        base_weights = pd.Series(series_weights, dtype=float).reindex(
+            rates_wide.columns
+        )
+        base_weights = base_weights.fillna(0.0)
+        if float(base_weights.sum()) <= 0.0:
+            base_weights = pd.Series(1.0, index=rates_wide.columns, dtype=float)
+
+    available = rates_wide.notna()
+    weighted_presence = available.mul(base_weights, axis=1)
+    weight_sum = weighted_presence.sum(axis=1).replace(0.0, np.nan)
+    normalized_weights = weighted_presence.div(weight_sum, axis=0)
+
+    nominal_rate = rates_wide.mul(normalized_weights).sum(axis=1, min_count=1)
+    observed_at = (
+        per_series.groupby("trade_date")["observed_at"].max().reindex(rates_wide.index)
+    )
+    source_count = available.mul(base_weights > 0.0, axis=1).sum(axis=1)
+
+    grouped = pd.DataFrame(
+        {
+            "trade_date": rates_wide.index,
+            "nominal_rate": nominal_rate.to_numpy(),
+            "daily_nominal_rate": nominal_rate.to_numpy()
+            / float(config.risk_free_trading_days),
+            "source_count": source_count.to_numpy(),
+            "observed_at": observed_at.to_numpy(),
+        }
+    ).reset_index(drop=True)
     return grouped
 
 
@@ -317,8 +479,13 @@ def run_supplementary_preprocess(
     sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs
 ):
     config = SupplementaryPreprocessConfig(**config_kwargs)
+    series_weights = build_risk_free_series_weights(
+        load_risk_free_country_weights(sqlite_path)
+    )
     risk_free = derive_risk_free_daily(
-        load_risk_free_sources(sqlite_path), config=config
+        load_risk_free_sources(sqlite_path),
+        config=config,
+        series_weights=series_weights,
     )
     world_bank = preprocess_world_bank_country_features(
         load_world_bank_raw(sqlite_path), config=config

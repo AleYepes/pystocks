@@ -111,10 +111,16 @@ def _write_output(name, df, output_dir, sqlite_path, long_sql_df=None, tx=None):
 
     sql_df = long_sql_df if long_sql_df is not None else parquet_df
     if tx is not None:
-        tx.write_frame(name, sql_df, if_exists="replace", index=False)
+        if len(sql_df.columns) == 0:
+            tx.execute(f"DROP TABLE IF EXISTS {name}")
+        else:
+            tx.write_frame(name, sql_df, if_exists="replace", index=False)
     else:
         with transaction(sqlite_path) as managed_tx:
-            managed_tx.write_frame(name, sql_df, if_exists="replace", index=False)
+            if len(sql_df.columns) == 0:
+                managed_tx.execute(f"DROP TABLE IF EXISTS {name}")
+            else:
+                managed_tx.write_frame(name, sql_df, if_exists="replace", index=False)
 
     return str(parquet_path)
 

@@ -1,3 +1,5 @@
+import sqlite3
+
 import numpy as np
 import pandas as pd
 
@@ -664,6 +666,33 @@ def test_run_factor_research_preprocesses_inputs_once(tmp_path, monkeypatch):
 
     assert counts == {"prices": 1, "snapshots": 1, "risk_free": 1, "macro": 1}
     assert result["snapshot_rows"] == 1
+
+
+def test_write_output_skips_zero_column_sql_frames(tmp_path):
+    sqlite_path = tmp_path / "analysis.sqlite"
+
+    analysis_module._write_output(
+        "analysis_zero_col_output",
+        pd.DataFrame(),
+        tmp_path,
+        sqlite_path,
+    )
+
+    assert (tmp_path / "analysis_zero_col_output.parquet").exists()
+
+    with sqlite3.connect(sqlite_path) as conn:
+        table_exists = conn.execute(
+            """
+            SELECT EXISTS(
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = ?
+            )
+            """,
+            ["analysis_zero_col_output"],
+        ).fetchone()[0]
+
+    assert table_exists == 0
 
 
 def test_run_factor_research_data_uses_risk_free_excess(monkeypatch):

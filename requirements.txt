@@ -7,6 +7,7 @@ playwright
 httpx
 pycountry
 requests
+wbgapi
 scikit-learn
 fuzzywuzzy
 python-Levenshtein
