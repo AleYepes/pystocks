@@ -6,6 +6,7 @@ ib_async
 playwright
 httpx
 pycountry
+babel
 requests
 wbgapi
 scikit-learn

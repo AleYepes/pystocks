@@ -1,4 +1,5 @@
 import sqlite3
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -6,6 +7,7 @@ import pandas as pd
 import pystocks.analysis as analysis_module
 from pystocks.analysis import (
     AnalysisConfig,
+    _build_candidate_context,
     _build_research_windows,
     build_analysis_panel,
     build_analysis_panel_data,
@@ -181,6 +183,33 @@ def test_build_analysis_panel_uses_latest_snapshot_at_or_before_rebalance_date()
     assert row_mar["snapshot_age_days"] == 5
 
 
+def test_resolve_country_currency_prefers_babel_when_available(monkeypatch):
+    analysis_module._resolve_country_currency.cache_clear()
+
+    monkeypatch.setattr(
+        analysis_module.pycountry.countries,
+        "get",
+        lambda alpha_3=None: (
+            SimpleNamespace(alpha_2="US") if alpha_3 == "USA" else None
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "get_territory_currencies",
+        lambda territory, tender=True: ["USD"] if territory == "US" else [],
+    )
+
+    assert analysis_module._resolve_country_currency("usa") == "usd"
+
+
+def test_resolve_country_currency_falls_back_to_compatibility_map(monkeypatch):
+    analysis_module._resolve_country_currency.cache_clear()
+
+    monkeypatch.setattr(analysis_module, "get_territory_currencies", None)
+
+    assert analysis_module._resolve_country_currency("jpn") == "jpy"
+
+
 def test_build_analysis_panel_adds_macro_features_from_country_weights():
     snapshot_features = pd.DataFrame(
         [
@@ -284,6 +313,96 @@ def test_build_analysis_panel_requires_macro_features_when_enabled():
             AnalysisConfig(require_supplementary_data=True),
             world_bank_country_features=pd.DataFrame(),
         )
+
+
+def test_build_analysis_panel_adds_v1_continent_groupings_from_country_weights():
+    snapshot_features = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "effective_at": pd.Timestamp("2026-01-31"),
+                "profile__asset_type": "Equity",
+                "profile__total_net_assets_num": 100.0,
+                "country__usa": 0.6,
+                "country__can": 0.4,
+            }
+        ]
+    )
+    price_result = {
+        "prices": pd.DataFrame(
+            [
+                {
+                    "conid": "a",
+                    "trade_date": pd.Timestamp("2026-01-31"),
+                    "clean_price": 10.0,
+                    "clean_return": 0.01,
+                    "is_clean_price": True,
+                }
+            ]
+        ),
+        "eligibility": pd.DataFrame([{"conid": "a", "eligible": True}]),
+    }
+
+    panel = build_analysis_panel_data(
+        snapshot_features,
+        price_result,
+        AnalysisConfig(
+            include_macro_features=False,
+            require_supplementary_data=False,
+        ),
+    )
+
+    assert panel.iloc[0]["continent__america"] == 1.0
+
+
+def test_build_analysis_panel_adds_country_and_currency_bloc_groupings():
+    snapshot_features = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "effective_at": pd.Timestamp("2026-01-31"),
+                "profile__asset_type": "Equity",
+                "profile__total_net_assets_num": 100.0,
+                "country__usa": 0.6,
+                "country__can": 0.2,
+                "country__chn": 0.2,
+                "currency__usd": 0.5,
+                "currency__cad": 0.2,
+                "currency__eur": 0.1,
+                "currency__jpy": 0.2,
+            }
+        ]
+    )
+    price_result = {
+        "prices": pd.DataFrame(
+            [
+                {
+                    "conid": "a",
+                    "trade_date": pd.Timestamp("2026-01-31"),
+                    "clean_price": 10.0,
+                    "clean_return": 0.01,
+                    "is_clean_price": True,
+                }
+            ]
+        ),
+        "eligibility": pd.DataFrame([{"conid": "a", "eligible": True}]),
+    }
+
+    panel = build_analysis_panel_data(
+        snapshot_features,
+        price_result,
+        AnalysisConfig(
+            include_macro_features=False,
+            require_supplementary_data=False,
+        ),
+    )
+
+    row = panel.iloc[0]
+    assert row["bloc__north_america"] == 0.8
+    assert row["bloc__developed_markets"] == 0.8
+    assert row["bloc__emerging_markets"] == 0.2
+    assert row["currency_bloc__reserve"] == 0.8
+    assert row["currency_bloc__commodity"] == 0.2
 
 
 def test_build_analysis_panel_keeps_progress_bars_by_default(monkeypatch):
@@ -399,6 +518,102 @@ def test_build_analysis_panel_can_disable_persistent_progress_bars(monkeypatch):
     assert not panel.empty
     assert leaves
     assert not any(leaves)
+
+
+def test_build_candidate_context_prefers_v1_groupings_over_raw_siblings():
+    panel = pd.DataFrame(
+        [
+            {
+                "conid": f"c{i}",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-01-31"),
+                "profile__total_net_assets_num": float(100 + i),
+                "industry__technology": value,
+                "supersector__cyclical": value,
+                "country__usa": geo_value,
+                "currency__usd": geo_value,
+            }
+            for i, (value, geo_value) in enumerate(
+                zip([0.10, 0.20, 0.30, 0.40, 0.50], [0.90, 0.70, 0.50, 0.30, 0.10]),
+                start=1,
+            )
+        ]
+    )
+
+    context = _build_candidate_context(
+        panel,
+        AnalysisConfig(
+            include_macro_features=False,
+            require_supplementary_data=False,
+            min_factor_coverage=0.0,
+        ),
+    )
+
+    registry = context["factor_registry"].set_index("factor_id")
+    decisions = context["screening_decisions"]
+
+    assert (
+        registry.loc["equity__grouped__supersector__cyclical", "admission_status"]
+        == "admitted"
+    )
+    assert (
+        registry.loc["equity__raw__industry__technology", "admission_status"]
+        == "rejected"
+    )
+    assert registry.loc["equity__raw__currency__usd", "admission_status"] == "rejected"
+    assert (
+        decisions.loc[decisions["factor_id"] == "equity__raw__currency__usd", "reason"]
+        .eq("country_currency_near_duplicate")
+        .any()
+    )
+
+
+def test_build_candidate_context_prefers_bloc_groupings_over_raw_country_and_currency():
+    panel = pd.DataFrame(
+        [
+            {
+                "conid": f"c{i}",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-01-31"),
+                "profile__total_net_assets_num": float(100 + i),
+                "country__usa": country_weight,
+                "currency__usd": currency_weight,
+                "bloc__north_america": country_weight,
+                "bloc__developed_markets": country_weight,
+                "currency_bloc__reserve": currency_weight,
+            }
+            for i, (country_weight, currency_weight) in enumerate(
+                zip([0.90, 0.70, 0.50, 0.30, 0.10], [0.95, 0.75, 0.55, 0.35, 0.15]),
+                start=1,
+            )
+        ]
+    )
+
+    context = _build_candidate_context(
+        panel,
+        AnalysisConfig(
+            include_macro_features=False,
+            require_supplementary_data=False,
+            min_factor_coverage=0.0,
+        ),
+    )
+
+    registry = context["factor_registry"].set_index("factor_id")
+    decisions = context["screening_decisions"]
+
+    assert registry.loc["equity__grouped__bloc__north_america", "admission_status"] == (
+        "admitted"
+    )
+    assert registry.loc[
+        "equity__grouped__currency_bloc__reserve", "admission_status"
+    ] == ("admitted")
+    assert registry.loc["equity__raw__country__usa", "admission_status"] == "rejected"
+    assert registry.loc["equity__raw__currency__usd", "admission_status"] == "rejected"
+    assert (
+        decisions.loc[decisions["factor_id"] == "equity__raw__country__usa", "reason"]
+        .eq("semantic_duplicate_of_grouped_source_overlap")
+        .any()
+    )
 
 
 def test_cluster_factor_returns_prefers_composite_representative():
@@ -949,6 +1164,218 @@ def test_run_factor_research_data_uses_risk_free_excess(monkeypatch):
 
     assert np.allclose(captured["y_train"], np.array([0.01]))
     assert not result["model_results"].empty
+
+
+def test_run_factor_research_data_emits_refactor_diagnostics_tables(monkeypatch):
+    panel = pd.DataFrame(
+        [
+            {
+                "conid": f"c{i}",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-01-31"),
+                "profile__total_net_assets_num": float(100 + i),
+                "industry__technology": value,
+                "supersector__cyclical": value,
+                "country__usa": geo_value,
+                "currency__usd": geo_value,
+            }
+            for i, (value, geo_value) in enumerate(
+                zip([0.10, 0.20, 0.30, 0.40, 0.50], [0.90, 0.70, 0.50, 0.30, 0.10]),
+                start=1,
+            )
+        ]
+        + [
+            {
+                "conid": f"c{i}",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-02-28"),
+                "profile__total_net_assets_num": float(100 + i),
+                "industry__technology": value,
+                "supersector__cyclical": value,
+                "country__usa": geo_value,
+                "currency__usd": geo_value,
+            }
+            for i, (value, geo_value) in enumerate(
+                zip([0.15, 0.25, 0.35, 0.45, 0.55], [0.85, 0.65, 0.45, 0.25, 0.05]),
+                start=1,
+            )
+        ]
+        + [
+            {
+                "conid": f"c{i}",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-03-31"),
+                "profile__total_net_assets_num": float(100 + i),
+                "industry__technology": value,
+                "supersector__cyclical": value,
+                "country__usa": geo_value,
+                "currency__usd": geo_value,
+            }
+            for i, (value, geo_value) in enumerate(
+                zip([0.18, 0.28, 0.38, 0.48, 0.58], [0.80, 0.60, 0.40, 0.20, 0.00]),
+                start=1,
+            )
+        ]
+    )
+    prices = pd.DataFrame(
+        [
+            {
+                "conid": f"c{i}",
+                "trade_date": pd.Timestamp("2026-02-10"),
+                "clean_return": 0.01 * i,
+                "is_clean_price": True,
+            }
+            for i in range(1, 6)
+        ]
+        + [
+            {
+                "conid": f"c{i}",
+                "trade_date": pd.Timestamp("2026-03-10"),
+                "clean_return": 0.015 * i,
+                "is_clean_price": True,
+            }
+            for i in range(1, 6)
+        ]
+    )
+    factor_returns = pd.DataFrame(
+        {"equity__grouped__supersector__cyclical": [0.01, 0.02]},
+        index=pd.to_datetime(["2026-02-10", "2026-03-10"]),
+    )
+    factor_meta = pd.DataFrame(
+        [
+            {
+                "factor_id": "equity__grouped__supersector__cyclical",
+                "sleeve": "equity",
+                "family": "supersector",
+                "semantic_group": "sector_theme__cyclical",
+                "kind": "grouped",
+                "source_columns": "industry__technology",
+                "construction_type": "long_short_size_weighted",
+                "economic_rationale": "Preserves V1 industry-to-supersector grouping.",
+                "expected_direction": "prefer_higher",
+                "is_benchmark": False,
+                "is_macro": False,
+                "is_composite": False,
+                "admission_status": "constructed",
+                "rejection_reason": "",
+            }
+        ]
+    )
+
+    monkeypatch.setattr(
+        analysis_module,
+        "build_factor_returns",
+        lambda *args, **kwargs: (
+            factor_returns,
+            factor_meta,
+            pd.Series(0.0, index=factor_returns.index),
+            pd.DataFrame(),
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "cluster_factor_returns",
+        lambda factor_returns, factor_meta, config, show_progress=False: (
+            pd.DataFrame(
+                [
+                    {
+                        "factor_id": "equity__grouped__supersector__cyclical",
+                        "sleeve": "equity",
+                        "cluster_id": "equity_1",
+                        "cluster_representative": "equity__grouped__supersector__cyclical",
+                        "cluster_size": 1,
+                        "keep_factor": True,
+                    }
+                ]
+            ),
+            factor_returns,
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "_build_research_windows",
+        lambda panel, reduced_factors, config: [
+            (
+                pd.Timestamp("2025-02-28"),
+                pd.Timestamp("2026-02-28"),
+                pd.Timestamp("2026-03-31"),
+                1,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "compute_current_betas_data",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+
+    def fake_fit(X_train, y_train):
+        class _Model:
+            alpha_ = 0.1
+            l1_ratio_ = 0.5
+            n_iter_ = 10
+            dual_gap_ = 0.0
+            mse_path_ = np.array([[1.0, 2.0]])
+
+        class _Pipeline:
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        return _Pipeline(), _Model(), 0.0, np.array([0.25])
+
+    monkeypatch.setattr(analysis_module, "_fit_elastic_net", fake_fit)
+
+    result = run_factor_research_data(
+        panel,
+        prices,
+        pd.DataFrame(
+            [
+                {"trade_date": pd.Timestamp("2026-02-10"), "daily_nominal_rate": 0.0},
+                {"trade_date": pd.Timestamp("2026-03-10"), "daily_nominal_rate": 0.0},
+            ]
+        ),
+        AnalysisConfig(
+            min_train_days=1,
+            min_test_days=1,
+            training_window_years=(1,),
+            walk_forward_step_months=1,
+            include_macro_features=False,
+            require_supplementary_data=False,
+            min_factor_coverage=0.0,
+        ),
+    )
+
+    assert {
+        "factor_registry",
+        "factor_candidate_diagnostics",
+        "factor_distinctness",
+        "factor_selection_scores",
+        "factor_screening_decisions",
+        "factor_cluster_membership",
+        "factor_model_telemetry",
+    }.issubset(result)
+    assert set(result["factor_registry"].columns) >= {
+        "factor_id",
+        "semantic_group",
+        "source_columns",
+        "admission_status",
+        "rejection_reason",
+    }
+    assert set(result["factor_screening_decisions"].columns) == {
+        "factor_id",
+        "sleeve",
+        "stage",
+        "decision",
+        "reason",
+        "reference_factor_id",
+    }
+    assert set(result["factor_model_telemetry"].columns) >= {
+        "factor_id",
+        "sleeve",
+        "selection_count",
+        "selection_frequency",
+        "is_persistent",
+    }
 
 
 def test_run_analysis_pipeline_delegates_to_run_factor_research(monkeypatch):

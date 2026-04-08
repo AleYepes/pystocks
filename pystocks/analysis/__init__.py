@@ -1,15 +1,23 @@
 # pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportOperatorIssue=false, reportGeneralTypeIssues=false
 from dataclasses import dataclass
+from functools import cache
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
 import networkx as nx
 import numpy as np
 import pandas as pd
+import pycountry
 from sklearn.linear_model import ElasticNetCV, LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+
+try:
+    from babel.numbers import get_territory_currencies
+except ImportError:  # pragma: no cover - exercised in environments without Babel
+    get_territory_currencies = None
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
 from ..preprocess.price import (
@@ -91,6 +99,243 @@ MACRO_FEATURE_COLUMNS = [
     "share_trade_volume_growth",
 ]
 
+COMPOSITE_SOURCE_COLUMNS = {
+    "composite__value": [
+        "ratio_key__price_book",
+        "ratio_key__price_cash",
+        "ratio_key__price_earnings",
+        "ratio_key__price_sales",
+    ],
+    "composite__profitability": [
+        "ratio_key__return_on_assets_1yr",
+        "ratio_key__return_on_assets_3yr",
+        "ratio_key__return_on_capital",
+        "ratio_key__return_on_capital_3yr",
+        "ratio_key__return_on_equity_1yr",
+        "ratio_key__return_on_equity_3yr",
+        "ratio_key__return_on_investment_1yr",
+        "ratio_key__return_on_investment_3yr",
+    ],
+    "composite__leverage": [
+        "ratio_key__lt_debt_shareholders_equity",
+        "ratio_key__total_debt_total_capital",
+        "ratio_key__total_debt_total_equity",
+        "ratio_key__total_assets_total_equity",
+    ],
+    "composite__momentum": [
+        "price_feature__momentum_3mo",
+        "price_feature__momentum_6mo",
+        "price_feature__momentum_1y",
+        "price_feature__rs_3mo",
+        "price_feature__rs_6mo",
+        "price_feature__rs_1y",
+    ],
+    "composite__income": [
+        "dividend_metric__dividend_yield",
+        "dividend_metric__dividend_yield_ttm",
+        "ratio_dividend__dividend_yield",
+    ],
+    "composite__duration": [
+        "holding_maturity__maturity_10_to_20_years",
+        "holding_maturity__maturity_20_to_30_years",
+        "holding_maturity__maturity_greater_than_30_years",
+        "holding_maturity__maturity_less_than_1_year",
+        "holding_maturity__maturity_1_to_3_years",
+        "holding_maturity__maturity_3_to_5_years",
+    ],
+    "composite__credit": [
+        "holding_quality__quality_aaa",
+        "holding_quality__quality_aa",
+        "holding_quality__quality_a",
+        "holding_quality__quality_bbb",
+        "holding_quality__quality_bb",
+        "holding_quality__quality_b",
+        "holding_quality__quality_ccc",
+        "holding_quality__quality_cc",
+        "holding_quality__quality_c",
+        "holding_quality__quality_d",
+    ],
+    "composite__concentration": [
+        "top10__top10_weight_sum",
+        "top10__top10_weight_max",
+        "industry__*",
+        "country__*",
+    ],
+}
+
+COUNTRY_CONTINENT_MAP = {
+    "arg": "america",
+    "aus": "oceania",
+    "aut": "europe",
+    "bel": "europe",
+    "bra": "america",
+    "can": "america",
+    "che": "europe",
+    "chl": "america",
+    "chn": "asia",
+    "col": "america",
+    "deu": "europe",
+    "dnk": "europe",
+    "egy": "africa",
+    "esp": "europe",
+    "fin": "europe",
+    "fra": "europe",
+    "gbr": "europe",
+    "hkg": "asia",
+    "idn": "asia",
+    "ind": "asia",
+    "irl": "europe",
+    "isr": "asia",
+    "ita": "europe",
+    "jpn": "asia",
+    "kor": "asia",
+    "mex": "america",
+    "mys": "asia",
+    "nld": "europe",
+    "nor": "europe",
+    "nzl": "oceania",
+    "per": "america",
+    "phl": "asia",
+    "pol": "europe",
+    "prt": "europe",
+    "qat": "asia",
+    "sau": "asia",
+    "sgp": "asia",
+    "swe": "europe",
+    "tha": "asia",
+    "tur": "asia",
+    "twn": "asia",
+    "usa": "america",
+    "zaf": "africa",
+}
+
+COUNTRY_CURRENCY_OVERRIDE_MAP = {
+    "ggy": "gbp",
+    "imn": "gbp",
+    "jey": "gbp",
+}
+
+# Compatibility fallback while Babel is not guaranteed to be installed in every
+# environment yet. Production logic resolves currencies with Babel first.
+COUNTRY_CURRENCY_MAP = {
+    "aus": "aud",
+    "can": "cad",
+    "che": "chf",
+    "chn": "cny",
+    "deu": "eur",
+    "esp": "eur",
+    "fra": "eur",
+    "gbr": "gbp",
+    "hkg": "hkd",
+    "ind": "inr",
+    "ita": "eur",
+    "jpn": "jpy",
+    "kor": "krw",
+    "mex": "mxn",
+    "nld": "eur",
+    "nor": "nok",
+    "nzl": "nzd",
+    "sgp": "sgd",
+    "swe": "sek",
+    "twn": "twd",
+    "usa": "usd",
+    "zaf": "zar",
+}
+
+COUNTRY_BLOC_MAP = {
+    "asia_pacific": [
+        "aus",
+        "chn",
+        "hkg",
+        "idn",
+        "ind",
+        "jpn",
+        "kor",
+        "mys",
+        "nzl",
+        "phl",
+        "sgp",
+        "tha",
+        "twn",
+    ],
+    "developed_markets": [
+        "aus",
+        "aut",
+        "bel",
+        "can",
+        "che",
+        "deu",
+        "dnk",
+        "esp",
+        "fin",
+        "fra",
+        "gbr",
+        "hkg",
+        "irl",
+        "ita",
+        "jpn",
+        "nld",
+        "nor",
+        "nzl",
+        "sgp",
+        "swe",
+        "usa",
+    ],
+    "emerging_markets": [
+        "arg",
+        "bra",
+        "chl",
+        "chn",
+        "col",
+        "egy",
+        "idn",
+        "ind",
+        "kor",
+        "mex",
+        "mys",
+        "per",
+        "phl",
+        "pol",
+        "qat",
+        "sau",
+        "tha",
+        "tur",
+        "twn",
+        "zaf",
+    ],
+    "euro_area": [
+        "aut",
+        "bel",
+        "deu",
+        "esp",
+        "fin",
+        "fra",
+        "irl",
+        "ita",
+        "nld",
+        "prt",
+    ],
+    "north_america": ["can", "mex", "usa"],
+}
+
+CURRENCY_BLOC_MAP = {
+    "asia_pacific": ["aud", "cny", "hkd", "jpy", "krw", "nzd", "sgd", "twd"],
+    "commodity": ["aud", "cad", "nok", "nzd"],
+    "european": ["chf", "eur", "gbp", "nok", "sek"],
+    "reserve": ["chf", "eur", "gbp", "jpy", "usd"],
+}
+
+INDUSTRY_TO_SUPERSECTOR = {
+    industry: supersector
+    for supersector, industries in SUPERSECTOR_MAP.items()
+    for industry in industries
+}
+
+EXPECTED_DIRECTION_LABELS = {
+    -1.0: "prefer_lower",
+    1.0: "prefer_higher",
+}
+
 
 def _empty_frame(columns):
     return pd.DataFrame({column: pd.Series(dtype="object") for column in columns})
@@ -158,6 +403,262 @@ def _sum_if_present(df, columns):
     if not present:
         return pd.Series(np.nan, index=df.index, dtype=float)
     return df[present].apply(pd.to_numeric, errors="coerce").sum(axis=1, skipna=True)
+
+
+def _join_source_columns(columns):
+    present = [str(column) for column in columns if column]
+    return "|".join(sorted(dict.fromkeys(present)))
+
+
+def _kind_priority(kind):
+    return {
+        "benchmark": 0,
+        "grouped": 1,
+        "composite": 1,
+        "macro_derived": 1,
+        "raw": 2,
+    }.get(str(kind), 3)
+
+
+@cache
+def _resolve_country_currency(country_code):
+    if country_code is None:
+        return None
+    normalized = str(country_code).strip().lower()
+    if not normalized:
+        return None
+    if normalized in COUNTRY_CURRENCY_OVERRIDE_MAP:
+        return COUNTRY_CURRENCY_OVERRIDE_MAP[normalized]
+
+    country = pycountry.countries.get(alpha_3=normalized.upper())
+    if (
+        country is not None
+        and get_territory_currencies is not None
+        and getattr(country, "alpha_2", None)
+    ):
+        currencies = get_territory_currencies(country.alpha_2, tender=True)
+        if currencies:
+            return str(currencies[-1]).strip().lower()
+
+    return COUNTRY_CURRENCY_MAP.get(normalized)
+
+
+def _countries_for_currency(currency_code, panel_slice=None):
+    normalized = str(currency_code).strip().lower()
+    if not normalized:
+        return []
+
+    candidates: set[str] = set(COUNTRY_CURRENCY_OVERRIDE_MAP) | set(
+        COUNTRY_CURRENCY_MAP
+    )
+    if panel_slice is not None:
+        candidates.update(
+            col.replace("country__", "")
+            for col in panel_slice.columns
+            if col.startswith("country__")
+        )
+
+    matches = [
+        country_code
+        for country_code in sorted(candidates)
+        if _resolve_country_currency(country_code) == normalized
+    ]
+    return matches
+
+
+def _country_columns_for_continent(df, continent):
+    return [
+        f"country__{code}"
+        for code, mapped_continent in COUNTRY_CONTINENT_MAP.items()
+        if mapped_continent == continent and f"country__{code}" in df.columns
+    ]
+
+
+def _country_columns_for_bloc(df, bloc):
+    return [
+        f"country__{code}"
+        for code in COUNTRY_BLOC_MAP.get(bloc, [])
+        if f"country__{code}" in df.columns
+    ]
+
+
+def _currency_columns_for_bloc(df, bloc):
+    return [
+        f"currency__{code}"
+        for code in CURRENCY_BLOC_MAP.get(bloc, [])
+        if f"currency__{code}" in df.columns
+    ]
+
+
+def _add_continent_features(df):
+    out = df.copy()
+    country_columns = [col for col in out.columns if col.startswith("country__")]
+    if not country_columns:
+        return out
+    for continent in sorted(set(COUNTRY_CONTINENT_MAP.values())):
+        present = _country_columns_for_continent(out, continent)
+        if not present:
+            continue
+        out[f"continent__{continent}"] = (
+            out[present].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+        )
+    return out
+
+
+def _add_geo_bloc_features(df):
+    out = df.copy()
+    country_columns = [col for col in out.columns if col.startswith("country__")]
+    if not country_columns:
+        return out
+    for bloc in sorted(COUNTRY_BLOC_MAP):
+        present = _country_columns_for_bloc(out, bloc)
+        if not present:
+            continue
+        out[f"bloc__{bloc}"] = (
+            out[present].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+        )
+    return out
+
+
+def _add_currency_bloc_features(df):
+    out = df.copy()
+    currency_columns = [col for col in out.columns if col.startswith("currency__")]
+    if not currency_columns:
+        return out
+    for bloc in sorted(CURRENCY_BLOC_MAP):
+        present = _currency_columns_for_bloc(out, bloc)
+        if not present:
+            continue
+        out[f"currency_bloc__{bloc}"] = (
+            out[present].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+        )
+    return out
+
+
+def _source_columns_for_feature(column, panel_slice):
+    if column in COMPOSITE_SOURCE_COLUMNS:
+        sources = []
+        for source in COMPOSITE_SOURCE_COLUMNS[column]:
+            if source == "industry__*":
+                sources.extend(
+                    sorted(
+                        col
+                        for col in panel_slice.columns
+                        if col.startswith("industry__")
+                    )
+                )
+            elif source == "country__*":
+                sources.extend(
+                    sorted(
+                        col
+                        for col in panel_slice.columns
+                        if col.startswith("country__")
+                    )
+                )
+            elif source in panel_slice.columns:
+                sources.append(source)
+        return sources
+    if column.startswith("supersector__"):
+        return [
+            source
+            for source in SUPERSECTOR_MAP.get(column.split("__", 1)[1], [])
+            if source in panel_slice.columns
+        ]
+    if column.startswith("continent__"):
+        return _country_columns_for_continent(panel_slice, column.split("__", 1)[1])
+    if column.startswith("bloc__"):
+        return _country_columns_for_bloc(panel_slice, column.split("__", 1)[1])
+    if column.startswith("currency_bloc__"):
+        return _currency_columns_for_bloc(panel_slice, column.split("__", 1)[1])
+    if column.startswith("macro__"):
+        return [
+            f"country_weights::{column.replace('macro__', '')}",
+            f"world_bank::{column.replace('macro__', '')}",
+        ]
+    return [column]
+
+
+def _semantic_group_for_column(column, panel_slice=None):
+    if column.startswith("price_feature__momentum_") or column.startswith(
+        "price_feature__rs_"
+    ):
+        return "momentum_relative_strength"
+    if column.startswith("price_feature__volatility_") or column.startswith(
+        "price_feature__downside_volatility_"
+    ):
+        return "risk_volatility"
+    if column.startswith("price_feature__max_drawdown_"):
+        return "risk_drawdown"
+    if column.startswith("supersector__"):
+        return f"sector_theme__{column.split('__', 1)[1]}"
+    if column.startswith("bloc__"):
+        return f"country_bloc__{column.split('__', 1)[1]}"
+    if column.startswith("currency_bloc__"):
+        return f"currency_bloc__{column.split('__', 1)[1]}"
+    if column.startswith("industry__"):
+        supersector = INDUSTRY_TO_SUPERSECTOR.get(column)
+        if supersector:
+            return f"sector_theme__{supersector}"
+    if column.startswith("holding_maturity__") or column == "composite__duration":
+        return "fixed_income_duration"
+    if column.startswith("holding_quality__") or column == "composite__credit":
+        return "fixed_income_credit"
+    if column.startswith("country__"):
+        country = column.split("__", 1)[1]
+        currency = _resolve_country_currency(country)
+        if currency:
+            return f"country_currency_pair__{country}__{currency}"
+        continent = COUNTRY_CONTINENT_MAP.get(country)
+        if continent:
+            return f"continent_theme__{continent}"
+    if column.startswith("currency__"):
+        currency = column.split("__", 1)[1]
+        countries = _countries_for_currency(currency, panel_slice=panel_slice)
+        if len(countries) == 1:
+            return f"country_currency_pair__{countries[0]}__{currency}"
+        if countries:
+            return f"currency_family__{currency}"
+    if column.startswith("continent__"):
+        return f"continent_theme__{column.split('__', 1)[1]}"
+    if column.startswith("macro__"):
+        suffix = column.replace("macro__", "", 1)
+        if suffix.endswith("_level"):
+            return f"macro_theme__{suffix[: -len('_level')]}__level"
+        if suffix.endswith("_growth"):
+            return f"macro_theme__{suffix[: -len('_growth')]}__growth"
+        if suffix.endswith("_acceleration"):
+            return f"macro_theme__{suffix[: -len('_acceleration')]}__acceleration"
+    return column
+
+
+def _economic_rationale_for_column(column):
+    if column.startswith("composite__value"):
+        return "Preserves V1 valuation compression across price multiple ratios."
+    if column.startswith("composite__leverage"):
+        return "Preserves V1 balance-sheet leverage grouping."
+    if column.startswith("composite__profitability"):
+        return "Preserves V1 profitability grouping across return metrics."
+    if column.startswith("composite__momentum"):
+        return "Preserves V1 momentum and relative-strength aggregation."
+    if column.startswith("supersector__"):
+        return "Preserves V1 industry-to-supersector grouping."
+    if column.startswith("continent__"):
+        return "Preserves V1 continent-level geographic grouping."
+    if column.startswith("bloc__"):
+        return "Extends V1 geographic compression into deterministic regional and development blocs."
+    if column.startswith("currency_bloc__"):
+        return "Prefers reserve and bloc-level currency exposures over single-currency leaves."
+    if column.startswith("macro__"):
+        return "Country weights collapsed into World Bank macro themes."
+    if column.startswith("benchmark__"):
+        return "Baseline benchmark factor retained explicitly."
+    return "Leaf-level exposure retained for candidate evaluation."
+
+
+def _construction_type_for_kind(kind):
+    if kind == "benchmark":
+        return "benchmark_series"
+    return "long_short_size_weighted"
 
 
 def _rolling_compound(values: pd.Series, window: int, min_periods: int) -> pd.Series:
@@ -614,6 +1115,9 @@ def build_analysis_panel_data(
     if config.include_dynamic_fundamental_trends:
         panel = _add_dynamic_fundamental_features(panel)
     panel = _add_supersector_features(panel)
+    panel = _add_continent_features(panel)
+    panel = _add_geo_bloc_features(panel)
+    panel = _add_currency_bloc_features(panel)
     if config.include_macro_features:
         panel = _add_macro_features(panel, world_bank_country_features)
     return panel.sort_values(["rebalance_date", "conid"]).reset_index(drop=True)
@@ -669,7 +1173,7 @@ def _drop_uninformative_factor_columns(panel_slice, candidate_columns, config):
     return keep
 
 
-def _select_factor_columns(panel_slice, sleeve, config):
+def _list_factor_columns(panel_slice, sleeve):
     numeric_cols = panel_slice.select_dtypes(include=[np.number, bool]).columns.tolist()
     excluded = {
         "valid_rows",
@@ -693,7 +1197,13 @@ def _select_factor_columns(panel_slice, sleeve, config):
         ) and sleeve != "bond":
             continue
         candidates.append(col)
-    return _drop_uninformative_factor_columns(panel_slice, candidates, config)
+    return candidates
+
+
+def _select_factor_columns(panel_slice, sleeve, config):
+    return _drop_uninformative_factor_columns(
+        panel_slice, _list_factor_columns(panel_slice, sleeve), config
+    )
 
 
 def _factor_direction(column):
@@ -719,7 +1229,22 @@ def _factor_family(column):
 def _factor_kind(column):
     if column.startswith("benchmark__"):
         return "benchmark"
-    return "composite" if column.startswith("composite__") else "raw"
+    if column.startswith("composite__"):
+        return "composite"
+    if (
+        column.startswith("supersector__")
+        or column.startswith("continent__")
+        or column.startswith("bloc__")
+        or column.startswith("currency_bloc__")
+    ):
+        return "grouped"
+    if column.startswith("macro__"):
+        return "macro_derived"
+    return "raw"
+
+
+def _factor_id_for_column(sleeve, column):
+    return f"{sleeve}__{_factor_kind(column)}__{column}"
 
 
 def _build_long_short_series(
@@ -906,13 +1431,386 @@ def _build_baseline_returns(
     return baseline, pd.DataFrame(membership_rows)
 
 
+def _candidate_score_components(kind, coverage_ratio, zero_ratio, unique_count):
+    kind_component = float(max(0, 4 - _kind_priority(kind)))
+    coverage_component = float(coverage_ratio)
+    density_component = float(1.0 - zero_ratio)
+    uniqueness_component = float(np.log1p(max(int(unique_count), 0)))
+    return (
+        kind_component,
+        coverage_component,
+        density_component,
+        uniqueness_component,
+    )
+
+
+def _build_candidate_context(panel, config):
+    registry_rows = []
+    diagnostics_rows = []
+    decision_rows = []
+    score_rows = []
+    distinctness_rows = []
+    admitted_columns: dict[str, list[str]] = {}
+
+    if panel.empty or "sleeve" not in panel.columns:
+        return {
+            "factor_registry": pd.DataFrame(),
+            "candidate_diagnostics": pd.DataFrame(),
+            "screening_decisions": pd.DataFrame(),
+            "selection_scores": pd.DataFrame(),
+            "distinctness": pd.DataFrame(),
+            "admitted_columns": admitted_columns,
+        }
+
+    for sleeve, panel_slice in panel.groupby("sleeve", sort=True):
+        candidate_rows = []
+        for column in _list_factor_columns(panel_slice, sleeve):
+            values = pd.to_numeric(panel_slice[column], errors="coerce")
+            coverage_ratio = float(values.notna().mean())
+            zero_ratio = float(values.fillna(0.0).eq(0.0).mean())
+            unique_count = int(values.nunique(dropna=True))
+            spread = (
+                float(values.quantile(0.90) - values.quantile(0.10))
+                if values.notna().any()
+                else 0.0
+            )
+            kind = _factor_kind(column)
+            factor_id = _factor_id_for_column(str(sleeve), column)
+            (
+                kind_component,
+                coverage_component,
+                density_component,
+                uniqueness_component,
+            ) = _candidate_score_components(
+                kind, coverage_ratio, zero_ratio, unique_count
+            )
+            score = (
+                kind_component * 100.0
+                + coverage_component * 10.0
+                + density_component * 5.0
+                + uniqueness_component
+            )
+            expected_direction = _factor_direction(column)
+            rejection_reason = ""
+            admission_status = "candidate"
+            if values.notna().sum() == 0:
+                rejection_reason = "empty"
+                admission_status = "rejected"
+            elif unique_count <= 1:
+                rejection_reason = "constant"
+                admission_status = "rejected"
+            elif zero_ratio >= config.sparse_feature_max_ratio:
+                rejection_reason = "sparse"
+                admission_status = "rejected"
+            elif coverage_ratio < config.min_factor_coverage:
+                rejection_reason = "low_coverage"
+                admission_status = "rejected"
+            elif not np.isfinite(spread) or abs(spread) <= 0.0:
+                rejection_reason = "zero_spread"
+                admission_status = "rejected"
+
+            source_columns = _source_columns_for_feature(column, panel_slice)
+            row = {
+                "factor_id": factor_id,
+                "sleeve": str(sleeve),
+                "family": _factor_family(column),
+                "semantic_group": _semantic_group_for_column(column, panel_slice),
+                "kind": kind,
+                "source_columns": _join_source_columns(source_columns),
+                "construction_type": _construction_type_for_kind(kind),
+                "economic_rationale": _economic_rationale_for_column(column),
+                "expected_direction": EXPECTED_DIRECTION_LABELS.get(
+                    expected_direction, "prefer_higher"
+                ),
+                "is_benchmark": False,
+                "is_macro": bool(column.startswith("macro__")),
+                "is_composite": bool(column.startswith("composite__")),
+                "admission_status": admission_status,
+                "rejection_reason": rejection_reason,
+                "coverage_ratio": coverage_ratio,
+                "zero_ratio": zero_ratio,
+                "unique_count": unique_count,
+                "cross_sectional_spread": float(spread),
+                "kind_priority": int(_kind_priority(kind)),
+                "selection_score": float(score),
+                "source_column": column,
+            }
+            candidate_rows.append(row)
+            registry_rows.append(
+                {key: row[key] for key in row if key != "source_column"}
+            )
+            diagnostics_rows.append(
+                {
+                    "factor_id": factor_id,
+                    "sleeve": str(sleeve),
+                    "source_column": column,
+                    "family": row["family"],
+                    "semantic_group": row["semantic_group"],
+                    "kind": kind,
+                    "coverage_ratio": coverage_ratio,
+                    "zero_ratio": zero_ratio,
+                    "unique_count": unique_count,
+                    "cross_sectional_spread": float(spread),
+                }
+            )
+            score_rows.append(
+                {
+                    "factor_id": factor_id,
+                    "sleeve": str(sleeve),
+                    "stage": "semantic_compression",
+                    "kind_priority_component": kind_component,
+                    "coverage_component": coverage_component,
+                    "density_component": density_component,
+                    "uniqueness_component": uniqueness_component,
+                    "selection_score": float(score),
+                }
+            )
+            decision_rows.append(
+                {
+                    "factor_id": factor_id,
+                    "sleeve": str(sleeve),
+                    "stage": "structural_screen",
+                    "decision": "drop" if rejection_reason else "keep",
+                    "reason": rejection_reason or "passed_structural_screen",
+                    "reference_factor_id": "",
+                }
+            )
+
+        admitted_rows = [
+            row for row in candidate_rows if row["admission_status"] != "rejected"
+        ]
+        admitted_set = {row["factor_id"] for row in admitted_rows}
+        grouped_rows = (
+            pd.DataFrame(admitted_rows).groupby("semantic_group", sort=True)
+            if admitted_rows
+            else []
+        )
+        for semantic_group, group_rows_iter in grouped_rows:
+            group_rows = group_rows_iter.to_dict("records")
+            if len(group_rows) <= 1:
+                continue
+
+            by_column = {
+                row["source_column"]: pd.to_numeric(
+                    panel_slice[row["source_column"]], errors="coerce"
+                )
+                for row in group_rows
+            }
+            for left, right in combinations(group_rows, 2):
+                corr = by_column[left["source_column"]].corr(
+                    by_column[right["source_column"]]
+                )
+                distinctness_rows.append(
+                    {
+                        "sleeve": str(sleeve),
+                        "left_factor_id": left["factor_id"],
+                        "right_factor_id": right["factor_id"],
+                        "comparison_stage": "semantic_screen",
+                        "comparison_type": "panel_value_correlation",
+                        "semantic_group": semantic_group,
+                        "abs_correlation": float(abs(corr))
+                        if pd.notna(corr)
+                        else np.nan,
+                    }
+                )
+
+            nonraw_rows = [row for row in group_rows if row["kind"] != "raw"]
+            if nonraw_rows:
+                representative = sorted(
+                    nonraw_rows,
+                    key=lambda row: (-row["selection_score"], row["factor_id"]),
+                )[0]
+                for row in group_rows:
+                    if (
+                        row["factor_id"] == representative["factor_id"]
+                        or row["kind"] != "raw"
+                    ):
+                        continue
+                    admitted_set.discard(row["factor_id"])
+                    decision_rows.append(
+                        {
+                            "factor_id": row["factor_id"],
+                            "sleeve": str(sleeve),
+                            "stage": "semantic_screen",
+                            "decision": "drop",
+                            "reason": "semantic_duplicate_of_grouped_or_composite",
+                            "reference_factor_id": representative["factor_id"],
+                        }
+                    )
+                continue
+
+            if semantic_group.startswith("country_currency_pair__"):
+                representative = sorted(
+                    group_rows,
+                    key=lambda row: (
+                        row["source_column"].startswith("currency__"),
+                        -row["selection_score"],
+                        row["factor_id"],
+                    ),
+                )[0]
+                for row in group_rows:
+                    if row["factor_id"] == representative["factor_id"]:
+                        continue
+                    sibling_corr = next(
+                        (
+                            distinct["abs_correlation"]
+                            for distinct in distinctness_rows
+                            if (
+                                distinct["left_factor_id"]
+                                == representative["factor_id"]
+                                and distinct["right_factor_id"] == row["factor_id"]
+                            )
+                            or (
+                                distinct["left_factor_id"] == row["factor_id"]
+                                and distinct["right_factor_id"]
+                                == representative["factor_id"]
+                            )
+                        ),
+                        np.nan,
+                    )
+                    if pd.notna(sibling_corr) and float(sibling_corr) >= 0.8:
+                        admitted_set.discard(row["factor_id"])
+                        decision_rows.append(
+                            {
+                                "factor_id": row["factor_id"],
+                                "sleeve": str(sleeve),
+                                "stage": "semantic_screen",
+                                "decision": "drop",
+                                "reason": "country_currency_near_duplicate",
+                                "reference_factor_id": representative["factor_id"],
+                            }
+                        )
+
+        grouped_candidates = [
+            row
+            for row in candidate_rows
+            if row["factor_id"] in admitted_set
+            and row["kind"] in {"grouped", "composite", "macro_derived"}
+        ]
+        raw_candidates = [
+            row
+            for row in candidate_rows
+            if row["factor_id"] in admitted_set and row["kind"] == "raw"
+        ]
+        for raw_row in raw_candidates:
+            raw_values = pd.to_numeric(
+                panel_slice[raw_row["source_column"]], errors="coerce"
+            )
+            overlap_candidates = []
+            for grouped_row in grouped_candidates:
+                grouped_sources = set(grouped_row["source_columns"].split("|"))
+                if raw_row["source_column"] not in grouped_sources:
+                    continue
+                grouped_values = pd.to_numeric(
+                    panel_slice[grouped_row["source_column"]], errors="coerce"
+                )
+                corr = raw_values.corr(grouped_values)
+                distinctness_rows.append(
+                    {
+                        "sleeve": str(sleeve),
+                        "left_factor_id": raw_row["factor_id"],
+                        "right_factor_id": grouped_row["factor_id"],
+                        "comparison_stage": "semantic_screen",
+                        "comparison_type": "source_overlap_correlation",
+                        "semantic_group": grouped_row["semantic_group"],
+                        "abs_correlation": float(abs(corr))
+                        if pd.notna(corr)
+                        else np.nan,
+                    }
+                )
+                overlap_candidates.append((corr, grouped_row))
+            if not overlap_candidates:
+                continue
+
+            representative_corr, representative = sorted(
+                overlap_candidates,
+                key=lambda item: (
+                    pd.isna(item[0]),
+                    -(abs(float(item[0])) if pd.notna(item[0]) else -1.0),
+                    -item[1]["selection_score"],
+                    item[1]["factor_id"],
+                ),
+            )[0]
+            if pd.notna(representative_corr) and float(abs(representative_corr)) >= 0.8:
+                admitted_set.discard(raw_row["factor_id"])
+                decision_rows.append(
+                    {
+                        "factor_id": raw_row["factor_id"],
+                        "sleeve": str(sleeve),
+                        "stage": "semantic_screen",
+                        "decision": "drop",
+                        "reason": "semantic_duplicate_of_grouped_source_overlap",
+                        "reference_factor_id": representative["factor_id"],
+                    }
+                )
+
+        admitted_columns[str(sleeve)] = sorted(
+            row["source_column"]
+            for row in candidate_rows
+            if row["factor_id"] in admitted_set
+        )
+        admitted_lookup = {
+            _factor_id_for_column(str(sleeve), column)
+            for column in admitted_columns[str(sleeve)]
+        }
+        for row in registry_rows:
+            if row["sleeve"] != str(sleeve):
+                continue
+            if (
+                row["factor_id"] in admitted_lookup
+                and row["admission_status"] == "candidate"
+            ):
+                row["admission_status"] = "admitted"
+                row["rejection_reason"] = ""
+            elif row["admission_status"] == "candidate":
+                row["admission_status"] = "rejected"
+                if not row["rejection_reason"]:
+                    row["rejection_reason"] = "semantic_screen"
+
+    return {
+        "factor_registry": pd.DataFrame(registry_rows).sort_values(
+            ["sleeve", "factor_id"]
+        )
+        if registry_rows
+        else pd.DataFrame(),
+        "candidate_diagnostics": pd.DataFrame(diagnostics_rows).sort_values(
+            ["sleeve", "factor_id"]
+        )
+        if diagnostics_rows
+        else pd.DataFrame(),
+        "screening_decisions": pd.DataFrame(decision_rows).sort_values(
+            ["sleeve", "factor_id", "stage", "decision"]
+        )
+        if decision_rows
+        else pd.DataFrame(),
+        "selection_scores": pd.DataFrame(score_rows).sort_values(
+            ["sleeve", "factor_id", "stage"]
+        )
+        if score_rows
+        else pd.DataFrame(),
+        "distinctness": pd.DataFrame(distinctness_rows).sort_values(
+            ["sleeve", "semantic_group", "left_factor_id", "right_factor_id"]
+        )
+        if distinctness_rows
+        else pd.DataFrame(),
+        "admitted_columns": admitted_columns,
+    }
+
+
 def build_factor_returns(
     panel,
     prices,
     risk_free_daily,
     config,
     show_progress=False,
+    candidate_context=None,
 ):
+    candidate_context = candidate_context or _build_candidate_context(panel, config)
+    registry_lookup = (
+        candidate_context["factor_registry"].set_index("factor_id").to_dict("index")
+        if not candidate_context["factor_registry"].empty
+        else {}
+    )
     returns_wide = _build_returns_wide(prices, config.return_alignment_max_gap_days)
     risk_free_series = _build_risk_free_series(risk_free_daily)
     baseline_returns, baseline_members = _build_baseline_returns(
@@ -967,17 +1865,27 @@ def build_factor_returns(
                     "family": factor_key.split("__", 1)[-1],
                     "kind": "benchmark",
                     "source_column": None,
+                    "semantic_group": factor_key,
+                    "source_columns": "",
+                    "construction_type": "benchmark_series",
+                    "economic_rationale": _economic_rationale_for_column(factor_key),
+                    "expected_direction": "prefer_higher",
+                    "is_benchmark": True,
+                    "is_macro": False,
+                    "is_composite": False,
+                    "admission_status": "constructed",
+                    "rejection_reason": "",
                 }
 
             size_weights = sleeve_slice.set_index("conid")[
                 "profile__total_net_assets_num"
             ]
-            for column in _select_factor_columns(sleeve_slice, sleeve, config):
+            for column in candidate_context["admitted_columns"].get(str(sleeve), []):
                 coverage = sleeve_slice[column].notna().mean()
                 if coverage < config.min_factor_coverage:
                     continue
 
-                factor_id = f"{sleeve}__{_factor_kind(column)}__{column}"
+                factor_id = _factor_id_for_column(str(sleeve), column)
                 series = _build_long_short_series(
                     pd.to_numeric(
                         sleeve_slice.set_index("conid")[column], errors="coerce"
@@ -998,7 +1906,31 @@ def build_factor_returns(
                     "family": _factor_family(column),
                     "kind": _factor_kind(column),
                     "source_column": column,
+                    "semantic_group": _semantic_group_for_column(column, sleeve_slice),
+                    "source_columns": _join_source_columns(
+                        _source_columns_for_feature(column, sleeve_slice)
+                    ),
+                    "construction_type": _construction_type_for_kind(
+                        _factor_kind(column)
+                    ),
+                    "economic_rationale": _economic_rationale_for_column(column),
+                    "expected_direction": EXPECTED_DIRECTION_LABELS.get(
+                        _factor_direction(column), "prefer_higher"
+                    ),
+                    "is_benchmark": False,
+                    "is_macro": bool(column.startswith("macro__")),
+                    "is_composite": bool(column.startswith("composite__")),
+                    "admission_status": "constructed",
+                    "rejection_reason": "",
                 }
+                if factor_id in registry_lookup:
+                    metadata[factor_id].update(
+                        {
+                            key: value
+                            for key, value in registry_lookup[factor_id].items()
+                            if key != "factor_id"
+                        }
+                    )
 
     if not factor_map:
         return pd.DataFrame(), pd.DataFrame(), baseline_returns, baseline_members
@@ -1058,9 +1990,7 @@ def cluster_factor_returns(factor_returns, factor_meta, config, show_progress=Fa
                 coverage, left_on="factor_id", right_index=True, how="left"
             )
             member_meta["kind_priority"] = (
-                member_meta["kind"]
-                .map({"composite": 0, "benchmark": 1, "raw": 2})
-                .fillna(3)
+                member_meta["kind"].map(_kind_priority).fillna(3)
             )
             representative = member_meta.sort_values(
                 ["kind_priority", "coverage", "factor_id"],
@@ -1164,6 +2094,196 @@ def _factor_diagnostics(factor_returns, reduced_factors, factor_meta):
     return diagnostics.sort_values("factor_id").reset_index(drop=True)
 
 
+def _finalize_factor_registry(candidate_context, factor_meta):
+    registry = candidate_context["factor_registry"].copy()
+    if factor_meta.empty:
+        return registry
+
+    built_ids = set(factor_meta["factor_id"].astype(str))
+    if not registry.empty:
+        registry.loc[registry["factor_id"].isin(built_ids), "admission_status"] = (
+            "constructed"
+        )
+        registry.loc[registry["factor_id"].isin(built_ids), "rejection_reason"] = ""
+        admitted_mask = registry["admission_status"].eq("admitted") & ~registry[
+            "factor_id"
+        ].isin(built_ids)
+        registry.loc[admitted_mask, "admission_status"] = "rejected"
+        registry.loc[admitted_mask, "rejection_reason"] = "construction_filtered"
+
+    benchmark_meta = factor_meta.loc[
+        ~factor_meta["factor_id"].isin(registry["factor_id"])
+        if not registry.empty
+        else slice(None)
+    ]
+    benchmark_rows = benchmark_meta.to_dict("records")
+    if benchmark_rows:
+        registry = pd.concat(
+            [registry, pd.DataFrame(benchmark_rows)], ignore_index=True
+        )
+    if registry.empty:
+        return registry
+    columns = [
+        "factor_id",
+        "sleeve",
+        "family",
+        "semantic_group",
+        "kind",
+        "source_columns",
+        "construction_type",
+        "economic_rationale",
+        "expected_direction",
+        "is_benchmark",
+        "is_macro",
+        "is_composite",
+        "admission_status",
+        "rejection_reason",
+    ]
+    for column in columns:
+        if column not in registry.columns:
+            registry[column] = ""
+    return registry[columns].sort_values(["sleeve", "factor_id"]).reset_index(drop=True)
+
+
+def _build_cluster_selection_scores(cluster_df, factor_returns, factor_meta):
+    if cluster_df.empty or factor_meta.empty:
+        return pd.DataFrame()
+    coverage = factor_returns.notna().mean().rename("coverage_component")
+    volatility = factor_returns.std().rename("volatility_component")
+    score_df = cluster_df.merge(factor_meta, on=["factor_id", "sleeve"], how="left")
+    score_df = score_df.merge(
+        coverage, left_on="factor_id", right_index=True, how="left"
+    )
+    score_df = score_df.merge(
+        volatility, left_on="factor_id", right_index=True, how="left"
+    )
+    score_df["kind_priority_component"] = score_df["kind"].map(
+        lambda kind: float(max(0, 4 - _kind_priority(kind)))
+    )
+    score_df["selection_score"] = (
+        score_df["kind_priority_component"] * 100.0
+        + score_df["coverage_component"].fillna(0.0) * 10.0
+        + score_df["volatility_component"].fillna(0.0)
+    )
+    score_df["stage"] = "cluster_representative"
+    return (
+        score_df[
+            [
+                "factor_id",
+                "sleeve",
+                "stage",
+                "kind_priority_component",
+                "coverage_component",
+                "volatility_component",
+                "selection_score",
+                "cluster_id",
+                "cluster_representative",
+                "keep_factor",
+            ]
+        ]
+        .sort_values(["sleeve", "cluster_id", "factor_id"])
+        .reset_index(drop=True)
+    )
+
+
+def _build_factor_return_distinctness(factor_returns, factor_meta, config):
+    if factor_returns.empty or factor_meta.empty:
+        return pd.DataFrame()
+    rows = []
+    for sleeve, meta_slice in factor_meta.groupby("sleeve", sort=True):
+        factor_ids = meta_slice["factor_id"].tolist()
+        sleeve_returns = factor_returns.reindex(columns=factor_ids)
+        corr = sleeve_returns.corr().abs()
+        for left, right in combinations(sorted(factor_ids), 2):
+            value = corr.loc[left, right]
+            if not np.isfinite(value) or float(value) < config.factor_corr_threshold:
+                continue
+            rows.append(
+                {
+                    "sleeve": str(sleeve),
+                    "left_factor_id": left,
+                    "right_factor_id": right,
+                    "comparison_stage": "statistical_duplication",
+                    "comparison_type": "factor_return_correlation",
+                    "semantic_group": "",
+                    "abs_correlation": float(value),
+                }
+            )
+    return (
+        pd.DataFrame(rows).sort_values(["sleeve", "left_factor_id", "right_factor_id"])
+        if rows
+        else pd.DataFrame()
+    )
+
+
+def _build_model_telemetry(model_results, selections, persistence, factor_meta):
+    if model_results.empty and selections.empty and persistence.empty:
+        return pd.DataFrame()
+
+    fit_counts = (
+        model_results.groupby("sleeve").size().rename("model_fit_count")
+        if not model_results.empty
+        else pd.Series(dtype=float)
+    )
+    telemetry = (
+        factor_meta[["factor_id", "sleeve", "family", "kind"]].drop_duplicates().copy()
+        if not factor_meta.empty
+        else pd.DataFrame(columns=["factor_id", "sleeve", "family", "kind"])
+    )
+    if not selections.empty:
+        selection_stats = selections.groupby(
+            ["sleeve", "factor_id"], as_index=False
+        ).agg(
+            selection_count=("factor_id", "size"),
+            mean_abs_beta=("abs_beta", "mean"),
+            median_abs_beta=("abs_beta", "median"),
+            sign_consistency=("sign", lambda s: float(abs(np.nanmean(s)))),
+        )
+        telemetry = telemetry.merge(
+            selection_stats, on=["sleeve", "factor_id"], how="outer"
+        )
+    if not persistence.empty:
+        telemetry = telemetry.merge(
+            persistence[
+                [
+                    "sleeve",
+                    "factor_id",
+                    "selection_frequency",
+                    "is_persistent",
+                    "model_fit_count",
+                ]
+            ],
+            on=["sleeve", "factor_id"],
+            how="outer",
+        )
+    if not fit_counts.empty:
+        telemetry = telemetry.merge(
+            fit_counts.rename_axis("sleeve").reset_index(),
+            on="sleeve",
+            how="left",
+            suffixes=("", "_fallback"),
+        )
+        if "model_fit_count_fallback" in telemetry.columns:
+            telemetry["model_fit_count"] = telemetry["model_fit_count"].fillna(
+                telemetry["model_fit_count_fallback"]
+            )
+            telemetry = telemetry.drop(columns=["model_fit_count_fallback"])
+    numeric_defaults = [
+        "selection_count",
+        "mean_abs_beta",
+        "median_abs_beta",
+        "sign_consistency",
+        "selection_frequency",
+        "model_fit_count",
+    ]
+    for column in numeric_defaults:
+        if column not in telemetry.columns:
+            telemetry[column] = np.nan
+    if "is_persistent" not in telemetry.columns:
+        telemetry["is_persistent"] = False
+    return telemetry.sort_values(["sleeve", "factor_id"]).reset_index(drop=True)
+
+
 def _build_expected_return_outputs(current_betas, reduced_factors):
     if current_betas.empty or reduced_factors.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -1210,6 +2330,7 @@ def run_factor_research_data(
     config,
     show_progress=False,
 ):
+    candidate_context = _build_candidate_context(panel, config)
     factor_returns, factor_meta, baseline_returns, baseline_members = (
         build_factor_returns(
             panel,
@@ -1217,13 +2338,28 @@ def run_factor_research_data(
             risk_free_daily,
             config,
             show_progress=show_progress,
+            candidate_context=candidate_context,
         )
     )
     cluster_df, reduced_factors = cluster_factor_returns(
         factor_returns, factor_meta, config, show_progress=show_progress
     )
+    factor_registry = _finalize_factor_registry(candidate_context, factor_meta)
     factor_diagnostics = _factor_diagnostics(
         factor_returns, reduced_factors, factor_meta
+    )
+    distinctness_frames = [
+        df
+        for df in [
+            candidate_context["distinctness"],
+            _build_factor_return_distinctness(factor_returns, factor_meta, config),
+        ]
+        if not df.empty
+    ]
+    factor_distinctness = (
+        pd.concat(distinctness_frames, ignore_index=True)
+        if distinctness_frames
+        else pd.DataFrame()
     )
     returns_wide = _build_returns_wide(prices, config.return_alignment_max_gap_days)
     risk_free_series = _build_risk_free_series(risk_free_daily)
@@ -1233,11 +2369,18 @@ def run_factor_research_data(
         return {
             "factor_returns": factor_returns,
             "factor_meta": factor_meta,
+            "factor_registry": factor_registry,
+            "factor_candidate_diagnostics": candidate_context["candidate_diagnostics"],
+            "factor_distinctness": factor_distinctness,
+            "factor_selection_scores": candidate_context["selection_scores"],
+            "factor_screening_decisions": candidate_context["screening_decisions"],
             "factor_clusters": cluster_df,
+            "factor_cluster_membership": cluster_df,
             "factor_diagnostics": factor_diagnostics,
             "baseline_returns": baseline_returns,
             "baseline_members": baseline_members,
             "model_results": empty,
+            "factor_model_telemetry": empty,
             "factor_persistence": empty,
             "current_betas": empty,
             "asset_expected_returns": empty,
@@ -1416,15 +2559,69 @@ def run_factor_research_data(
     asset_expected_returns, asset_factor_betas = _build_expected_return_outputs(
         current_betas, reduced_factors
     )
+    selection_score_frames = [
+        df
+        for df in [
+            candidate_context["selection_scores"],
+            _build_cluster_selection_scores(cluster_df, factor_returns, factor_meta),
+        ]
+        if not df.empty
+    ]
+    factor_selection_scores = (
+        pd.concat(selection_score_frames, ignore_index=True)
+        if selection_score_frames
+        else pd.DataFrame()
+    )
+    screening_decision_frames = [
+        df
+        for df in [
+            candidate_context["screening_decisions"],
+            cluster_df.assign(
+                stage="statistical_duplication",
+                decision=np.where(cluster_df["keep_factor"], "keep", "drop"),
+                reason=np.where(
+                    cluster_df["keep_factor"],
+                    "cluster_representative",
+                    "correlated_cluster_member",
+                ),
+                reference_factor_id=cluster_df["cluster_representative"],
+            )[
+                [
+                    "factor_id",
+                    "sleeve",
+                    "stage",
+                    "decision",
+                    "reason",
+                    "reference_factor_id",
+                ]
+            ],
+        ]
+        if not df.empty
+    ]
+    factor_screening_decisions = (
+        pd.concat(screening_decision_frames, ignore_index=True)
+        if screening_decision_frames
+        else pd.DataFrame()
+    )
+    factor_model_telemetry = _build_model_telemetry(
+        model_results, selections, persistence, factor_meta
+    )
 
     return {
         "factor_returns": factor_returns,
         "factor_meta": factor_meta,
+        "factor_registry": factor_registry,
+        "factor_candidate_diagnostics": candidate_context["candidate_diagnostics"],
+        "factor_distinctness": factor_distinctness,
+        "factor_selection_scores": factor_selection_scores,
+        "factor_screening_decisions": factor_screening_decisions,
         "factor_clusters": cluster_df,
+        "factor_cluster_membership": cluster_df,
         "factor_diagnostics": factor_diagnostics,
         "baseline_returns": baseline_returns,
         "baseline_members": baseline_members,
         "model_results": model_results,
+        "factor_model_telemetry": factor_model_telemetry,
         "factor_persistence": persistence,
         "current_betas": current_betas,
         "asset_expected_returns": asset_expected_returns,
@@ -1599,6 +2796,24 @@ def run_factor_research(
         config,
         show_progress=show_progress,
     )
+    for key in [
+        "factor_registry",
+        "factor_candidate_diagnostics",
+        "factor_distinctness",
+        "factor_selection_scores",
+        "factor_screening_decisions",
+        "factor_cluster_membership",
+        "factor_model_telemetry",
+        "factor_clusters",
+        "factor_diagnostics",
+        "factor_persistence",
+        "model_results",
+        "current_betas",
+        "asset_expected_returns",
+        "asset_factor_betas",
+        "baseline_members",
+    ]:
+        research.setdefault(key, pd.DataFrame())
 
     factor_returns_wide = research["factor_returns"].copy()
     factor_returns_long = pd.DataFrame()
@@ -1638,6 +2853,48 @@ def run_factor_research(
                 config.sqlite_path,
                 tx=tx,
             ),
+            "factor_registry_path": _write_output(
+                "analysis_factor_registry",
+                research["factor_registry"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "factor_candidate_diagnostics_path": _write_output(
+                "analysis_factor_candidate_diagnostics",
+                research["factor_candidate_diagnostics"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "factor_distinctness_path": _write_output(
+                "analysis_factor_distinctness",
+                research["factor_distinctness"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "factor_selection_scores_path": _write_output(
+                "analysis_factor_selection_scores",
+                research["factor_selection_scores"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "factor_screening_decisions_path": _write_output(
+                "analysis_factor_screening_decisions",
+                research["factor_screening_decisions"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "factor_cluster_membership_path": _write_output(
+                "analysis_factor_cluster_membership",
+                research["factor_cluster_membership"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
             "factor_diagnostics_path": _write_output(
                 "analysis_factor_diagnostics",
                 research["factor_diagnostics"],
@@ -1655,6 +2912,13 @@ def run_factor_research(
             "model_results_path": _write_output(
                 "analysis_model_results",
                 research["model_results"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "factor_model_telemetry_path": _write_output(
+                "analysis_factor_model_telemetry",
+                research["factor_model_telemetry"],
                 config.output_dir,
                 config.sqlite_path,
                 tx=tx,
