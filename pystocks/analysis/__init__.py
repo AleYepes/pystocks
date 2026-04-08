@@ -490,6 +490,12 @@ def _currency_columns_for_bloc(df, bloc):
     ]
 
 
+def _macro_bloc_source_columns(panel_slice, bloc, macro_column):
+    return _country_columns_for_bloc(panel_slice, bloc) + [
+        f"world_bank::{macro_column}"
+    ]
+
+
 def _add_continent_features(df):
     out = df.copy()
     country_columns = [col for col in out.columns if col.startswith("country__")]
@@ -570,6 +576,9 @@ def _source_columns_for_feature(column, panel_slice):
         return _country_columns_for_bloc(panel_slice, column.split("__", 1)[1])
     if column.startswith("currency_bloc__"):
         return _currency_columns_for_bloc(panel_slice, column.split("__", 1)[1])
+    if column.startswith("macro_bloc__"):
+        _, bloc, macro_column = column.split("__", 2)
+        return _macro_bloc_source_columns(panel_slice, bloc, macro_column)
     if column.startswith("macro__"):
         return [
             f"country_weights::{column.replace('macro__', '')}",
@@ -595,6 +604,18 @@ def _semantic_group_for_column(column, panel_slice=None):
         return f"country_bloc__{column.split('__', 1)[1]}"
     if column.startswith("currency_bloc__"):
         return f"currency_bloc__{column.split('__', 1)[1]}"
+    if column.startswith("macro_bloc__"):
+        _, bloc, suffix = column.split("__", 2)
+        if suffix.endswith("_level"):
+            return f"macro_bloc_theme__{bloc}__{suffix[: -len('_level')]}__level"
+        if suffix.endswith("_growth"):
+            return f"macro_bloc_theme__{bloc}__{suffix[: -len('_growth')]}__growth"
+        if suffix.endswith("_acceleration"):
+            return (
+                f"macro_bloc_theme__{bloc}__"
+                f"{suffix[: -len('_acceleration')]}__acceleration"
+            )
+        return f"macro_bloc_theme__{bloc}__{suffix}"
     if column.startswith("industry__"):
         supersector = INDUSTRY_TO_SUPERSECTOR.get(column)
         if supersector:
@@ -648,6 +669,8 @@ def _economic_rationale_for_column(column):
         return "Extends V1 geographic compression into deterministic regional and development blocs."
     if column.startswith("currency_bloc__"):
         return "Prefers reserve and bloc-level currency exposures over single-currency leaves."
+    if column.startswith("macro_bloc__"):
+        return "Groups World Bank macro exposures into deterministic geographic blocs."
     if column.startswith("macro__"):
         return "Country weights collapsed into World Bank macro themes."
     if column.startswith("benchmark__"):
@@ -937,6 +960,10 @@ def _add_macro_features(panel, world_bank_country_features):
         work = panel_slice.copy()
         for macro_column in MACRO_FEATURE_COLUMNS:
             weighted = pd.Series(0.0, index=work.index, dtype=float)
+            bloc_weighted = {
+                bloc: pd.Series(0.0, index=work.index, dtype=float)
+                for bloc in COUNTRY_BLOC_MAP
+            }
             for country_column in country_columns:
                 code = country_column.replace("country__", "").upper()
                 if code not in latest.index or macro_column not in latest.columns:
@@ -946,8 +973,17 @@ def _add_macro_features(panel, world_bank_country_features):
                 )
                 value = pd.to_numeric(latest.loc[code, macro_column], errors="coerce")
                 if np.isscalar(value):
-                    weighted = weighted.add(weight * float(value), fill_value=0.0)
+                    contribution = weight * float(value)
+                    weighted = weighted.add(contribution, fill_value=0.0)
+                    country_code = code.lower()
+                    for bloc, members in COUNTRY_BLOC_MAP.items():
+                        if country_code in members:
+                            bloc_weighted[bloc] = bloc_weighted[bloc].add(
+                                contribution, fill_value=0.0
+                            )
             work[f"macro__{macro_column}"] = weighted
+            for bloc, bloc_values in bloc_weighted.items():
+                work[f"macro_bloc__{bloc}__{macro_column}"] = bloc_values
         enriched_parts.append(work)
 
     return pd.concat(enriched_parts, ignore_index=True)
@@ -1238,7 +1274,7 @@ def _factor_kind(column):
         or column.startswith("currency_bloc__")
     ):
         return "grouped"
-    if column.startswith("macro__"):
+    if column.startswith("macro__") or column.startswith("macro_bloc__"):
         return "macro_derived"
     return "raw"
 
@@ -1766,6 +1802,25 @@ def _build_candidate_context(panel, config):
                 row["admission_status"] = "rejected"
                 if not row["rejection_reason"]:
                     row["rejection_reason"] = "semantic_screen"
+
+        pre_count = len(candidate_rows)
+        post_count = len(admitted_columns[str(sleeve)])
+        compression_removed = max(pre_count - post_count, 0)
+        compression_ratio = (
+            float(compression_removed / pre_count) if pre_count > 0 else 0.0
+        )
+        admitted_factor_ids = {
+            _factor_id_for_column(str(sleeve), column)
+            for column in admitted_columns[str(sleeve)]
+        }
+        for row in diagnostics_rows:
+            if row["sleeve"] != str(sleeve):
+                continue
+            row["admitted_for_construction"] = row["factor_id"] in admitted_factor_ids
+            row["pre_compression_candidate_count"] = pre_count
+            row["post_compression_candidate_count"] = post_count
+            row["compression_removed_count"] = compression_removed
+            row["compression_removed_ratio"] = compression_ratio
 
     return {
         "factor_registry": pd.DataFrame(registry_rows).sort_values(
