@@ -63,6 +63,7 @@ class AnalysisConfig:
     return_alignment_max_gap_days: int = 0
     sparse_feature_max_ratio: float = 0.995
     persist_progress_bars: bool = True
+    max_final_vif: float = 10.0
 
 
 SUPERSECTOR_MAP = {
@@ -2297,6 +2298,39 @@ def _build_model_telemetry(model_results, selections, persistence, factor_meta):
         telemetry = telemetry.merge(
             selection_stats, on=["sleeve", "factor_id"], how="outer"
         )
+        if not model_results.empty:
+            selection_with_results = selections.merge(
+                model_results[
+                    [
+                        "sleeve",
+                        "conid",
+                        "train_start",
+                        "train_end",
+                        "test_end",
+                        "training_window_years",
+                        "mse_test",
+                        "r2_test",
+                    ]
+                ],
+                on=[
+                    "sleeve",
+                    "conid",
+                    "train_start",
+                    "train_end",
+                    "test_end",
+                    "training_window_years",
+                ],
+                how="left",
+            )
+            usefulness_stats = selection_with_results.groupby(
+                ["sleeve", "factor_id"], as_index=False
+            ).agg(
+                mean_selected_r2_test=("r2_test", "mean"),
+                mean_selected_mse_test=("mse_test", "mean"),
+            )
+            telemetry = telemetry.merge(
+                usefulness_stats, on=["sleeve", "factor_id"], how="left"
+            )
     if not persistence.empty:
         telemetry = telemetry.merge(
             persistence[
@@ -2330,13 +2364,442 @@ def _build_model_telemetry(model_results, selections, persistence, factor_meta):
         "sign_consistency",
         "selection_frequency",
         "model_fit_count",
+        "mean_selected_r2_test",
+        "mean_selected_mse_test",
     ]
     for column in numeric_defaults:
         if column not in telemetry.columns:
             telemetry[column] = np.nan
     if "is_persistent" not in telemetry.columns:
         telemetry["is_persistent"] = False
+    else:
+        telemetry["is_persistent"] = (
+            telemetry["is_persistent"]
+            .where(telemetry["is_persistent"].notna(), False)
+            .astype(bool)
+        )
     return telemetry.sort_values(["sleeve", "factor_id"]).reset_index(drop=True)
+
+
+def _compute_factor_vif(factor_frame):
+    if factor_frame.empty:
+        return pd.DataFrame(columns=["factor_id", "vif"])
+
+    clean = factor_frame.dropna()
+    if clean.empty:
+        return pd.DataFrame(
+            {"factor_id": factor_frame.columns.astype(str), "vif": np.nan}
+        )
+
+    rows = []
+    for factor_id in clean.columns.astype(str):
+        remaining = [col for col in clean.columns.astype(str) if col != factor_id]
+        if not remaining:
+            rows.append({"factor_id": factor_id, "vif": 1.0})
+            continue
+        X = clean[remaining].to_numpy(dtype=float)
+        y = clean[factor_id].to_numpy(dtype=float)
+        if X.shape[0] <= X.shape[1]:
+            rows.append({"factor_id": factor_id, "vif": np.nan})
+            continue
+        model = LinearRegression()
+        model.fit(X, y)
+        r2 = float(model.score(X, y))
+        vif = np.inf if r2 >= 1.0 - 1e-10 else 1.0 / max(1.0 - r2, 1e-10)
+        rows.append({"factor_id": factor_id, "vif": float(vif)})
+    return pd.DataFrame(rows)
+
+
+def _build_final_vif_diagnostics(
+    final_factors, factor_meta, factor_model_telemetry, model_usefulness_scores, config
+):
+    columns = [
+        "factor_id",
+        "sleeve",
+        "family",
+        "semantic_group",
+        "kind",
+        "source_columns",
+        "is_benchmark",
+        "selected_for_model",
+        "final_vif",
+        "max_final_vif",
+        "exceeds_max_final_vif",
+        "vif_rank_within_sleeve",
+        "next_nonbenchmark_vif_drop_candidate",
+        "final_factor_count",
+        "max_abs_corr_with_final_set",
+        "max_abs_corr_factor_id",
+        "selection_score",
+        "selection_count",
+        "selection_frequency",
+        "sign_consistency",
+        "mean_abs_beta",
+        "mean_selected_r2_test",
+        "model_fit_count",
+    ]
+    if final_factors.empty or factor_meta.empty:
+        return pd.DataFrame(columns=columns)
+
+    meta_columns = [
+        "factor_id",
+        "sleeve",
+        "family",
+        "semantic_group",
+        "kind",
+        "source_columns",
+        "is_benchmark",
+    ]
+    meta = factor_meta.copy()
+    meta_defaults = {
+        "factor_id": "",
+        "sleeve": "",
+        "family": "",
+        "semantic_group": "",
+        "kind": "",
+        "source_columns": "",
+        "is_benchmark": False,
+    }
+    for column, default in meta_defaults.items():
+        if column not in meta.columns:
+            meta[column] = default
+    meta = meta.loc[meta["factor_id"].isin(final_factors.columns), meta_columns]
+    meta = meta.drop_duplicates(subset=["factor_id", "sleeve"])
+    if meta.empty:
+        return pd.DataFrame(columns=columns)
+
+    telemetry_columns = [
+        "factor_id",
+        "sleeve",
+        "selection_count",
+        "selection_frequency",
+        "sign_consistency",
+        "mean_abs_beta",
+        "mean_selected_r2_test",
+        "model_fit_count",
+    ]
+    telemetry = (
+        factor_model_telemetry[
+            [column for column in telemetry_columns if column in factor_model_telemetry]
+        ]
+        .drop_duplicates(subset=["factor_id", "sleeve"])
+        .copy()
+        if not factor_model_telemetry.empty
+        else pd.DataFrame(columns=telemetry_columns)
+    )
+    score_df = (
+        model_usefulness_scores[
+            ["factor_id", "sleeve", "selection_score"]
+        ].drop_duplicates(subset=["factor_id", "sleeve"])
+        if not model_usefulness_scores.empty
+        else pd.DataFrame(columns=["factor_id", "sleeve", "selection_score"])
+    )
+
+    rows = []
+    max_final_vif = float(config.max_final_vif)
+    for sleeve, meta_slice in meta.groupby("sleeve", sort=True):
+        sleeve_factor_ids = [
+            factor_id
+            for factor_id in meta_slice["factor_id"].astype(str).tolist()
+            if factor_id in final_factors.columns
+        ]
+        if not sleeve_factor_ids:
+            continue
+
+        sleeve_returns = final_factors.reindex(columns=sleeve_factor_ids)
+        vif_df = _compute_factor_vif(sleeve_returns).rename(
+            columns={"vif": "final_vif"}
+        )
+        if vif_df.empty:
+            vif_df = pd.DataFrame(
+                {
+                    "factor_id": sleeve_factor_ids,
+                    "final_vif": np.nan,
+                }
+            )
+
+        corr = sleeve_returns.corr().abs()
+        corr_rows = []
+        for factor_id in sleeve_factor_ids:
+            max_corr = np.nan
+            max_corr_factor_id = ""
+            if factor_id in corr.index:
+                factor_corr = corr.loc[factor_id].drop(
+                    labels=[factor_id], errors="ignore"
+                )
+                factor_corr = factor_corr.dropna()
+                if not factor_corr.empty:
+                    factor_corr = factor_corr.sort_values(ascending=False)
+                    max_corr_factor_id = str(factor_corr.index[0])
+                    max_corr = float(factor_corr.iloc[0])
+            corr_rows.append(
+                {
+                    "factor_id": factor_id,
+                    "max_abs_corr_with_final_set": max_corr,
+                    "max_abs_corr_factor_id": max_corr_factor_id,
+                }
+            )
+        corr_df = pd.DataFrame(corr_rows)
+
+        sleeve_df = (
+            meta_slice.merge(vif_df, on="factor_id", how="left")
+            .merge(corr_df, on="factor_id", how="left")
+            .merge(telemetry, on=["factor_id", "sleeve"], how="left")
+            .merge(score_df, on=["factor_id", "sleeve"], how="left")
+        )
+        if "is_benchmark" not in sleeve_df.columns:
+            sleeve_df["is_benchmark"] = False
+        sleeve_df["is_benchmark"] = (
+            sleeve_df["is_benchmark"]
+            .where(sleeve_df["is_benchmark"].notna(), False)
+            .astype(bool)
+        )
+        sleeve_df["selected_for_model"] = True
+        sleeve_df["max_final_vif"] = max_final_vif
+        sleeve_df["exceeds_max_final_vif"] = sleeve_df["final_vif"] > max_final_vif
+        sleeve_df["final_factor_count"] = int(len(sleeve_factor_ids))
+        ordered = sleeve_df.sort_values(
+            ["final_vif", "selection_score", "factor_id"],
+            ascending=[False, True, True],
+            na_position="last",
+        )
+        rank_lookup = {
+            factor_id: rank
+            for rank, factor_id in enumerate(ordered["factor_id"].astype(str), start=1)
+        }
+        sleeve_df["vif_rank_within_sleeve"] = (
+            sleeve_df["factor_id"].astype(str).map(rank_lookup).astype("Int64")
+        )
+
+        non_bench = ordered.loc[~ordered["is_benchmark"]]
+        next_drop_factor_id = (
+            str(non_bench.iloc[0]["factor_id"]) if not non_bench.empty else None
+        )
+        sleeve_df["next_nonbenchmark_vif_drop_candidate"] = (
+            sleeve_df["factor_id"].astype(str).eq(next_drop_factor_id)
+        )
+        rows.extend(sleeve_df[columns].to_dict("records"))
+
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    diagnostics = pd.DataFrame(rows)
+    return diagnostics.sort_values(["sleeve", "vif_rank_within_sleeve", "factor_id"])
+
+
+def _build_model_usefulness_scores(factor_model_telemetry, factor_meta):
+    if factor_model_telemetry.empty:
+        return pd.DataFrame()
+
+    telemetry = factor_model_telemetry.copy()
+    if not factor_meta.empty:
+        telemetry = telemetry.merge(
+            factor_meta[["factor_id", "sleeve", "kind"]].drop_duplicates(),
+            on=["factor_id", "sleeve"],
+            how="left",
+            suffixes=("", "_meta"),
+        )
+        if "kind_meta" in telemetry.columns:
+            telemetry["kind"] = telemetry["kind"].fillna(telemetry["kind_meta"])
+            telemetry = telemetry.drop(columns=["kind_meta"])
+
+    telemetry["kind_priority_component"] = telemetry["kind"].map(
+        lambda kind: float(max(0, 4 - _kind_priority(kind)))
+    )
+    telemetry["nonzero_frequency_component"] = telemetry["selection_frequency"].fillna(
+        0.0
+    )
+    telemetry["sign_consistency_component"] = telemetry["sign_consistency"].fillna(0.0)
+    telemetry["abs_beta_component"] = np.log1p(telemetry["mean_abs_beta"].fillna(0.0))
+    telemetry["oos_usefulness_component"] = (
+        telemetry["mean_selected_r2_test"].fillna(0.0).clip(lower=0.0)
+    )
+    telemetry["selection_score"] = (
+        telemetry["kind_priority_component"] * 100.0
+        + telemetry["nonzero_frequency_component"] * 50.0
+        + telemetry["sign_consistency_component"] * 20.0
+        + telemetry["abs_beta_component"] * 10.0
+        + telemetry["oos_usefulness_component"] * 10.0
+    )
+    telemetry["stage"] = "model_usefulness"
+    return (
+        telemetry[
+            [
+                "factor_id",
+                "sleeve",
+                "stage",
+                "kind_priority_component",
+                "nonzero_frequency_component",
+                "sign_consistency_component",
+                "abs_beta_component",
+                "oos_usefulness_component",
+                "selection_score",
+            ]
+        ]
+        .sort_values(["sleeve", "factor_id"])
+        .reset_index(drop=True)
+    )
+
+
+def _select_final_factor_set(
+    reduced_factors, factor_meta, factor_model_telemetry, config
+):
+    if reduced_factors.empty or factor_meta.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    score_df = _build_model_usefulness_scores(factor_model_telemetry, factor_meta)
+    score_lookup = (
+        score_df.set_index(["sleeve", "factor_id"])["selection_score"].to_dict()
+        if not score_df.empty
+        else {}
+    )
+    telemetry_lookup = (
+        factor_model_telemetry.set_index(["sleeve", "factor_id"]).to_dict("index")
+        if not factor_model_telemetry.empty
+        else {}
+    )
+
+    kept_factor_ids = []
+    decision_rows = []
+    vif_rows = []
+
+    for sleeve, meta_slice in factor_meta.groupby("sleeve", sort=True):
+        sleeve_factor_ids = [
+            factor_id
+            for factor_id in meta_slice["factor_id"].astype(str).tolist()
+            if factor_id in reduced_factors.columns
+        ]
+        if not sleeve_factor_ids:
+            continue
+
+        benchmarks = sorted(
+            meta_slice.loc[
+                meta_slice["kind"].astype(str).eq("benchmark"), "factor_id"
+            ].astype(str)
+        )
+        non_bench = sorted(set(sleeve_factor_ids) - set(benchmarks))
+
+        persistent = [
+            factor_id
+            for factor_id in non_bench
+            if bool(
+                telemetry_lookup.get((str(sleeve), factor_id), {}).get(
+                    "is_persistent", False
+                )
+            )
+        ]
+        if persistent:
+            shortlisted = persistent
+        else:
+            useful = [
+                factor_id
+                for factor_id in non_bench
+                if float(
+                    telemetry_lookup.get((str(sleeve), factor_id), {}).get(
+                        "selection_count", 0.0
+                    )
+                )
+                > 0.0
+            ]
+            useful = sorted(
+                useful,
+                key=lambda factor_id: (
+                    -score_lookup.get((str(sleeve), factor_id), 0.0),
+                    factor_id,
+                ),
+            )
+            shortlisted = useful[: min(3, len(useful))]
+
+        chosen = sorted(set(benchmarks) | set(shortlisted))
+        chosen_set = set(chosen)
+        for factor_id in sleeve_factor_ids:
+            decision_rows.append(
+                {
+                    "factor_id": factor_id,
+                    "sleeve": str(sleeve),
+                    "stage": "final_model_selection",
+                    "decision": "keep" if factor_id in chosen_set else "drop",
+                    "reason": (
+                        "benchmark_retained"
+                        if factor_id in benchmarks
+                        else "model_usefulness_selected"
+                        if factor_id in chosen_set
+                        else "not_selected_by_model_usefulness"
+                    ),
+                    "reference_factor_id": "",
+                }
+            )
+
+        current = chosen.copy()
+        while len(current) > 2:
+            vif_df = _compute_factor_vif(reduced_factors.reindex(columns=current))
+            if vif_df.empty or vif_df["vif"].dropna().empty:
+                break
+            max_vif = float(vif_df["vif"].dropna().max())
+            if max_vif <= float(config.max_final_vif):
+                break
+            droppable = [
+                factor_id
+                for factor_id in vif_df.loc[
+                    vif_df["vif"] > float(config.max_final_vif), "factor_id"
+                ]
+                .astype(str)
+                .tolist()
+                if factor_id not in benchmarks
+            ]
+            if not droppable:
+                break
+            drop_factor = sorted(
+                droppable,
+                key=lambda factor_id: (
+                    score_lookup.get((str(sleeve), factor_id), 0.0),
+                    factor_id,
+                ),
+            )[0]
+            current.remove(drop_factor)
+            decision_rows.append(
+                {
+                    "factor_id": drop_factor,
+                    "sleeve": str(sleeve),
+                    "stage": "final_vif",
+                    "decision": "drop",
+                    "reason": "max_final_vif_exceeded",
+                    "reference_factor_id": "",
+                }
+            )
+
+        final_vif = _compute_factor_vif(reduced_factors.reindex(columns=current))
+        if not final_vif.empty:
+            final_vif["sleeve"] = str(sleeve)
+            vif_rows.extend(final_vif.to_dict("records"))
+        kept_factor_ids.extend(current)
+
+    final_factors = reduced_factors.reindex(
+        columns=sorted(dict.fromkeys(kept_factor_ids))
+    )
+    final_vif_df = (
+        pd.DataFrame(vif_rows)
+        .sort_values(["sleeve", "factor_id"])
+        .reset_index(drop=True)
+        if vif_rows
+        else pd.DataFrame(columns=["factor_id", "vif", "sleeve"])
+    )
+    final_screening = (
+        pd.DataFrame(decision_rows)
+        .sort_values(["sleeve", "factor_id", "stage", "decision"])
+        .reset_index(drop=True)
+        if decision_rows
+        else pd.DataFrame()
+    )
+    vif_score_rows = (
+        final_vif_df.assign(
+            stage="final_vif",
+            vif_component=final_vif_df["vif"],
+            selection_score=-final_vif_df["vif"].fillna(np.inf),
+        )[["factor_id", "sleeve", "stage", "vif_component", "selection_score"]]
+        if not final_vif_df.empty
+        else pd.DataFrame()
+    )
+    return final_factors, final_screening, score_df, vif_score_rows
 
 
 def _build_expected_return_outputs(current_betas, reduced_factors):
@@ -2400,9 +2863,6 @@ def run_factor_research_data(
         factor_returns, factor_meta, config, show_progress=show_progress
     )
     factor_registry = _finalize_factor_registry(candidate_context, factor_meta)
-    factor_diagnostics = _factor_diagnostics(
-        factor_returns, reduced_factors, factor_meta
-    )
     distinctness_frames = [
         df
         for df in [
@@ -2431,7 +2891,10 @@ def run_factor_research_data(
             "factor_screening_decisions": candidate_context["screening_decisions"],
             "factor_clusters": cluster_df,
             "factor_cluster_membership": cluster_df,
-            "factor_diagnostics": factor_diagnostics,
+            "factor_diagnostics": _factor_diagnostics(
+                factor_returns, reduced_factors, factor_meta
+            ),
+            "factor_final_vif_diagnostics": empty,
             "baseline_returns": baseline_returns,
             "baseline_members": baseline_members,
             "model_results": empty,
@@ -2601,24 +3064,86 @@ def run_factor_research_data(
         persistence["is_persistent"] = (
             persistence["selection_count"] >= config.min_selection_count
         ) & (persistence["selection_frequency"] >= config.selection_frequency_threshold)
+    factor_model_telemetry = _build_model_telemetry(
+        model_results, selections, persistence, factor_meta
+    )
+    (
+        final_factors,
+        final_selection_decisions,
+        model_usefulness_scores,
+        final_vif_scores,
+    ) = _select_final_factor_set(
+        reduced_factors, factor_meta, factor_model_telemetry, config
+    )
+    if final_factors.empty:
+        final_factors = reduced_factors.copy()
+    if not persistence.empty:
+        persistence = persistence.loc[
+            persistence["factor_id"].isin(final_factors.columns)
+        ].reset_index(drop=True)
+    final_selected_df = (
+        factor_meta.loc[
+            factor_meta["factor_id"].isin(final_factors.columns),
+            ["factor_id", "sleeve"],
+        ]
+        .drop_duplicates()
+        .assign(final_selected=True)
+        if not final_factors.empty
+        else pd.DataFrame(columns=["factor_id", "sleeve", "final_selected"])
+    )
+    factor_model_telemetry = (
+        factor_model_telemetry.merge(
+            final_selected_df,
+            on=["factor_id", "sleeve"],
+            how="left",
+        )
+        if not factor_model_telemetry.empty
+        else factor_model_telemetry.assign(final_selected=False)
+    )
+    if "final_selected" in factor_model_telemetry.columns:
+        factor_model_telemetry["final_selected"] = (
+            factor_model_telemetry["final_selected"]
+            .where(factor_model_telemetry["final_selected"].notna(), False)
+            .astype(bool)
+        )
+    if not final_vif_scores.empty:
+        factor_model_telemetry = factor_model_telemetry.merge(
+            final_vif_scores[["factor_id", "sleeve", "vif_component"]].rename(
+                columns={"vif_component": "final_vif"}
+            ),
+            on=["factor_id", "sleeve"],
+            how="left",
+        )
+    elif "final_vif" not in factor_model_telemetry.columns:
+        factor_model_telemetry["final_vif"] = np.nan
+    factor_diagnostics = _factor_diagnostics(factor_returns, final_factors, factor_meta)
+    factor_final_vif_diagnostics = _build_final_vif_diagnostics(
+        final_factors,
+        factor_meta,
+        factor_model_telemetry,
+        model_usefulness_scores,
+        config,
+    )
 
     current_betas = compute_current_betas_data(
         panel=panel,
         prices=prices,
-        reduced_factors=reduced_factors,
+        reduced_factors=final_factors,
         risk_free_daily=risk_free_daily,
         persistence=persistence,
         config=config,
         show_progress=show_progress,
     )
     asset_expected_returns, asset_factor_betas = _build_expected_return_outputs(
-        current_betas, reduced_factors
+        current_betas, final_factors
     )
     selection_score_frames = [
         df
         for df in [
             candidate_context["selection_scores"],
             _build_cluster_selection_scores(cluster_df, factor_returns, factor_meta),
+            model_usefulness_scores,
+            final_vif_scores,
         ]
         if not df.empty
     ]
@@ -2650,6 +3175,7 @@ def run_factor_research_data(
                     "reference_factor_id",
                 ]
             ],
+            final_selection_decisions,
         ]
         if not df.empty
     ]
@@ -2657,9 +3183,6 @@ def run_factor_research_data(
         pd.concat(screening_decision_frames, ignore_index=True)
         if screening_decision_frames
         else pd.DataFrame()
-    )
-    factor_model_telemetry = _build_model_telemetry(
-        model_results, selections, persistence, factor_meta
     )
 
     return {
@@ -2673,6 +3196,7 @@ def run_factor_research_data(
         "factor_clusters": cluster_df,
         "factor_cluster_membership": cluster_df,
         "factor_diagnostics": factor_diagnostics,
+        "factor_final_vif_diagnostics": factor_final_vif_diagnostics,
         "baseline_returns": baseline_returns,
         "baseline_members": baseline_members,
         "model_results": model_results,
@@ -2861,6 +3385,7 @@ def run_factor_research(
         "factor_model_telemetry",
         "factor_clusters",
         "factor_diagnostics",
+        "factor_final_vif_diagnostics",
         "factor_persistence",
         "model_results",
         "current_betas",
@@ -2953,6 +3478,13 @@ def run_factor_research(
             "factor_diagnostics_path": _write_output(
                 "analysis_factor_diagnostics",
                 research["factor_diagnostics"],
+                config.output_dir,
+                config.sqlite_path,
+                tx=tx,
+            ),
+            "factor_final_vif_diagnostics_path": _write_output(
+                "analysis_factor_final_vif_diagnostics",
+                research["factor_final_vif_diagnostics"],
                 config.output_dir,
                 config.sqlite_path,
                 tx=tx,

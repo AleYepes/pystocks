@@ -120,7 +120,6 @@ class PyStocksCLI:
         result["analysis"] = self.run_analysis(show_progress=show_progress)
 
         print("Pipeline complete.")
-        print(result)
         return result
 
 

@@ -1127,6 +1127,9 @@ def test_run_factor_research_preprocesses_inputs_once(tmp_path, monkeypatch):
 
     assert counts == {"prices": 1, "snapshots": 1, "risk_free": 1, "macro": 1}
     assert result["snapshot_rows"] == 1
+    assert result["factor_final_vif_diagnostics_path"].endswith(
+        "analysis_factor_final_vif_diagnostics.parquet"
+    )
 
 
 def test_write_output_skips_zero_column_sql_frames(tmp_path):
@@ -1178,6 +1181,18 @@ def test_run_factor_research_data_uses_risk_free_excess(monkeypatch):
     )
     prices = pd.DataFrame(
         [
+            {
+                "conid": "a",
+                "trade_date": pd.Timestamp("2025-12-10"),
+                "clean_return": 0.01,
+                "is_clean_price": True,
+            },
+            {
+                "conid": "a",
+                "trade_date": pd.Timestamp("2026-01-10"),
+                "clean_return": 0.015,
+                "is_clean_price": True,
+            },
             {
                 "conid": "a",
                 "trade_date": pd.Timestamp("2026-02-10"),
@@ -1484,6 +1499,7 @@ def test_run_factor_research_data_emits_refactor_diagnostics_tables(monkeypatch)
         "factor_screening_decisions",
         "factor_cluster_membership",
         "factor_model_telemetry",
+        "factor_final_vif_diagnostics",
     }.issubset(result)
     assert set(result["factor_registry"].columns) >= {
         "factor_id",
@@ -1507,6 +1523,404 @@ def test_run_factor_research_data_emits_refactor_diagnostics_tables(monkeypatch)
         "selection_frequency",
         "is_persistent",
     }
+    assert set(result["factor_final_vif_diagnostics"].columns) >= {
+        "factor_id",
+        "sleeve",
+        "final_vif",
+        "max_final_vif",
+        "vif_rank_within_sleeve",
+        "next_nonbenchmark_vif_drop_candidate",
+        "max_abs_corr_with_final_set",
+        "selection_score",
+    }
+    assert bool(
+        result["factor_final_vif_diagnostics"].loc[
+            0, "next_nonbenchmark_vif_drop_candidate"
+        ]
+    )
+
+
+def test_run_factor_research_data_uses_model_usefulness_for_final_selection(
+    monkeypatch,
+):
+    panel = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-01-31"),
+            },
+            {
+                "conid": "a",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-02-28"),
+            },
+            {
+                "conid": "a",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-03-31"),
+            },
+        ]
+    )
+    prices = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "trade_date": pd.Timestamp("2026-02-10"),
+                "clean_return": 0.02,
+                "is_clean_price": True,
+            },
+            {
+                "conid": "a",
+                "trade_date": pd.Timestamp("2026-03-10"),
+                "clean_return": 0.03,
+                "is_clean_price": True,
+            },
+        ]
+    )
+    factor_returns = pd.DataFrame(
+        {
+            "equity__benchmark__market_excess": [0.01, 0.00, 0.02, 0.01],
+            "equity__grouped__supersector__cyclical": [0.03, 0.04, 0.01, 0.02],
+            "equity__raw__industry__technology": [0.05, 0.01, 0.06, 0.02],
+        },
+        index=pd.to_datetime(["2025-12-10", "2026-01-10", "2026-02-10", "2026-03-10"]),
+    )
+    factor_meta = pd.DataFrame(
+        [
+            {
+                "factor_id": "equity__benchmark__market_excess",
+                "sleeve": "equity",
+                "family": "market_excess",
+                "kind": "benchmark",
+            },
+            {
+                "factor_id": "equity__grouped__supersector__cyclical",
+                "sleeve": "equity",
+                "family": "supersector",
+                "kind": "grouped",
+            },
+            {
+                "factor_id": "equity__raw__industry__technology",
+                "sleeve": "equity",
+                "family": "industry",
+                "kind": "raw",
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        analysis_module,
+        "build_factor_returns",
+        lambda *args, **kwargs: (
+            factor_returns,
+            factor_meta,
+            pd.Series(0.0, index=factor_returns.index),
+            pd.DataFrame(),
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "cluster_factor_returns",
+        lambda factor_returns, factor_meta, config, show_progress=False: (
+            pd.DataFrame(
+                [
+                    {
+                        "factor_id": factor_id,
+                        "sleeve": "equity",
+                        "cluster_id": f"equity_{i}",
+                        "cluster_representative": factor_id,
+                        "cluster_size": 1,
+                        "keep_factor": True,
+                    }
+                    for i, factor_id in enumerate(factor_returns.columns, start=1)
+                ]
+            ),
+            factor_returns,
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "_build_research_windows",
+        lambda panel, reduced_factors, config: [
+            (
+                pd.Timestamp("2025-02-28"),
+                pd.Timestamp("2026-02-28"),
+                pd.Timestamp("2026-03-31"),
+                1,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "compute_current_betas_data",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+
+    def fake_fit(X_train, y_train):
+        class _Model:
+            alpha_ = 0.1
+            l1_ratio_ = 0.5
+            n_iter_ = 10
+            dual_gap_ = 0.0
+            mse_path_ = np.array([[1.0, 2.0]])
+
+        class _Pipeline:
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        return _Pipeline(), _Model(), 0.0, np.array([0.30, 0.20, 0.0])
+
+    monkeypatch.setattr(analysis_module, "_fit_elastic_net", fake_fit)
+
+    result = run_factor_research_data(
+        panel,
+        prices,
+        pd.DataFrame(
+            [
+                {"trade_date": pd.Timestamp("2026-02-10"), "daily_nominal_rate": 0.0},
+                {"trade_date": pd.Timestamp("2026-03-10"), "daily_nominal_rate": 0.0},
+            ]
+        ),
+        AnalysisConfig(
+            min_train_days=1,
+            min_test_days=1,
+            training_window_years=(1,),
+            walk_forward_step_months=1,
+            include_macro_features=False,
+            require_supplementary_data=False,
+            min_selection_count=1,
+            selection_frequency_threshold=0.0,
+        ),
+    )
+
+    telemetry = result["factor_model_telemetry"].set_index("factor_id")
+    diagnostics = result["factor_diagnostics"].set_index("factor_id")
+    decisions = result["factor_screening_decisions"]
+    scores = result["factor_selection_scores"]
+
+    assert bool(
+        telemetry.loc["equity__grouped__supersector__cyclical", "final_selected"]
+    )
+    assert not bool(
+        telemetry.loc["equity__raw__industry__technology", "final_selected"]
+    )
+    assert bool(
+        diagnostics.loc["equity__grouped__supersector__cyclical", "selected_for_model"]
+    )
+    assert not bool(
+        diagnostics.loc["equity__raw__industry__technology", "selected_for_model"]
+    )
+    assert scores["stage"].eq("model_usefulness").any()
+    assert (
+        decisions.loc[
+            decisions["factor_id"] == "equity__raw__industry__technology", "reason"
+        ]
+        .eq("not_selected_by_model_usefulness")
+        .any()
+    )
+
+
+def test_run_factor_research_data_applies_final_vif_constraint(monkeypatch):
+    panel = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-01-31"),
+            },
+            {
+                "conid": "a",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-02-28"),
+            },
+            {
+                "conid": "a",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-03-31"),
+            },
+        ]
+    )
+    prices = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "trade_date": pd.Timestamp("2025-12-10"),
+                "clean_return": 0.01,
+                "is_clean_price": True,
+            },
+            {
+                "conid": "a",
+                "trade_date": pd.Timestamp("2026-01-10"),
+                "clean_return": 0.015,
+                "is_clean_price": True,
+            },
+            {
+                "conid": "a",
+                "trade_date": pd.Timestamp("2026-02-10"),
+                "clean_return": 0.02,
+                "is_clean_price": True,
+            },
+            {
+                "conid": "a",
+                "trade_date": pd.Timestamp("2026-03-10"),
+                "clean_return": 0.03,
+                "is_clean_price": True,
+            },
+        ]
+    )
+    duplicated = pd.Series(
+        [0.03, 0.01, 0.04, 0.02],
+        index=pd.to_datetime(["2025-12-10", "2026-01-10", "2026-02-10", "2026-03-10"]),
+    )
+    factor_returns = pd.DataFrame(
+        {
+            "equity__benchmark__market_excess": pd.Series(
+                [0.01, 0.02, 0.00, 0.03], index=duplicated.index
+            ),
+            "equity__grouped__supersector__cyclical": duplicated,
+            "equity__raw__industry__technology": duplicated,
+        },
+        index=duplicated.index,
+    )
+    factor_meta = pd.DataFrame(
+        [
+            {
+                "factor_id": "equity__benchmark__market_excess",
+                "sleeve": "equity",
+                "family": "market_excess",
+                "kind": "benchmark",
+            },
+            {
+                "factor_id": "equity__grouped__supersector__cyclical",
+                "sleeve": "equity",
+                "family": "supersector",
+                "kind": "grouped",
+            },
+            {
+                "factor_id": "equity__raw__industry__technology",
+                "sleeve": "equity",
+                "family": "industry",
+                "kind": "raw",
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        analysis_module,
+        "build_factor_returns",
+        lambda *args, **kwargs: (
+            factor_returns,
+            factor_meta,
+            pd.Series(0.0, index=factor_returns.index),
+            pd.DataFrame(),
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "cluster_factor_returns",
+        lambda factor_returns, factor_meta, config, show_progress=False: (
+            pd.DataFrame(
+                [
+                    {
+                        "factor_id": factor_id,
+                        "sleeve": "equity",
+                        "cluster_id": f"equity_{i}",
+                        "cluster_representative": factor_id,
+                        "cluster_size": 1,
+                        "keep_factor": True,
+                    }
+                    for i, factor_id in enumerate(factor_returns.columns, start=1)
+                ]
+            ),
+            factor_returns,
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "_build_research_windows",
+        lambda panel, reduced_factors, config: [
+            (
+                pd.Timestamp("2025-02-28"),
+                pd.Timestamp("2026-02-28"),
+                pd.Timestamp("2026-03-31"),
+                1,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        analysis_module,
+        "compute_current_betas_data",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+
+    def fake_fit(X_train, y_train):
+        class _Model:
+            alpha_ = 0.1
+            l1_ratio_ = 0.5
+            n_iter_ = 10
+            dual_gap_ = 0.0
+            mse_path_ = np.array([[1.0, 2.0]])
+
+        class _Pipeline:
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        return _Pipeline(), _Model(), 0.0, np.array([0.15, 0.30, 0.25])
+
+    monkeypatch.setattr(analysis_module, "_fit_elastic_net", fake_fit)
+
+    result = run_factor_research_data(
+        panel,
+        prices,
+        pd.DataFrame(
+            [
+                {"trade_date": pd.Timestamp("2026-02-10"), "daily_nominal_rate": 0.0},
+                {"trade_date": pd.Timestamp("2026-03-10"), "daily_nominal_rate": 0.0},
+            ]
+        ),
+        AnalysisConfig(
+            min_train_days=1,
+            min_test_days=1,
+            training_window_years=(1,),
+            walk_forward_step_months=1,
+            include_macro_features=False,
+            require_supplementary_data=False,
+            min_selection_count=1,
+            selection_frequency_threshold=0.0,
+            max_final_vif=1.1,
+        ),
+    )
+
+    telemetry = result["factor_model_telemetry"].set_index("factor_id")
+    decisions = result["factor_screening_decisions"]
+    diagnostics = result["factor_diagnostics"].set_index("factor_id")
+    vif_diagnostics = result["factor_final_vif_diagnostics"].set_index("factor_id")
+
+    assert bool(
+        telemetry.loc["equity__grouped__supersector__cyclical", "final_selected"]
+    )
+    assert not bool(
+        telemetry.loc["equity__raw__industry__technology", "final_selected"]
+    )
+    assert not bool(
+        diagnostics.loc["equity__raw__industry__technology", "selected_for_model"]
+    )
+    assert (
+        decisions.loc[
+            decisions["factor_id"] == "equity__raw__industry__technology", "reason"
+        ]
+        .eq("max_final_vif_exceeded")
+        .any()
+    )
+    assert "final_vif" in telemetry.columns
+    assert "equity__raw__industry__technology" not in vif_diagnostics.index
+    assert bool(
+        vif_diagnostics.loc[
+            "equity__grouped__supersector__cyclical",
+            "next_nonbenchmark_vif_drop_candidate",
+        ]
+    )
 
 
 def test_run_analysis_pipeline_delegates_to_run_factor_research(monkeypatch):
