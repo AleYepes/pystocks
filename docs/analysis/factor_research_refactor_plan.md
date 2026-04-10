@@ -2,6 +2,11 @@
 
 ## Summary
 
+Status as of April 10, 2026:
+
+- phases 1 through 4 are implemented in `pystocks/analysis/__init__.py` and the supporting supplementary-data pipeline
+- the remaining work is ongoing research evaluation and factor review, not additional planned architecture phases
+
 The factor research pipeline is now operational end to end:
 
 - products scrape successfully
@@ -402,6 +407,12 @@ Acceptance criteria:
 
 - macro additions improve distinctness or predictive usefulness
 - macro factor families do not explode uncontrollably
+
+Completion notes:
+
+- yearly World Bank acceleration fields are now derived and stored alongside level and growth features
+- macro leaves are compressed into curated theme factors such as demographic scale, demographic momentum, development, trade centrality, global output share, and external investment intensity
+- bloc-level macro themes are derived deterministically from the same stored features so macro expansion remains grouped rather than leaf-driven
 
 ## Public Interfaces
 

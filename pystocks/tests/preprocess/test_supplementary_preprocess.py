@@ -259,3 +259,40 @@ def test_preprocess_world_bank_country_features_derives_levels_and_growth():
     assert usa_2024["share_trade_volume_level"] == 100.0 / 150.0
     assert usa_2025["population_growth"] == 10.0
     assert usa_2025["foreign_direct_investment_growth"] == 0.5
+
+
+def test_preprocess_world_bank_country_features_derives_acceleration():
+    raw_df = pd.DataFrame(
+        [
+            {
+                "economy_code": "USA",
+                "indicator_id": "SP.POP.TOTL",
+                "year": 2023,
+                "value": 90.0,
+                "fetched_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "economy_code": "USA",
+                "indicator_id": "SP.POP.TOTL",
+                "year": 2024,
+                "value": 100.0,
+                "fetched_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "economy_code": "USA",
+                "indicator_id": "SP.POP.TOTL",
+                "year": 2025,
+                "value": 115.0,
+                "fetched_at": "2026-01-01T00:00:00+00:00",
+            },
+        ]
+    )
+
+    result = preprocess_world_bank_country_features(raw_df)
+
+    usa_2025 = result[
+        (result["economy_code"] == "USA") & (result["feature_year"] == 2025)
+    ].iloc[0]
+
+    assert usa_2025["population_growth"] == 15.0
+    assert usa_2025["population_acceleration"] == 5.0

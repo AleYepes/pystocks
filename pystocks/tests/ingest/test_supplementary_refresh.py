@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 import pystocks.ingest.supplementary as supplementary_module
+from pystocks.storage.readers import load_world_bank_country_features
 from pystocks.storage.schema import init_storage
 
 
@@ -212,3 +213,78 @@ def test_refresh_supplementary_data_writes_normalized_tables(tmp_path, monkeypat
     assert risk_free_nominal_rate == pytest.approx(0.022)
     assert macro_rows == 2
     assert log_rows == 3
+
+
+def test_load_world_bank_country_features_tolerates_old_schema(tmp_path):
+    db_path = tmp_path / "supplementary.sqlite"
+    init_storage(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE supplementary_world_bank_country_features")
+        conn.execute(
+            """
+            CREATE TABLE supplementary_world_bank_country_features (
+                economy_code TEXT NOT NULL,
+                effective_at TEXT NOT NULL,
+                feature_year INTEGER NOT NULL,
+                population_level REAL,
+                population_growth REAL,
+                gdp_pcap_level REAL,
+                gdp_pcap_growth REAL,
+                economic_output_gdp_level REAL,
+                economic_output_gdp_growth REAL,
+                foreign_direct_investment_level REAL,
+                foreign_direct_investment_growth REAL,
+                share_trade_volume_level REAL,
+                share_trade_volume_growth REAL,
+                observed_at TEXT NOT NULL,
+                PRIMARY KEY (economy_code, feature_year)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO supplementary_world_bank_country_features (
+                economy_code,
+                effective_at,
+                feature_year,
+                population_level,
+                population_growth,
+                gdp_pcap_level,
+                gdp_pcap_growth,
+                economic_output_gdp_level,
+                economic_output_gdp_growth,
+                foreign_direct_investment_level,
+                foreign_direct_investment_growth,
+                share_trade_volume_level,
+                share_trade_volume_growth,
+                observed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "USA",
+                "2025-12-31",
+                2025,
+                100.0,
+                10.0,
+                10.0,
+                1.0,
+                0.7,
+                0.1,
+                1.0,
+                0.1,
+                0.5,
+                0.05,
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+
+    result = load_world_bank_country_features(db_path)
+
+    row = result.iloc[0]
+    assert pd.isna(row["population_acceleration"])
+    assert pd.isna(row["gdp_pcap_acceleration"])
+    assert pd.isna(row["economic_output_gdp_acceleration"])
+    assert pd.isna(row["foreign_direct_investment_acceleration"])
+    assert pd.isna(row["share_trade_volume_acceleration"])

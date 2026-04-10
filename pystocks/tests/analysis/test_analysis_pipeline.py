@@ -377,6 +377,140 @@ def test_build_analysis_panel_adds_bloc_level_macro_features():
     assert row["macro_bloc__emerging_markets__population_level"] == 9.0
 
 
+def test_build_analysis_panel_adds_curated_macro_theme_features():
+    snapshot_features = pd.DataFrame(
+        [
+            {
+                "conid": "a",
+                "effective_at": pd.Timestamp("2026-01-31"),
+                "profile__asset_type": "Equity",
+                "profile__total_net_assets_num": 100.0,
+                "country__usa": 0.8,
+                "country__can": 0.2,
+            },
+            {
+                "conid": "b",
+                "effective_at": pd.Timestamp("2026-01-31"),
+                "profile__asset_type": "Equity",
+                "profile__total_net_assets_num": 120.0,
+                "country__usa": 0.3,
+                "country__can": 0.2,
+                "country__chn": 0.5,
+            },
+            {
+                "conid": "c",
+                "effective_at": pd.Timestamp("2026-01-31"),
+                "profile__asset_type": "Equity",
+                "profile__total_net_assets_num": 140.0,
+                "country__can": 0.7,
+                "country__chn": 0.3,
+            },
+        ]
+    )
+    price_result = {
+        "prices": pd.DataFrame(
+            [
+                {
+                    "conid": conid,
+                    "trade_date": pd.Timestamp("2026-01-31"),
+                    "clean_price": 10.0,
+                    "clean_return": 0.01,
+                    "is_clean_price": True,
+                }
+                for conid in ["a", "b", "c"]
+            ]
+        ),
+        "eligibility": pd.DataFrame(
+            [{"conid": conid, "eligible": True} for conid in ["a", "b", "c"]]
+        ),
+    }
+    world_bank_country_features = pd.DataFrame(
+        [
+            {
+                "economy_code": "USA",
+                "effective_at": pd.Timestamp("2025-12-31"),
+                "population_level": 10.0,
+                "population_growth": 1.0,
+                "population_acceleration": 0.1,
+                "gdp_pcap_level": 30.0,
+                "gdp_pcap_growth": 3.0,
+                "gdp_pcap_acceleration": 0.3,
+                "economic_output_gdp_level": 0.7,
+                "economic_output_gdp_growth": 0.1,
+                "economic_output_gdp_acceleration": 0.01,
+                "foreign_direct_investment_level": 0.2,
+                "foreign_direct_investment_growth": 0.02,
+                "foreign_direct_investment_acceleration": 0.002,
+                "share_trade_volume_level": 0.5,
+                "share_trade_volume_growth": 0.05,
+                "share_trade_volume_acceleration": 0.005,
+                "observed_at": pd.Timestamp("2026-01-05"),
+            },
+            {
+                "economy_code": "CAN",
+                "effective_at": pd.Timestamp("2025-12-31"),
+                "population_level": 20.0,
+                "population_growth": 2.0,
+                "population_acceleration": 0.2,
+                "gdp_pcap_level": 40.0,
+                "gdp_pcap_growth": 4.0,
+                "gdp_pcap_acceleration": 0.4,
+                "economic_output_gdp_level": 0.3,
+                "economic_output_gdp_growth": 0.2,
+                "economic_output_gdp_acceleration": 0.02,
+                "foreign_direct_investment_level": 0.1,
+                "foreign_direct_investment_growth": 0.01,
+                "foreign_direct_investment_acceleration": 0.001,
+                "share_trade_volume_level": 0.25,
+                "share_trade_volume_growth": 0.03,
+                "share_trade_volume_acceleration": 0.003,
+                "observed_at": pd.Timestamp("2026-01-05"),
+            },
+            {
+                "economy_code": "CHN",
+                "effective_at": pd.Timestamp("2025-12-31"),
+                "population_level": 30.0,
+                "population_growth": 3.0,
+                "population_acceleration": 0.5,
+                "gdp_pcap_level": 15.0,
+                "gdp_pcap_growth": 5.0,
+                "gdp_pcap_acceleration": 0.8,
+                "economic_output_gdp_level": 0.9,
+                "economic_output_gdp_growth": 0.4,
+                "economic_output_gdp_acceleration": 0.05,
+                "foreign_direct_investment_level": 0.4,
+                "foreign_direct_investment_growth": 0.04,
+                "foreign_direct_investment_acceleration": 0.004,
+                "share_trade_volume_level": 0.8,
+                "share_trade_volume_growth": 0.08,
+                "share_trade_volume_acceleration": 0.008,
+                "observed_at": pd.Timestamp("2026-01-05"),
+            },
+        ]
+    )
+
+    panel = build_analysis_panel_data(
+        snapshot_features,
+        price_result,
+        AnalysisConfig(rebalance_freq="M", require_supplementary_data=True),
+        world_bank_country_features=world_bank_country_features,
+    )
+
+    row_a = panel.loc[panel["conid"] == "a"].iloc[0]
+    row_b = panel.loc[panel["conid"] == "b"].iloc[0]
+
+    assert "macro_theme__trade_centrality" in panel.columns
+    assert "macro_theme__external_investment_intensity" in panel.columns
+    assert "macro_bloc_theme__north_america__demographic_scale" in panel.columns
+    assert (
+        row_b["macro_theme__trade_centrality"] > row_a["macro_theme__trade_centrality"]
+    )
+    assert (
+        row_b["macro_theme__external_investment_intensity"]
+        > row_a["macro_theme__external_investment_intensity"]
+    )
+
+
 def test_build_analysis_panel_requires_macro_features_when_enabled():
     with np.testing.assert_raises_regex(RuntimeError, "World Bank"):
         build_analysis_panel_data(
@@ -745,6 +879,68 @@ def test_build_candidate_context_reports_pre_post_compression_counts():
     )
     assert row["compression_removed_count"] >= 1
     assert not bool(row["admitted_for_construction"])
+
+
+def test_build_candidate_context_prefers_macro_themes_over_raw_macro_leaves():
+    panel = pd.DataFrame(
+        [
+            {
+                "conid": f"c{i}",
+                "sleeve": "equity",
+                "rebalance_date": pd.Timestamp("2026-01-31"),
+                "profile__total_net_assets_num": float(100 + i),
+                "macro__population_level": value,
+                "macro__population_growth": value / 10.0,
+                "macro__population_acceleration": value / 100.0,
+                "macro_theme__demographic_scale": value,
+                "macro_theme__demographic_momentum": value / 20.0,
+                "macro_bloc__north_america__population_level": value,
+                "macro_bloc_theme__north_america__demographic_scale": value,
+            }
+            for i, value in enumerate([10.0, 20.0, 30.0, 40.0, 50.0], start=1)
+        ]
+    )
+
+    context = _build_candidate_context(
+        panel,
+        AnalysisConfig(
+            include_macro_features=True,
+            require_supplementary_data=False,
+            min_factor_coverage=0.0,
+        ),
+    )
+
+    registry = context["factor_registry"].set_index("factor_id")
+
+    assert (
+        registry.loc[
+            "equity__macro_derived__macro_theme__demographic_scale",
+            "admission_status",
+        ]
+        == "admitted"
+    )
+    assert (
+        registry.loc[
+            "equity__macro_derived__macro_bloc_theme__north_america__demographic_scale",
+            "admission_status",
+        ]
+        == "admitted"
+    )
+    assert (
+        registry.loc["equity__raw__macro__population_level", "admission_status"]
+        == "rejected"
+    )
+    assert (
+        registry.loc["equity__raw__macro__population_growth", "admission_status"]
+        == "rejected"
+    )
+    assert (
+        registry.loc[
+            "equity__raw__macro_bloc__north_america__population_level",
+            "admission_status",
+        ]
+        == "rejected"
+    )
 
 
 def test_cluster_factor_returns_prefers_composite_representative():

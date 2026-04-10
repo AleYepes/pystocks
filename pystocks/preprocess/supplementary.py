@@ -319,14 +319,19 @@ def preprocess_world_bank_country_features(raw_df, config=None):
                 "feature_year",
                 "population_level",
                 "population_growth",
+                "population_acceleration",
                 "gdp_pcap_level",
                 "gdp_pcap_growth",
+                "gdp_pcap_acceleration",
                 "economic_output_gdp_level",
                 "economic_output_gdp_growth",
+                "economic_output_gdp_acceleration",
                 "foreign_direct_investment_level",
                 "foreign_direct_investment_growth",
+                "foreign_direct_investment_acceleration",
                 "share_trade_volume_level",
                 "share_trade_volume_growth",
+                "share_trade_volume_acceleration",
                 "observed_at",
             ]
         )
@@ -352,14 +357,19 @@ def preprocess_world_bank_country_features(raw_df, config=None):
                 "feature_year",
                 "population_level",
                 "population_growth",
+                "population_acceleration",
                 "gdp_pcap_level",
                 "gdp_pcap_growth",
+                "gdp_pcap_acceleration",
                 "economic_output_gdp_level",
                 "economic_output_gdp_growth",
+                "economic_output_gdp_acceleration",
                 "foreign_direct_investment_level",
                 "foreign_direct_investment_growth",
+                "foreign_direct_investment_acceleration",
                 "share_trade_volume_level",
                 "share_trade_volume_growth",
+                "share_trade_volume_acceleration",
                 "observed_at",
             ]
         )
@@ -452,8 +462,37 @@ def preprocess_world_bank_country_features(raw_df, config=None):
                     if np.isfinite(level_value) and np.isfinite(prev_value)
                     else np.nan
                 )
+                prev_growth_value = (
+                    float(
+                        pd.to_numeric(
+                            frame.loc[economy_code, prev_year], errors="coerce"
+                        )
+                        - pd.to_numeric(
+                            frame.loc[economy_code, prev_year - 1], errors="coerce"
+                        )
+                    )
+                    if prev_year in frame.columns
+                    and (prev_year - 1) in frame.columns
+                    and np.isfinite(
+                        pd.to_numeric(
+                            frame.loc[economy_code, prev_year], errors="coerce"
+                        )
+                    )
+                    and np.isfinite(
+                        pd.to_numeric(
+                            frame.loc[economy_code, prev_year - 1], errors="coerce"
+                        )
+                    )
+                    else np.nan
+                )
+                acceleration_value = (
+                    float(growth_value - prev_growth_value)
+                    if np.isfinite(growth_value) and np.isfinite(prev_growth_value)
+                    else np.nan
+                )
                 row[f"{feature_name}_level"] = level_value
                 row[f"{feature_name}_growth"] = growth_value
+                row[f"{feature_name}_acceleration"] = acceleration_value
             rows.append(row)
     return (
         pd.DataFrame(rows)

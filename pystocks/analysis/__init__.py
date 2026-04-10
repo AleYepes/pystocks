@@ -90,15 +90,45 @@ SUPERSECTOR_MAP = {
 MACRO_FEATURE_COLUMNS = [
     "population_level",
     "population_growth",
+    "population_acceleration",
     "gdp_pcap_level",
     "gdp_pcap_growth",
+    "gdp_pcap_acceleration",
     "economic_output_gdp_level",
     "economic_output_gdp_growth",
+    "economic_output_gdp_acceleration",
     "foreign_direct_investment_level",
     "foreign_direct_investment_growth",
+    "foreign_direct_investment_acceleration",
     "share_trade_volume_level",
     "share_trade_volume_growth",
+    "share_trade_volume_acceleration",
 ]
+
+MACRO_THEME_COMPONENTS = {
+    "demographic_scale": ["population_level"],
+    "demographic_momentum": ["population_growth", "population_acceleration"],
+    "development": [
+        "gdp_pcap_level",
+        "gdp_pcap_growth",
+        "gdp_pcap_acceleration",
+    ],
+    "external_investment_intensity": [
+        "foreign_direct_investment_level",
+        "foreign_direct_investment_growth",
+        "foreign_direct_investment_acceleration",
+    ],
+    "global_output_share": [
+        "economic_output_gdp_level",
+        "economic_output_gdp_growth",
+        "economic_output_gdp_acceleration",
+    ],
+    "trade_centrality": [
+        "share_trade_volume_level",
+        "share_trade_volume_growth",
+        "share_trade_volume_acceleration",
+    ],
+}
 
 COMPOSITE_SOURCE_COLUMNS = {
     "composite__value": [
@@ -421,6 +451,41 @@ def _kind_priority(kind):
     }.get(str(kind), 3)
 
 
+def _is_macro_column(column):
+    return str(column).startswith(
+        (
+            "macro__",
+            "macro_bloc__",
+            "macro_theme__",
+            "macro_bloc_theme__",
+        )
+    )
+
+
+def _macro_theme_name_for_feature(macro_feature):
+    normalized = str(macro_feature).strip()
+    if normalized.startswith("population_"):
+        if normalized.endswith("_level"):
+            return "demographic_scale"
+        return "demographic_momentum"
+    if normalized.startswith("gdp_pcap_"):
+        return "development"
+    if normalized.startswith("economic_output_gdp_"):
+        return "global_output_share"
+    if normalized.startswith("share_trade_volume_"):
+        return "trade_centrality"
+    if normalized.startswith("foreign_direct_investment_"):
+        return "external_investment_intensity"
+    return None
+
+
+def _macro_theme_source_columns(theme_name, bloc=None):
+    components = MACRO_THEME_COMPONENTS.get(str(theme_name), [])
+    if bloc:
+        return [f"macro_bloc__{bloc}__{component}" for component in components]
+    return [f"macro__{component}" for component in components]
+
+
 @cache
 def _resolve_country_currency(country_code):
     if country_code is None:
@@ -580,10 +645,23 @@ def _source_columns_for_feature(column, panel_slice):
     if column.startswith("macro_bloc__"):
         _, bloc, macro_column = column.split("__", 2)
         return _macro_bloc_source_columns(panel_slice, bloc, macro_column)
+    if column.startswith("macro_bloc_theme__"):
+        _, bloc, theme_name = column.split("__", 2)
+        return [
+            source
+            for source in _macro_theme_source_columns(theme_name, bloc=bloc)
+            if source in panel_slice.columns
+        ]
     if column.startswith("macro__"):
         return [
             f"country_weights::{column.replace('macro__', '')}",
             f"world_bank::{column.replace('macro__', '')}",
+        ]
+    if column.startswith("macro_theme__"):
+        return [
+            source
+            for source in _macro_theme_source_columns(column.split("__", 1)[1])
+            if source in panel_slice.columns
         ]
     return [column]
 
@@ -605,17 +683,14 @@ def _semantic_group_for_column(column, panel_slice=None):
         return f"country_bloc__{column.split('__', 1)[1]}"
     if column.startswith("currency_bloc__"):
         return f"currency_bloc__{column.split('__', 1)[1]}"
+    if column.startswith("macro_bloc_theme__"):
+        _, bloc, theme_name = column.split("__", 2)
+        return f"macro_bloc_theme__{bloc}__{theme_name}"
     if column.startswith("macro_bloc__"):
         _, bloc, suffix = column.split("__", 2)
-        if suffix.endswith("_level"):
-            return f"macro_bloc_theme__{bloc}__{suffix[: -len('_level')]}__level"
-        if suffix.endswith("_growth"):
-            return f"macro_bloc_theme__{bloc}__{suffix[: -len('_growth')]}__growth"
-        if suffix.endswith("_acceleration"):
-            return (
-                f"macro_bloc_theme__{bloc}__"
-                f"{suffix[: -len('_acceleration')]}__acceleration"
-            )
+        theme_name = _macro_theme_name_for_feature(suffix)
+        if theme_name:
+            return f"macro_bloc_theme__{bloc}__{theme_name}"
         return f"macro_bloc_theme__{bloc}__{suffix}"
     if column.startswith("industry__"):
         supersector = INDUSTRY_TO_SUPERSECTOR.get(column)
@@ -642,14 +717,13 @@ def _semantic_group_for_column(column, panel_slice=None):
             return f"currency_family__{currency}"
     if column.startswith("continent__"):
         return f"continent_theme__{column.split('__', 1)[1]}"
+    if column.startswith("macro_theme__"):
+        return column
     if column.startswith("macro__"):
         suffix = column.replace("macro__", "", 1)
-        if suffix.endswith("_level"):
-            return f"macro_theme__{suffix[: -len('_level')]}__level"
-        if suffix.endswith("_growth"):
-            return f"macro_theme__{suffix[: -len('_growth')]}__growth"
-        if suffix.endswith("_acceleration"):
-            return f"macro_theme__{suffix[: -len('_acceleration')]}__acceleration"
+        theme_name = _macro_theme_name_for_feature(suffix)
+        if theme_name:
+            return f"macro_theme__{theme_name}"
     return column
 
 
@@ -670,10 +744,14 @@ def _economic_rationale_for_column(column):
         return "Extends V1 geographic compression into deterministic regional and development blocs."
     if column.startswith("currency_bloc__"):
         return "Prefers reserve and bloc-level currency exposures over single-currency leaves."
+    if column.startswith("macro_bloc_theme__"):
+        return "Compresses bloc-level World Bank leaves into curated macro themes."
     if column.startswith("macro_bloc__"):
         return "Groups World Bank macro exposures into deterministic geographic blocs."
+    if column.startswith("macro_theme__"):
+        return "Compresses World Bank leaves into curated macro themes inspired by legacy research."
     if column.startswith("macro__"):
-        return "Country weights collapsed into World Bank macro themes."
+        return "Country weights collapsed into stored World Bank macro leaves."
     if column.startswith("benchmark__"):
         return "Baseline benchmark factor retained explicitly."
     return "Leaf-level exposure retained for candidate evaluation."
@@ -990,6 +1068,65 @@ def _add_macro_features(panel, world_bank_country_features):
     return pd.concat(enriched_parts, ignore_index=True)
 
 
+def _cross_sectional_zscore(values):
+    numeric = pd.to_numeric(values, errors="coerce")
+    if numeric.notna().sum() == 0:
+        return pd.Series(np.nan, index=values.index, dtype=float)
+    std = float(numeric.std(skipna=True, ddof=0))
+    if not np.isfinite(std) or std <= 0.0:
+        return pd.Series(0.0, index=values.index, dtype=float)
+    mean = float(numeric.mean(skipna=True))
+    return (numeric - mean) / std
+
+
+def _add_macro_theme_features(panel):
+    if panel.empty:
+        return panel.copy()
+    if not any(column.startswith("macro__") for column in panel.columns):
+        return panel.copy()
+
+    enriched_parts = []
+    for _, panel_slice in panel.groupby("rebalance_date", sort=True):
+        work = panel_slice.copy()
+        for theme_name, components in MACRO_THEME_COMPONENTS.items():
+            global_sources = [
+                f"macro__{component}"
+                for component in components
+                if f"macro__{component}" in work.columns
+            ]
+            if global_sources:
+                standardized = pd.DataFrame(
+                    {
+                        column: _cross_sectional_zscore(work[column])
+                        for column in global_sources
+                    }
+                )
+                work[f"macro_theme__{theme_name}"] = standardized.mean(
+                    axis=1, skipna=True
+                )
+
+            for bloc in sorted(COUNTRY_BLOC_MAP):
+                bloc_sources = [
+                    f"macro_bloc__{bloc}__{component}"
+                    for component in components
+                    if f"macro_bloc__{bloc}__{component}" in work.columns
+                ]
+                if not bloc_sources:
+                    continue
+                standardized = pd.DataFrame(
+                    {
+                        column: _cross_sectional_zscore(work[column])
+                        for column in bloc_sources
+                    }
+                )
+                work[f"macro_bloc_theme__{bloc}__{theme_name}"] = standardized.mean(
+                    axis=1, skipna=True
+                )
+        enriched_parts.append(work)
+
+    return pd.concat(enriched_parts, ignore_index=True)
+
+
 def _add_composite_features(panel):
     df = panel.copy()
     df["composite__value"] = -_mean_if_present(
@@ -1157,6 +1294,7 @@ def build_analysis_panel_data(
     panel = _add_currency_bloc_features(panel)
     if config.include_macro_features:
         panel = _add_macro_features(panel, world_bank_country_features)
+        panel = _add_macro_theme_features(panel)
     return panel.sort_values(["rebalance_date", "conid"]).reset_index(drop=True)
 
 
@@ -1268,6 +1406,8 @@ def _factor_kind(column):
         return "benchmark"
     if column.startswith("composite__"):
         return "composite"
+    if column.startswith("macro_theme__") or column.startswith("macro_bloc_theme__"):
+        return "macro_derived"
     if (
         column.startswith("supersector__")
         or column.startswith("continent__")
@@ -1275,8 +1415,6 @@ def _factor_kind(column):
         or column.startswith("currency_bloc__")
     ):
         return "grouped"
-    if column.startswith("macro__") or column.startswith("macro_bloc__"):
-        return "macro_derived"
     return "raw"
 
 
@@ -1560,7 +1698,7 @@ def _build_candidate_context(panel, config):
                     expected_direction, "prefer_higher"
                 ),
                 "is_benchmark": False,
-                "is_macro": bool(column.startswith("macro__")),
+                "is_macro": bool(_is_macro_column(column)),
                 "is_composite": bool(column.startswith("composite__")),
                 "admission_status": admission_status,
                 "rejection_reason": rejection_reason,
@@ -1974,7 +2112,7 @@ def build_factor_returns(
                         _factor_direction(column), "prefer_higher"
                     ),
                     "is_benchmark": False,
-                    "is_macro": bool(column.startswith("macro__")),
+                    "is_macro": bool(_is_macro_column(column)),
                     "is_composite": bool(column.startswith("composite__")),
                     "admission_status": "constructed",
                     "rejection_reason": "",

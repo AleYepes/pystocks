@@ -115,23 +115,31 @@ def load_risk_free_daily(
 def load_world_bank_country_features(
     sqlite_path=SQLITE_DB_PATH, *, tx: StorageTransaction | None = None
 ) -> pd.DataFrame:
+    columns = [
+        "economy_code",
+        "effective_at",
+        "feature_year",
+        "population_level",
+        "population_growth",
+        "population_acceleration",
+        "gdp_pcap_level",
+        "gdp_pcap_growth",
+        "gdp_pcap_acceleration",
+        "economic_output_gdp_level",
+        "economic_output_gdp_growth",
+        "economic_output_gdp_acceleration",
+        "foreign_direct_investment_level",
+        "foreign_direct_investment_growth",
+        "foreign_direct_investment_acceleration",
+        "share_trade_volume_level",
+        "share_trade_volume_growth",
+        "share_trade_volume_acceleration",
+        "observed_at",
+    ]
     df = query_frame(
         """
         SELECT
-            economy_code,
-            effective_at,
-            feature_year,
-            population_level,
-            population_growth,
-            gdp_pcap_level,
-            gdp_pcap_growth,
-            economic_output_gdp_level,
-            economic_output_gdp_growth,
-            foreign_direct_investment_level,
-            foreign_direct_investment_growth,
-            share_trade_volume_level,
-            share_trade_volume_growth,
-            observed_at
+            *
         FROM supplementary_world_bank_country_features
         ORDER BY economy_code, effective_at
         """,
@@ -139,7 +147,10 @@ def load_world_bank_country_features(
         tx=tx,
     )
     if df.empty:
-        return df
+        return pd.DataFrame(
+            {column: pd.Series(dtype="object") for column in columns}
+        ).reindex(columns=pd.Index(columns))
+    df = df.reindex(columns=columns)
     df["economy_code"] = df["economy_code"].astype(str).str.upper()
     df["effective_at"] = pd.to_datetime(df["effective_at"])
     df["observed_at"] = pd.to_datetime(df["observed_at"])
