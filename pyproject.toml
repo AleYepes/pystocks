@@ -5,7 +5,7 @@ version = "0.1.0"
 [tool.ruff]
 target-version = "py312"
 line-length = 88
-extend-exclude = ["src", "notebooks"]
+extend-exclude = ["pystocks", "src", "notebooks"]
 
 [tool.ruff.lint]
 select = ["F", "E", "W", "I", "UP"]
@@ -18,14 +18,14 @@ indent-style = "space"
 
 [tool.pyright]
 pythonVersion = "3.12"
-include = ["pystocks"]
+include = ["pystocks_next"]
 exclude = [
+    "pystocks",
     "src",
     "notebooks",
     "assets",
     "data",
     "docs",
-    "pystocks/tests",
 ]
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false
