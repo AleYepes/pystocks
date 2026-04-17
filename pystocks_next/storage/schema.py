@@ -73,6 +73,157 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=2,
+        description="add raw capture batch identity",
+        statements=(
+            """
+            ALTER TABLE raw_payload_observations
+            ADD COLUMN capture_batch_id TEXT
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_raw_payload_observations_batch
+            ON raw_payload_observations(capture_batch_id, endpoint, observed_at)
+            """,
+        ),
+    ),
+    Migration(
+        version=3,
+        description="add canonical price and dividend series tables",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS price_chart_series (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                payload_hash TEXT NOT NULL REFERENCES raw_payload_blobs(payload_hash),
+                capture_batch_id TEXT,
+                price REAL,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                debug_mismatch INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (conid, effective_at)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS dividends_events_series (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                event_signature TEXT NOT NULL,
+                effective_at TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                payload_hash TEXT NOT NULL REFERENCES raw_payload_blobs(payload_hash),
+                capture_batch_id TEXT,
+                amount REAL,
+                currency TEXT,
+                description TEXT,
+                event_type TEXT,
+                declaration_date TEXT,
+                record_date TEXT,
+                payment_date TEXT,
+                event_date TEXT,
+                PRIMARY KEY (conid, event_signature)
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_price_chart_series_effective_at
+            ON price_chart_series(effective_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_dividends_events_series_effective_at
+            ON dividends_events_series(effective_at, conid)
+            """,
+        ),
+    ),
+    Migration(
+        version=4,
+        description="add supplementary storage foundations",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS supplementary_fetch_log (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dataset TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                record_count INTEGER NOT NULL,
+                min_key TEXT,
+                max_key TEXT,
+                notes TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS supplementary_risk_free_sources (
+                series_id TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                economy_code TEXT,
+                trade_date TEXT NOT NULL,
+                nominal_rate REAL,
+                observed_at TEXT NOT NULL,
+                PRIMARY KEY (series_id, trade_date)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS supplementary_risk_free_daily (
+                trade_date TEXT PRIMARY KEY,
+                nominal_rate REAL,
+                daily_nominal_rate REAL,
+                source_count INTEGER NOT NULL,
+                observed_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS supplementary_world_bank_raw (
+                economy_code TEXT NOT NULL,
+                indicator_id TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                value REAL,
+                observed_at TEXT NOT NULL,
+                PRIMARY KEY (economy_code, indicator_id, year)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS supplementary_world_bank_country_features (
+                economy_code TEXT NOT NULL,
+                effective_at TEXT NOT NULL,
+                feature_year INTEGER NOT NULL,
+                population_level REAL,
+                population_growth REAL,
+                population_acceleration REAL,
+                gdp_pcap_level REAL,
+                gdp_pcap_growth REAL,
+                gdp_pcap_acceleration REAL,
+                economic_output_gdp_level REAL,
+                economic_output_gdp_growth REAL,
+                economic_output_gdp_acceleration REAL,
+                foreign_direct_investment_level REAL,
+                foreign_direct_investment_growth REAL,
+                foreign_direct_investment_acceleration REAL,
+                share_trade_volume_level REAL,
+                share_trade_volume_growth REAL,
+                share_trade_volume_acceleration REAL,
+                observed_at TEXT NOT NULL,
+                PRIMARY KEY (economy_code, feature_year)
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_supplementary_fetch_log_dataset
+            ON supplementary_fetch_log(dataset, observed_at)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_supplementary_risk_free_sources_trade_date
+            ON supplementary_risk_free_sources(trade_date, series_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_supplementary_world_bank_raw_year
+            ON supplementary_world_bank_raw(year, economy_code)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_supplementary_world_bank_country_features_effective_at
+            ON supplementary_world_bank_country_features(effective_at, economy_code)
+            """,
+        ),
+    ),
 )
 
 

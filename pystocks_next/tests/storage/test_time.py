@@ -39,6 +39,17 @@ def test_series_endpoint_uses_row_date() -> None:
     assert resolution.source == "row_date"
 
 
+def test_time_resolution_accepts_legacy_date_shapes() -> None:
+    resolution = resolve_effective_at(
+        "holdings_snapshot",
+        observed_at=datetime(2026, 1, 3, 9, 0, tzinfo=UTC),
+        source_as_of_date={"y": 2025, "m": "DEC", "d": 31},
+    )
+
+    assert resolution.effective_at == date(2025, 12, 31)
+    assert resolution.source == "source_as_of_date"
+
+
 def test_missing_required_source_date_raises() -> None:
     with pytest.raises(
         UnresolvedEffectiveAtError, match="source_as_of_date is required"

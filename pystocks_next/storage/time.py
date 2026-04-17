@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from typing import Literal
+
+from .dates import DateLike, parse_date_candidate
 
 DateSource = Literal["source_as_of_date", "observed_at", "row_date"]
 EndpointKind = Literal["snapshot", "series"]
@@ -107,22 +109,16 @@ ENDPOINT_TIME_POLICIES: dict[str, EndpointTimePolicy] = {
 }
 
 
-def _coerce_date(value: date | datetime | str | None) -> date | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    return date.fromisoformat(value)
+def _coerce_date(value: DateLike) -> date | None:
+    return parse_date_candidate(value)
 
 
 def resolve_effective_at(
     endpoint: str,
     *,
-    observed_at: date | datetime | str | None,
-    source_as_of_date: date | datetime | str | None = None,
-    row_date: date | datetime | str | None = None,
+    observed_at: DateLike,
+    source_as_of_date: DateLike = None,
+    row_date: DateLike = None,
 ) -> EffectiveAtResolution:
     try:
         policy = ENDPOINT_TIME_POLICIES[endpoint]
