@@ -22,7 +22,7 @@ prospects/
 *data.*
 bin/
 include/
-old/
+src/old/
 .vscode/
 
 # Compiled source code
