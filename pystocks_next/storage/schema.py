@@ -224,6 +224,85 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=5,
+        description="add first snapshot storage tables",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS profile_and_fees_snapshots (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                payload_hash TEXT NOT NULL REFERENCES raw_payload_blobs(payload_hash),
+                capture_batch_id TEXT,
+                PRIMARY KEY (conid, effective_at)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS profile_and_fees (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                asset_type TEXT,
+                classification TEXT,
+                distribution_details TEXT,
+                domicile TEXT,
+                fiscal_date TEXT,
+                fund_category TEXT,
+                fund_management_company TEXT,
+                fund_manager_benchmark TEXT,
+                fund_market_cap_focus TEXT,
+                geographical_focus TEXT,
+                inception_date TEXT,
+                management_approach TEXT,
+                management_expenses REAL,
+                manager_tenure TEXT,
+                maturity_date TEXT,
+                objective_type TEXT,
+                portfolio_manager TEXT,
+                redemption_charge_actual REAL,
+                redemption_charge_max REAL,
+                scheme TEXT,
+                total_expense_ratio REAL,
+                total_net_assets_value TEXT,
+                total_net_assets_date TEXT,
+                objective TEXT,
+                jap_fund_warning INTEGER,
+                theme_name TEXT,
+                PRIMARY KEY (conid, effective_at)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS holdings_snapshots (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                payload_hash TEXT NOT NULL REFERENCES raw_payload_blobs(payload_hash),
+                capture_batch_id TEXT,
+                as_of_date TEXT,
+                PRIMARY KEY (conid, effective_at)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS holdings_asset_type (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                equity REAL,
+                cash REAL,
+                fixed_income REAL,
+                other REAL,
+                PRIMARY KEY (conid, effective_at)
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_profile_and_fees_snapshots_observed_at
+            ON profile_and_fees_snapshots(observed_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_observed_at
+            ON holdings_snapshots(observed_at, conid)
+            """,
+        ),
+    ),
 )
 
 

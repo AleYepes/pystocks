@@ -9,8 +9,10 @@ from pystocks_next.storage.sqlite import connect_sqlite, initialize_operational_
 from pystocks_next.tests.support import (
     build_sample_dividend_events_frame,
     build_sample_dividends_payload,
+    build_sample_holdings_payload,
     build_sample_price_chart_payload,
     build_sample_price_history_frame,
+    build_sample_profile_and_fees_payload,
     build_sample_raw_payload,
     build_sample_risk_free_daily_frame,
     build_sample_risk_free_sources_frame,
@@ -61,6 +63,16 @@ def sample_price_chart_payload() -> dict[str, object]:
 @pytest.fixture
 def sample_dividends_payload() -> dict[str, object]:
     return build_sample_dividends_payload()
+
+
+@pytest.fixture
+def sample_profile_and_fees_payload() -> dict[str, object]:
+    return build_sample_profile_and_fees_payload()
+
+
+@pytest.fixture
+def sample_holdings_payload() -> dict[str, object]:
+    return build_sample_holdings_payload()
 
 
 @pytest.fixture

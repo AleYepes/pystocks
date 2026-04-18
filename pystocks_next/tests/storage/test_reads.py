@@ -17,11 +17,14 @@ from pystocks_next.storage.reads import (
     load_dividend_events,
     load_price_history,
     load_risk_free_daily,
+    load_snapshot_feature_tables,
     load_world_bank_country_features,
 )
 from pystocks_next.storage.writes import (
     write_dividend_events_series,
+    write_holdings_snapshot,
     write_price_chart_series,
+    write_profile_and_fees_snapshot,
     write_supplementary_risk_free_daily,
     write_supplementary_world_bank_country_features,
 )
@@ -241,3 +244,33 @@ def test_load_world_bank_country_features_tolerates_old_schema(temp_store) -> No
     assert pd.isna(row["economic_output_gdp_acceleration"])
     assert pd.isna(row["foreign_direct_investment_acceleration"])
     assert pd.isna(row["share_trade_volume_acceleration"])
+
+
+def test_load_snapshot_feature_tables_reads_supported_snapshot_tables(
+    temp_store,
+    sample_profile_and_fees_payload: dict[str, object],
+    sample_holdings_payload: dict[str, object],
+) -> None:
+    upsert_instruments(
+        temp_store,
+        [UniverseInstrument(conid="100", symbol="AAA", currency="USD")],
+    )
+    write_profile_and_fees_snapshot(
+        temp_store,
+        conid="100",
+        payload=sample_profile_and_fees_payload,
+        observed_at="2026-01-05T10:00:00+00:00",
+    )
+    write_holdings_snapshot(
+        temp_store,
+        conid="100",
+        payload=sample_holdings_payload,
+        observed_at="2026-01-05T10:00:00+00:00",
+    )
+
+    result = load_snapshot_feature_tables(temp_store).tables
+
+    assert result["profile_and_fees"]["conid"].tolist() == ["100"]
+    assert result["profile_and_fees"]["asset_type"].tolist() == ["Equity"]
+    assert result["holdings_asset_type"]["fixed_income"].tolist() == [0.05]
+    assert result["ratios_key_ratios"].empty

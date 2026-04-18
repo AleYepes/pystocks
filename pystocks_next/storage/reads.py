@@ -538,3 +538,74 @@ def load_world_bank_country_features(
     )
     normalized = frame.reindex(columns=pd.Index(WORLD_BANK_COUNTRY_FEATURE_COLUMNS))
     return WorldBankCountryFeaturesRead.from_frame(normalized)
+
+
+def _load_snapshot_frame_from_db(
+    conn: sqlite3.Connection,
+    query: str,
+    *,
+    name: str,
+) -> pd.DataFrame:
+    try:
+        frame = _query_frame(conn, query)
+    except (sqlite3.OperationalError, sqlite3.DatabaseError):
+        return _empty_frame(SNAPSHOT_TABLE_COLUMNS[name])
+    return _normalize_snapshot_table(name, frame)
+
+
+def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTablesRead:
+    tables: dict[str, pd.DataFrame] = {
+        "profile_and_fees": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                asset_type,
+                classification,
+                distribution_details,
+                domicile,
+                fiscal_date,
+                fund_category,
+                fund_management_company,
+                fund_manager_benchmark,
+                fund_market_cap_focus,
+                geographical_focus,
+                inception_date,
+                management_approach,
+                management_expenses,
+                manager_tenure,
+                maturity_date,
+                objective_type,
+                portfolio_manager,
+                redemption_charge_actual,
+                redemption_charge_max,
+                scheme,
+                total_expense_ratio,
+                total_net_assets_value,
+                total_net_assets_date,
+                objective,
+                jap_fund_warning,
+                theme_name
+            FROM profile_and_fees
+            ORDER BY conid, effective_at
+            """,
+            name="profile_and_fees",
+        ),
+        "holdings_asset_type": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                equity,
+                cash,
+                fixed_income,
+                other
+            FROM holdings_asset_type
+            ORDER BY conid, effective_at
+            """,
+            name="holdings_asset_type",
+        ),
+    }
+    return SnapshotFeatureTablesRead.from_tables(tables)

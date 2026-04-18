@@ -199,6 +199,47 @@ def build_sample_dividends_payload() -> dict[str, object]:
     }
 
 
+def build_sample_profile_and_fees_payload() -> dict[str, object]:
+    return {
+        "objective": "Broad equity exposure",
+        "jap_fund_warning": False,
+        "themes": [{"theme_name": "Core"}],
+        "fund_and_profile": [
+            {"name": "Asset Type", "value": "Equity"},
+            {"name": "Classification", "value": "ETF"},
+            {"name": "Distribution Details", "value": "Distributing"},
+            {"name": "Domicile", "value": "US"},
+            {"name": "Fund Category", "value": "Large Blend"},
+            {"name": "Fund Management Company", "value": "Alpha"},
+            {"name": "Fund Manager Benchmark", "value": "SP500"},
+            {"name": "Fund Market Cap Focus", "value": "Large"},
+            {"name": "Geographical Focus", "value": "US"},
+            {"name": "Inception Date", "value": "2020-01-01"},
+            {"name": "Management Approach", "value": "Passive"},
+            {"name": "Management Expenses", "value": "0.12%"},
+            {"name": "Manager Tenure", "value": "2021-01-01"},
+            {"name": "Objective Type", "value": "Growth"},
+            {"name": "Portfolio Manager", "value": "Jane Doe"},
+            {"name": "Redemption Charge Actual", "value": "0%"},
+            {"name": "Redemption Charge Max", "value": "0%"},
+            {"name": "Scheme", "value": "Open End"},
+            {"name": "Total Expense Ratio", "value": "0.15%"},
+            {"name": "Total Net Assets (Month End)", "value": "$1.2B (2026-01-02)"},
+        ],
+    }
+
+
+def build_sample_holdings_payload() -> dict[str, object]:
+    return {
+        "as_of_date": "2026-01-03",
+        "allocation_self": [
+            {"name": "Equity", "weight": "85%"},
+            {"name": "Cash", "assets_pct": "10%"},
+            {"name": "Fixed Income", "formatted_weight": "5%"},
+        ],
+    }
+
+
 def build_sample_risk_free_sources_frame() -> pd.DataFrame:
     return pd.DataFrame(
         [
