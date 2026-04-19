@@ -87,32 +87,11 @@ def build_sample_snapshot_tables() -> dict[str, pd.DataFrame]:
             {
                 "conid": "200",
                 "effective_at": "2026-01-03",
-                "asset_type": "Equity",
-                "classification": "ETF",
-                "distribution_details": "Distributing",
-                "domicile": "US",
-                "fiscal_date": "2025-12-31",
-                "fund_category": "Large Blend",
-                "fund_management_company": "Alpha",
-                "fund_manager_benchmark": "SP500",
-                "fund_market_cap_focus": "Large",
-                "geographical_focus": "US",
-                "inception_date": "2020-01-01",
-                "management_approach": "Passive",
-                "management_expenses": "0.12",
-                "manager_tenure": "5",
-                "maturity_date": None,
-                "objective_type": "Growth",
-                "portfolio_manager": "Jane Doe",
-                "redemption_charge_actual": "0",
-                "redemption_charge_max": "0",
-                "scheme": "Open End",
-                "total_expense_ratio": "0.15",
-                "total_net_assets_value": "1.2B",
-                "total_net_assets_date": "2026-01-02",
-                "objective": "Broad equity exposure",
-                "jap_fund_warning": None,
-                "theme_name": "Core",
+                "field_id": "asset_type",
+                "value_text": "Equity",
+                "value_num": None,
+                "value_date": None,
+                "value_bool": None,
             }
         ]
     )
@@ -121,10 +100,85 @@ def build_sample_snapshot_tables() -> dict[str, pd.DataFrame]:
             {
                 "conid": "200",
                 "effective_at": "2026-01-03",
-                "equity": "0.85",
-                "cash": "0.10",
-                "fixed_income": "0.05",
-                "other": "0.0",
+                "bucket_id": "equity",
+                "value_num": "0.85",
+            }
+        ]
+    )
+    tables["holdings_debtor_quality"] = pd.DataFrame(
+        [
+            {
+                "conid": "200",
+                "effective_at": "2026-01-03",
+                "bucket_id": "quality_aa",
+                "value_num": "0.15",
+            }
+        ]
+    )
+    tables["holdings_maturity"] = pd.DataFrame(
+        [
+            {
+                "conid": "200",
+                "effective_at": "2026-01-03",
+                "bucket_id": "maturity_1_to_3_years",
+                "value_num": "0.125",
+            }
+        ]
+    )
+    tables["holdings_industry"] = pd.DataFrame(
+        [
+            {
+                "conid": "200",
+                "effective_at": "2026-01-03",
+                "industry": "Technology",
+                "value_num": "0.44",
+            }
+        ]
+    )
+    tables["ratios_key_ratios"] = pd.DataFrame(
+        [
+            {
+                "conid": "200",
+                "effective_at": "2026-01-03",
+                "metric_id": "price_sales",
+                "value_num": "3.63",
+                "vs_num": "0.0146",
+            }
+        ]
+    )
+    tables["dividends_industry_metrics"] = pd.DataFrame(
+        [
+            {
+                "conid": "200",
+                "effective_at": "2026-01-03",
+                "metric_id": "dividend_yield",
+                "value_num": "0.0122",
+                "currency": "USD",
+            }
+        ]
+    )
+    tables["morningstar_summary"] = pd.DataFrame(
+        [
+            {
+                "conid": "200",
+                "effective_at": "2026-01-03",
+                "metric_id": "medalist_rating",
+                "value_text": "Silver",
+                "value_num": None,
+            }
+        ]
+    )
+    tables["lipper_ratings"] = pd.DataFrame(
+        [
+            {
+                "conid": "200",
+                "effective_at": "2026-01-03",
+                "period": "overall",
+                "metric_id": "total_return",
+                "value_num": "5",
+                "rating_label": "236 funds",
+                "universe_name": "Sweden",
+                "universe_as_of_date": "2026-01-30",
             }
         ]
     )
@@ -236,6 +290,148 @@ def build_sample_holdings_payload() -> dict[str, object]:
             {"name": "Equity", "weight": "85%"},
             {"name": "Cash", "assets_pct": "10%"},
             {"name": "Fixed Income", "formatted_weight": "5%"},
+        ],
+        "industry": [
+            {"name": "Technology", "weight": 44.8681},
+        ],
+        "currency": [
+            {"name": "US Dollar", "weight": 99.9604, "code": "USD"},
+        ],
+        "investor_country": [
+            {"name": "United States", "weight": 97.3418, "country_code": "US"},
+        ],
+        "debt_type": [
+            {"name": "Sovereign Bond", "weight": "20%"},
+        ],
+        "debtor": [
+            {"name": "% Quality/AA", "weight": "15%"},
+            {"name": "% Quality/BBB", "weight": "8%"},
+            {"name": "% Quality Not Rated", "weight": "2%"},
+        ],
+        "maturity": [
+            {"name": "% Maturity 1 to 3 Years", "weight": "12.5%"},
+            {"name": "% Maturity Less than 1 Year", "weight": "5.4%"},
+        ],
+        "geographic": {
+            "us": "97.34%",
+            "eu": "1.89%",
+        },
+        "top_10": [
+            {"name": "NVIDIA CORPORATION", "assets_pct": "7.83%"},
+        ],
+    }
+
+
+def build_sample_ratios_payload() -> dict[str, object]:
+    return {
+        "as_of_date": "2026-01-03",
+        "ratios": [
+            {
+                "name": "Price/Sales",
+                "name_tag": "price_sales",
+                "value": 3.63,
+                "vs": 0.0146,
+            }
+        ],
+        "financials": [
+            {
+                "name": "Sales Growth 1 Year",
+                "name_tag": "sales_growth_1_year",
+                "value": 5.04,
+                "vs": -0.15,
+            }
+        ],
+        "fixed_income": [
+            {
+                "name": "Current Yield",
+                "name_tag": "current_yield",
+                "value": "3.17%",
+                "vs": "0.05%",
+            }
+        ],
+        "dividend": [
+            {
+                "name": "Dividend Yield",
+                "name_tag": "dividend_yield",
+                "value": 2.35,
+                "vs": -0.08,
+            }
+        ],
+        "zscore": [
+            {
+                "name": "1 Month",
+                "name_tag": "1_month",
+                "value": -0.04,
+            }
+        ],
+    }
+
+
+def build_sample_dividends_snapshot_payload() -> dict[str, object]:
+    return {
+        "as_of_date": "2026-01-03",
+        "industry_average": {
+            "dividend_yield": "1.22%",
+            "annual_dividend": "25.65",
+        },
+        "industry_comparison": {
+            "content": [
+                {
+                    "search_id": "div_yield",
+                    "value": 0.0085,
+                },
+                {
+                    "search_id": "div_per_share",
+                    "value": 5.585599,
+                },
+            ]
+        },
+        "last_payed_dividend_currency": "USD",
+    }
+
+
+def build_sample_morningstar_payload() -> dict[str, object]:
+    return {
+        "as_of_date": "20260131",
+        "q_full_report_id": "report_123",
+        "summary": [
+            {"id": "medalist_rating", "value": "Silver"},
+            {"id": "process", "value": "High"},
+            {"id": "people", "value": "Above_Average"},
+            {"id": "parent", "value": "Above_Average"},
+            {"id": "morningstar_rating", "value": "4"},
+            {"id": "sustainability_rating", "value": "Average"},
+            {"id": "category", "value": "Large Blend"},
+            {
+                "id": "category_index",
+                "value": "Morningstar US Large-Mid TR USD",
+            },
+        ],
+    }
+
+
+def build_sample_lipper_payload() -> dict[str, object]:
+    return {
+        "as_of_date": "2026-01-03",
+        "universes": [
+            {
+                "name": "Sweden",
+                "as_of_date": 1769749200000,
+                "overall": [
+                    {
+                        "name": "Total Return",
+                        "name_tag": "total_return",
+                        "rating": {"name": "236 funds", "value": 5},
+                    }
+                ],
+                "3_year": [
+                    {
+                        "name": "Total Return",
+                        "name_tag": "total_return",
+                        "rating": {"name": "236 funds", "value": 4},
+                    }
+                ],
+            }
         ],
     }
 

@@ -22,9 +22,13 @@ from pystocks_next.storage.reads import (
 )
 from pystocks_next.storage.writes import (
     write_dividend_events_series,
+    write_dividends_snapshot,
     write_holdings_snapshot,
+    write_lipper_ratings_snapshot,
+    write_morningstar_snapshot,
     write_price_chart_series,
     write_profile_and_fees_snapshot,
+    write_ratios_snapshot,
     write_supplementary_risk_free_daily,
     write_supplementary_world_bank_country_features,
 )
@@ -66,7 +70,8 @@ def test_snapshot_feature_tables_read_normalizes_known_tables(
     assert pd.api.types.is_datetime64_any_dtype(
         result["profile_and_fees"]["effective_at"]
     )
-    assert pd.api.types.is_float_dtype(result["holdings_asset_type"]["fixed_income"])
+    assert pd.api.types.is_float_dtype(result["holdings_asset_type"]["value_num"])
+    assert result["profile_and_fees"]["field_id"].tolist() == ["asset_type"]
     assert result["holdings_top10"].empty
 
 
@@ -250,6 +255,10 @@ def test_load_snapshot_feature_tables_reads_supported_snapshot_tables(
     temp_store,
     sample_profile_and_fees_payload: dict[str, object],
     sample_holdings_payload: dict[str, object],
+    sample_ratios_payload: dict[str, object],
+    sample_dividends_snapshot_payload: dict[str, object],
+    sample_morningstar_payload: dict[str, object],
+    sample_lipper_payload: dict[str, object],
 ) -> None:
     upsert_instruments(
         temp_store,
@@ -267,10 +276,102 @@ def test_load_snapshot_feature_tables_reads_supported_snapshot_tables(
         payload=sample_holdings_payload,
         observed_at="2026-01-05T10:00:00+00:00",
     )
+    write_ratios_snapshot(
+        temp_store,
+        conid="100",
+        payload=sample_ratios_payload,
+        observed_at="2026-01-05T10:00:00+00:00",
+    )
+    write_dividends_snapshot(
+        temp_store,
+        conid="100",
+        payload=sample_dividends_snapshot_payload,
+        observed_at="2026-01-05T10:00:00+00:00",
+    )
+    write_morningstar_snapshot(
+        temp_store,
+        conid="100",
+        payload=sample_morningstar_payload,
+        observed_at="2026-01-05T10:00:00+00:00",
+    )
+    write_lipper_ratings_snapshot(
+        temp_store,
+        conid="100",
+        payload=sample_lipper_payload,
+        observed_at="2026-01-05T10:00:00+00:00",
+    )
 
     result = load_snapshot_feature_tables(temp_store).tables
 
-    assert result["profile_and_fees"]["conid"].tolist() == ["100"]
-    assert result["profile_and_fees"]["asset_type"].tolist() == ["Equity"]
-    assert result["holdings_asset_type"]["fixed_income"].tolist() == [0.05]
-    assert result["ratios_key_ratios"].empty
+    assert result["profile_and_fees"]["conid"].nunique() == 1
+    assert result["profile_and_fees"]["conid"].iloc[0] == "100"
+    assert result["profile_and_fees"]["field_id"].tolist() == [
+        "asset_type",
+        "classification",
+        "distribution_details",
+        "domicile",
+        "fund_category",
+        "fund_management_company",
+        "fund_manager_benchmark",
+        "fund_market_cap_focus",
+        "geographical_focus",
+        "inception_date",
+        "jap_fund_warning",
+        "management_approach",
+        "management_expenses",
+        "manager_tenure",
+        "objective",
+        "objective_type",
+        "portfolio_manager",
+        "redemption_charge_actual",
+        "redemption_charge_max",
+        "scheme",
+        "theme_name",
+        "total_expense_ratio",
+        "total_net_assets_date",
+        "total_net_assets_value",
+    ]
+    assert result["holdings_asset_type"]["bucket_id"].tolist() == [
+        "cash",
+        "equity",
+        "fixed_income",
+    ]
+    assert result["holdings_asset_type"]["value_num"].tolist() == [0.10, 0.85, 0.05]
+    assert result["holdings_industry"]["industry"].tolist() == ["Technology"]
+    assert result["holdings_currency"]["code"].tolist() == ["USD"]
+    assert result["holdings_debtor_quality"]["bucket_id"].tolist() == [
+        "quality_aa",
+        "quality_bbb",
+        "quality_not_rated",
+    ]
+    assert result["holdings_maturity"]["bucket_id"].tolist() == [
+        "maturity_1_to_3_years",
+        "maturity_less_than_1_year",
+    ]
+    assert result["holdings_geographic_weights"]["region"].tolist() == ["eu", "us"]
+    assert result["holdings_top10"]["name"].tolist() == ["NVIDIA CORPORATION"]
+    assert result["ratios_key_ratios"]["metric_id"].tolist() == ["price_sales"]
+    assert result["ratios_financials"]["metric_id"].tolist() == ["sales_growth_1_year"]
+    assert result["ratios_fixed_income"]["value_num"].tolist() == [3.17]
+    assert result["ratios_dividend"]["metric_id"].tolist() == ["dividend_yield"]
+    assert result["ratios_zscore"]["metric_id"].tolist() == ["1_month"]
+    assert result["dividends_industry_metrics"]["metric_id"].tolist() == [
+        "annual_dividend",
+        "dividend_ttm",
+        "dividend_yield",
+        "dividend_yield_ttm",
+    ]
+    assert result["morningstar_summary"]["metric_id"].tolist() == [
+        "category",
+        "category_index",
+        "medalist_rating",
+        "morningstar_rating",
+        "parent",
+        "people",
+        "process",
+        "sustainability_rating",
+    ]
+    assert result["lipper_ratings"]["metric_id"].tolist() == [
+        "total_return",
+        "total_return",
+    ]

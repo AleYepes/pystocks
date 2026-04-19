@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,6 +51,49 @@ class SnapshotWriteResult:
     effective_at: str
 
 
+_HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN = {
+    "quality_aaa": "quality_aaa",
+    "quality_aa": "quality_aa",
+    "quality_a": "quality_a",
+    "quality_bbb": "quality_bbb",
+    "quality_bb": "quality_bb",
+    "quality_b": "quality_b",
+    "quality_ccc": "quality_ccc",
+    "quality_cc": "quality_cc",
+    "quality_c": "quality_c",
+    "quality_d": "quality_d",
+    "quality_not_rated": "quality_not_rated",
+    "quality_not_available": "quality_not_available",
+}
+
+_HOLDINGS_MATURITY_SOURCE_TO_COLUMN = {
+    "maturity_less_than_1_year": "maturity_less_than_1_year",
+    "maturity_1_to_3_years": "maturity_1_to_3_years",
+    "maturity_3_to_5_years": "maturity_3_to_5_years",
+    "maturity_5_to_10_years": "maturity_5_to_10_years",
+    "maturity_10_to_20_years": "maturity_10_to_20_years",
+    "maturity_20_to_30_years": "maturity_20_to_30_years",
+    "maturity_greater_than_30_years": "maturity_greater_than_30_years",
+    "maturity_other": "maturity_other",
+    "less_than_1_year": "maturity_less_than_1_year",
+    "1_to_3_years": "maturity_1_to_3_years",
+    "3_to_5_years": "maturity_3_to_5_years",
+    "5_to_10_years": "maturity_5_to_10_years",
+    "10_to_20_years": "maturity_10_to_20_years",
+    "20_to_30_years": "maturity_20_to_30_years",
+    "greater_than_30_years": "maturity_greater_than_30_years",
+    "other": "maturity_other",
+}
+
+_RATIOS_SECTION_TABLES = {
+    "ratios": "ratios_key_ratios",
+    "financials": "ratios_financials",
+    "fixed_income": "ratios_fixed_income",
+    "dividend": "ratios_dividend",
+    "zscore": "ratios_zscore",
+}
+
+
 def _parse_float(value: object) -> float | None:
     if value is None or isinstance(value, bool):
         return None
@@ -62,6 +107,40 @@ def _parse_float(value: object) -> float | None:
         return float(text)
     except ValueError:
         return None
+
+
+_NUM_WITH_SUFFIX_RE = re.compile(r"^\s*([-+]?\d*\.?\d+)\s*([KMBT]?)\s*%?\s*$")
+
+
+def _parse_number(value: object, *, percent_as_fraction: bool = False) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
+
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.lower() in {"na", "n/a", "none", "null", "unknown", "nan", "inf", "-inf"}:
+        return None
+
+    is_percent = "%" in text
+    plain = text.replace(",", "").replace("%", "").strip()
+    try:
+        parsed = float(plain)
+    except ValueError:
+        match = _NUM_WITH_SUFFIX_RE.match(text.replace(",", ""))
+        if match is None:
+            return None
+        parsed = float(match.group(1))
+        suffix = (match.group(2) or "").upper()
+        parsed *= {"": 1.0, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}[suffix]
+    if is_percent and percent_as_fraction:
+        parsed /= 100.0
+    return parsed if math.isfinite(parsed) else None
 
 
 def _parse_int(value: object) -> int | None:
@@ -95,16 +174,12 @@ def _parse_percent_fraction(value: object) -> float | None:
         return None
     if isinstance(value, (int, float)):
         return float(value)
-    text = str(value).strip().replace(",", "")
-    if not text:
+    parsed = _parse_number(value, percent_as_fraction=True)
+    if parsed is None:
         return None
-    is_percent = "%" in text
-    text = text.replace("%", "").strip()
-    try:
-        parsed = float(text)
-    except ValueError:
-        return None
-    return parsed / 100.0 if is_percent else parsed
+    if "%" in str(value):
+        return parsed
+    return parsed
 
 
 def _to_fraction_weight(value: object) -> float | None:
@@ -119,8 +194,8 @@ def _to_fraction_weight(value: object) -> float | None:
     if not text:
         return None
     if "%" in text:
-        return _parse_percent_fraction(text)
-    parsed = _parse_float(text)
+        return _parse_number(text, percent_as_fraction=True)
+    parsed = _parse_number(text)
     if parsed is None:
         return None
     return parsed / 100.0 if abs(parsed) > 1.0 else parsed
@@ -342,6 +417,44 @@ _PROFILE_FIELD_MAP: dict[str, tuple[str, str]] = {
     "Total Net Assets (Month End)": ("total_net_assets_value", "text"),
 }
 
+_PROFILE_DATE_FIELD_IDS = {
+    "inception_date",
+    "manager_tenure",
+    "maturity_date",
+    "total_net_assets_date",
+}
+
+_PROFILE_NUMERIC_FIELD_IDS = {
+    "management_expenses",
+    "redemption_charge_actual",
+    "redemption_charge_max",
+    "total_expense_ratio",
+}
+
+_PROFILE_BOOL_FIELD_IDS = {
+    "jap_fund_warning",
+}
+
+_DIVIDENDS_METRIC_ID_ALIASES = {
+    "div_yield": "dividend_yield_ttm",
+    "dividend_yield_ttm": "dividend_yield_ttm",
+    "dividend_yield": "dividend_yield_ttm",
+    "div_per_share": "dividend_ttm",
+    "dividend_ttm": "dividend_ttm",
+    "annual_dividend": "dividend_ttm",
+}
+
+_MORNINGSTAR_SUMMARY_ID_TO_COLUMN = {
+    "medalist_rating": "medalist_rating",
+    "process": "process",
+    "people": "people",
+    "parent": "parent",
+    "morningstar_rating": "morningstar_rating",
+    "sustainability_rating": "sustainability_rating",
+    "category": "category",
+    "category_index": "category_index",
+}
+
 
 def _extract_profile_and_fees_row(
     conid: str,
@@ -424,6 +537,82 @@ def _extract_profile_and_fees_row(
     return profile_row
 
 
+def _snapshot_factor_row(
+    *,
+    conid: str,
+    effective_at: str,
+    factor_id: str,
+    value_text: str | None = None,
+    value_num: float | int | None = None,
+    value_date: str | None = None,
+    value_bool: int | None = None,
+) -> dict[str, object]:
+    return {
+        "conid": conid,
+        "effective_at": effective_at,
+        "factor_id": factor_id,
+        "value_text": value_text,
+        "value_num": value_num,
+        "value_date": value_date,
+        "value_bool": value_bool,
+    }
+
+
+def _extract_profile_and_fees_factor_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> list[dict[str, object]]:
+    profile_row = _extract_profile_and_fees_row(conid, effective_at, payload)
+    rows: list[dict[str, object]] = []
+    for field_id, value in profile_row.items():
+        if field_id in {"conid", "effective_at"} or value is None:
+            continue
+        if field_id in _PROFILE_DATE_FIELD_IDS:
+            rows.append(
+                _snapshot_factor_row(
+                    conid=conid,
+                    effective_at=effective_at,
+                    factor_id=field_id,
+                    value_date=str(value),
+                )
+            )
+        elif field_id in _PROFILE_NUMERIC_FIELD_IDS:
+            numeric_value = _parse_float(value)
+            if numeric_value is None:
+                continue
+            rows.append(
+                _snapshot_factor_row(
+                    conid=conid,
+                    effective_at=effective_at,
+                    factor_id=field_id,
+                    value_num=numeric_value,
+                )
+            )
+        elif field_id in _PROFILE_BOOL_FIELD_IDS:
+            bool_value = _to_int_bool(value)
+            if bool_value is None:
+                continue
+            rows.append(
+                _snapshot_factor_row(
+                    conid=conid,
+                    effective_at=effective_at,
+                    factor_id=field_id,
+                    value_bool=bool_value,
+                )
+            )
+        else:
+            rows.append(
+                _snapshot_factor_row(
+                    conid=conid,
+                    effective_at=effective_at,
+                    factor_id=field_id,
+                    value_text=str(value),
+                )
+            )
+    return rows
+
+
 _HOLDINGS_ASSET_TYPE_MAP = {
     "equity": "equity",
     "cash": "cash",
@@ -434,6 +623,27 @@ _HOLDINGS_ASSET_TYPE_MAP = {
 
 def _sanitize_segment(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_") or "field"
+
+
+def _pick_first_present(mapping: Mapping[str, object], *keys: str) -> object:
+    for key in keys:
+        if key in mapping and mapping.get(key) is not None:
+            return mapping.get(key)
+    return None
+
+
+def _delete_snapshot_child_rows(
+    conn: sqlite3.Connection,
+    *,
+    tables: tuple[str, ...],
+    conid: str,
+    effective_at: str,
+) -> None:
+    for table_name in tables:
+        conn.execute(
+            f"DELETE FROM {table_name} WHERE conid = ? AND effective_at = ?",
+            (conid, effective_at),
+        )
 
 
 def _extract_holdings_asset_type_row(
@@ -464,8 +674,11 @@ def _extract_holdings_asset_type_row(
             continue
         key = _sanitize_segment(name)
         column = _HOLDINGS_ASSET_TYPE_MAP.get(key, "other")
-        weight_value = (
-            item.get("weight") or item.get("assets_pct") or item.get("formatted_weight")
+        weight_value = _pick_first_present(
+            item,
+            "weight",
+            "assets_pct",
+            "formatted_weight",
         )
         parsed_weight = _to_fraction_weight(weight_value)
         if parsed_weight is None:
@@ -481,6 +694,396 @@ def _extract_holdings_asset_type_row(
             )
         )
     return row
+
+
+def _extract_holdings_bucket_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+    *,
+    section: str,
+    name_column: str,
+    extra_column: str | None = None,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+    values = payload.get(section, [])
+    if not isinstance(values, list):
+        return []
+
+    rows: list[dict[str, object]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("type")
+        if name is None:
+            continue
+        weight_value = _pick_first_present(
+            item, "weight", "assets_pct", "formatted_weight"
+        )
+        row: dict[str, object] = {
+            "conid": conid,
+            "effective_at": effective_at,
+            name_column: str(name),
+            "value_num": _to_fraction_weight(weight_value),
+        }
+        if extra_column is not None:
+            extra_value = item.get(extra_column)
+            row[extra_column] = str(extra_value) if extra_value is not None else None
+        rows.append(row)
+    return rows
+
+
+def _extract_holdings_debtor_quality_row(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> dict[str, object] | None:
+    row: dict[str, object] = {
+        "conid": conid,
+        "effective_at": effective_at,
+        **{
+            column: None
+            for column in _HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN.values()
+        },
+    }
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return None
+
+    values = payload.get("debtor", [])
+    if not isinstance(values, list):
+        return None
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("type")
+        if name is None:
+            continue
+        column = _HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN.get(_sanitize_segment(name))
+        if column is None:
+            continue
+        weight_value = _pick_first_present(
+            item, "weight", "assets_pct", "formatted_weight"
+        )
+        row[column] = _to_fraction_weight(weight_value)
+
+    has_values = any(
+        row[column] is not None
+        for column in _HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN.values()
+    )
+    return row if has_values else None
+
+
+def _extract_holdings_maturity_row(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> dict[str, object] | None:
+    row: dict[str, object] = {
+        "conid": conid,
+        "effective_at": effective_at,
+        **{
+            column: None for column in set(_HOLDINGS_MATURITY_SOURCE_TO_COLUMN.values())
+        },
+    }
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return None
+
+    values = payload.get("maturity", [])
+    if not isinstance(values, list):
+        return None
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("type")
+        if name is None:
+            continue
+        column = _HOLDINGS_MATURITY_SOURCE_TO_COLUMN.get(_sanitize_segment(name))
+        if column is None:
+            continue
+        weight_value = _pick_first_present(
+            item, "weight", "assets_pct", "formatted_weight"
+        )
+        row[column] = _to_fraction_weight(weight_value)
+
+    maturity_columns = tuple(
+        {
+            "maturity_less_than_1_year",
+            "maturity_1_to_3_years",
+            "maturity_3_to_5_years",
+            "maturity_5_to_10_years",
+            "maturity_10_to_20_years",
+            "maturity_20_to_30_years",
+            "maturity_greater_than_30_years",
+            "maturity_other",
+        }
+    )
+    has_values = any(row[column] is not None for column in maturity_columns)
+    return row if has_values else None
+
+
+def _extract_holdings_geographic_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+    geographic = payload.get("geographic")
+    if not isinstance(geographic, dict):
+        return []
+
+    rows: list[dict[str, object]] = []
+    for key, value in geographic.items():
+        if isinstance(value, (dict, list)):
+            continue
+        rows.append(
+            {
+                "conid": conid,
+                "effective_at": effective_at,
+                "region": _sanitize_segment(key),
+                "value_num": _to_fraction_weight(value),
+            }
+        )
+    return rows
+
+
+def _extract_holdings_top10_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+    values = payload.get("top_10", [])
+    if not isinstance(values, list):
+        return []
+
+    rows: list[dict[str, object]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if name is None:
+            continue
+        rows.append(
+            {
+                "conid": conid,
+                "effective_at": effective_at,
+                "name": str(name),
+                "holding_weight_num": _to_fraction_weight(item.get("assets_pct")),
+            }
+        )
+    return rows
+
+
+def _wide_bucket_row_to_factor_rows(
+    row: dict[str, object] | None,
+    *,
+    bucket_keys: tuple[str, ...],
+) -> list[dict[str, object]]:
+    if row is None:
+        return []
+    conid = str(row["conid"])
+    effective_at = str(row["effective_at"])
+    rows: list[dict[str, object]] = []
+    for bucket_id in bucket_keys:
+        value = row.get(bucket_id)
+        if value is None:
+            continue
+        numeric_value = _parse_float(value)
+        if numeric_value is None:
+            continue
+        rows.append(
+            {
+                "conid": conid,
+                "effective_at": effective_at,
+                "bucket_id": bucket_id,
+                "value_num": numeric_value,
+            }
+        )
+    return rows
+
+
+def _extract_ratios_metric_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+    *,
+    section: str,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+    values = payload.get(section, [])
+    if not isinstance(values, list):
+        return []
+
+    rows: list[dict[str, object]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        metric_id = _sanitize_segment(
+            item.get("name_tag") or item.get("id") or item.get("name")
+        )
+        rows.append(
+            {
+                "conid": conid,
+                "effective_at": effective_at,
+                "metric_id": metric_id,
+                "value_num": _parse_number(item.get("value")),
+                "vs_num": _parse_number(item.get("vs")),
+            }
+        )
+    return rows
+
+
+def _extract_dividends_industry_metric_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+
+    industry_average = payload.get("industry_average")
+    industry_average = industry_average if isinstance(industry_average, dict) else {}
+    industry_comparison = payload.get("industry_comparison")
+    industry_comparison = (
+        industry_comparison if isinstance(industry_comparison, dict) else {}
+    )
+    comparison_content = industry_comparison.get("content")
+    comparison_content = (
+        comparison_content if isinstance(comparison_content, list) else []
+    )
+
+    currency = payload.get("last_payed_dividend_currency")
+    metric_values: dict[str, float | None] = {
+        "dividend_yield": _parse_number(
+            industry_average.get("dividend_yield"), percent_as_fraction=True
+        ),
+        "annual_dividend": _parse_number(industry_average.get("annual_dividend")),
+        "dividend_ttm": None,
+        "dividend_yield_ttm": None,
+    }
+    for item in comparison_content:
+        if not isinstance(item, dict):
+            continue
+        metric_id = _sanitize_segment(
+            item.get("search_id") or item.get("name_tag") or item.get("name")
+        )
+        canonical_metric_id = _DIVIDENDS_METRIC_ID_ALIASES.get(metric_id)
+        if canonical_metric_id is None:
+            continue
+        value = item.get("value")
+        metric_values[canonical_metric_id] = _parse_number(
+            value,
+            percent_as_fraction=canonical_metric_id == "dividend_yield_ttm",
+        )
+
+    if metric_values["dividend_ttm"] is None:
+        metric_values["dividend_ttm"] = metric_values["annual_dividend"]
+    if metric_values["dividend_yield_ttm"] is None:
+        metric_values["dividend_yield_ttm"] = metric_values["dividend_yield"]
+
+    rows: list[dict[str, object]] = []
+    for metric_id, value in metric_values.items():
+        if value is None:
+            continue
+        rows.append(
+            {
+                "conid": conid,
+                "effective_at": effective_at,
+                "metric_id": metric_id,
+                "value_num": value,
+                "currency": str(currency) if currency is not None else None,
+            }
+        )
+    return rows
+
+
+def _extract_morningstar_summary_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+    summary = payload.get("summary")
+    if not isinstance(summary, list):
+        return []
+
+    rows: list[dict[str, object]] = []
+    for item in summary:
+        if not isinstance(item, dict):
+            continue
+        metric_id = _sanitize_segment(item.get("id") or item.get("title") or "metric")
+        canonical_metric_id = _MORNINGSTAR_SUMMARY_ID_TO_COLUMN.get(metric_id)
+        if canonical_metric_id is None:
+            continue
+        value = item.get("value")
+        rows.append(
+            {
+                "conid": conid,
+                "effective_at": effective_at,
+                "metric_id": canonical_metric_id,
+                "value_text": None
+                if canonical_metric_id == "morningstar_rating"
+                else (str(value) if value is not None else None),
+                "value_num": _parse_number(value)
+                if canonical_metric_id == "morningstar_rating"
+                else None,
+            }
+        )
+    return rows
+
+
+def _extract_lipper_rating_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+    universes = payload.get("universes")
+    if not isinstance(universes, list):
+        return []
+
+    rows: list[dict[str, object]] = []
+    for universe in universes:
+        if not isinstance(universe, dict):
+            continue
+        universe_name = (
+            str(universe.get("name")) if universe.get("name") is not None else None
+        )
+        universe_as_of_date = to_iso_date(
+            universe.get("as_of_date") or universe.get("asOfDate")
+        )
+        for period_key, period_items in universe.items():
+            if period_key in {"as_of_date", "asOfDate", "name", "title"}:
+                continue
+            if not isinstance(period_items, list):
+                continue
+            period = _sanitize_segment(period_key)
+            for item in period_items:
+                if not isinstance(item, dict):
+                    continue
+                rating = item.get("rating")
+                rating = rating if isinstance(rating, dict) else {}
+                rows.append(
+                    {
+                        "conid": conid,
+                        "effective_at": effective_at,
+                        "period": period,
+                        "metric_id": _sanitize_segment(
+                            item.get("name_tag") or item.get("id") or item.get("name")
+                        ),
+                        "value_num": _parse_number(rating.get("value")),
+                        "rating_label": rating.get("name"),
+                        "universe_name": universe_name,
+                        "universe_as_of_date": universe_as_of_date,
+                    }
+                )
+    return rows
 
 
 def write_price_chart_series(
@@ -658,7 +1261,7 @@ def write_profile_and_fees_snapshot(
         capture_batch_id=batch_id,
     )
 
-    profile_row = _extract_profile_and_fees_row(conid, effective_at, payload)
+    factor_rows = _extract_profile_and_fees_factor_rows(conid, effective_at, payload)
     conn.execute(
         """
         INSERT INTO profile_and_fees_snapshots (
@@ -676,96 +1279,37 @@ def write_profile_and_fees_snapshot(
         (conid, effective_at, observed_at, capture.payload_hash, batch_id),
     )
     conn.execute(
-        """
-        INSERT INTO profile_and_fees (
-            conid,
-            effective_at,
-            asset_type,
-            classification,
-            distribution_details,
-            domicile,
-            fiscal_date,
-            fund_category,
-            fund_management_company,
-            fund_manager_benchmark,
-            fund_market_cap_focus,
-            geographical_focus,
-            inception_date,
-            management_approach,
-            management_expenses,
-            manager_tenure,
-            maturity_date,
-            objective_type,
-            portfolio_manager,
-            redemption_charge_actual,
-            redemption_charge_max,
-            scheme,
-            total_expense_ratio,
-            total_net_assets_value,
-            total_net_assets_date,
-            objective,
-            jap_fund_warning,
-            theme_name
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(conid, effective_at) DO UPDATE SET
-            asset_type = excluded.asset_type,
-            classification = excluded.classification,
-            distribution_details = excluded.distribution_details,
-            domicile = excluded.domicile,
-            fiscal_date = excluded.fiscal_date,
-            fund_category = excluded.fund_category,
-            fund_management_company = excluded.fund_management_company,
-            fund_manager_benchmark = excluded.fund_manager_benchmark,
-            fund_market_cap_focus = excluded.fund_market_cap_focus,
-            geographical_focus = excluded.geographical_focus,
-            inception_date = excluded.inception_date,
-            management_approach = excluded.management_approach,
-            management_expenses = excluded.management_expenses,
-            manager_tenure = excluded.manager_tenure,
-            maturity_date = excluded.maturity_date,
-            objective_type = excluded.objective_type,
-            portfolio_manager = excluded.portfolio_manager,
-            redemption_charge_actual = excluded.redemption_charge_actual,
-            redemption_charge_max = excluded.redemption_charge_max,
-            scheme = excluded.scheme,
-            total_expense_ratio = excluded.total_expense_ratio,
-            total_net_assets_value = excluded.total_net_assets_value,
-            total_net_assets_date = excluded.total_net_assets_date,
-            objective = excluded.objective,
-            jap_fund_warning = excluded.jap_fund_warning,
-            theme_name = excluded.theme_name
-        """,
-        (
-            profile_row["conid"],
-            profile_row["effective_at"],
-            profile_row["asset_type"],
-            profile_row["classification"],
-            profile_row["distribution_details"],
-            profile_row["domicile"],
-            profile_row["fiscal_date"],
-            profile_row["fund_category"],
-            profile_row["fund_management_company"],
-            profile_row["fund_manager_benchmark"],
-            profile_row["fund_market_cap_focus"],
-            profile_row["geographical_focus"],
-            profile_row["inception_date"],
-            profile_row["management_approach"],
-            profile_row["management_expenses"],
-            profile_row["manager_tenure"],
-            profile_row["maturity_date"],
-            profile_row["objective_type"],
-            profile_row["portfolio_manager"],
-            profile_row["redemption_charge_actual"],
-            profile_row["redemption_charge_max"],
-            profile_row["scheme"],
-            profile_row["total_expense_ratio"],
-            profile_row["total_net_assets_value"],
-            profile_row["total_net_assets_date"],
-            profile_row["objective"],
-            profile_row["jap_fund_warning"],
-            profile_row["theme_name"],
-        ),
+        "DELETE FROM profile_and_fees_factors WHERE conid = ? AND effective_at = ?",
+        (conid, effective_at),
     )
+    for row in factor_rows:
+        conn.execute(
+            """
+            INSERT INTO profile_and_fees_factors (
+                conid,
+                effective_at,
+                field_id,
+                value_text,
+                value_num,
+                value_date,
+                value_bool
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(conid, effective_at, field_id) DO UPDATE SET
+                value_text = excluded.value_text,
+                value_num = excluded.value_num,
+                value_date = excluded.value_date,
+                value_bool = excluded.value_bool
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["factor_id"],
+                row["value_text"],
+                row["value_num"],
+                row["value_date"],
+                row["value_bool"],
+            ),
+        )
     return SnapshotWriteResult(
         payload_hash=capture.payload_hash,
         capture_batch_id=batch_id,
@@ -830,31 +1374,593 @@ def write_holdings_snapshot(
             to_iso_date(source_as_of_date),
         ),
     )
+    _delete_snapshot_child_rows(
+        conn,
+        tables=(
+            "holdings_asset_type_factors",
+            "holdings_debtor_quality_factors",
+            "holdings_maturity_factors",
+            "holdings_industry",
+            "holdings_currency",
+            "holdings_investor_country",
+            "holdings_geographic_weights",
+            "holdings_debt_type",
+            "holdings_top10",
+        ),
+        conid=conid,
+        effective_at=effective_at,
+    )
+    for row in _wide_bucket_row_to_factor_rows(
+        holdings_row,
+        bucket_keys=("equity", "cash", "fixed_income", "other"),
+    ):
+        conn.execute(
+            """
+            INSERT INTO holdings_asset_type_factors (
+                conid,
+                effective_at,
+                bucket_id,
+                value_num
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (row["conid"], row["effective_at"], row["bucket_id"], row["value_num"]),
+        )
+    debtor_quality_row = _extract_holdings_debtor_quality_row(
+        conid, effective_at, payload
+    )
+    for row in _wide_bucket_row_to_factor_rows(
+        debtor_quality_row,
+        bucket_keys=(
+            "quality_aaa",
+            "quality_aa",
+            "quality_a",
+            "quality_bbb",
+            "quality_bb",
+            "quality_b",
+            "quality_ccc",
+            "quality_cc",
+            "quality_c",
+            "quality_d",
+            "quality_not_rated",
+            "quality_not_available",
+        ),
+    ):
+        conn.execute(
+            """
+            INSERT INTO holdings_debtor_quality_factors (
+                conid,
+                effective_at,
+                bucket_id,
+                value_num
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["bucket_id"],
+                row["value_num"],
+            ),
+        )
+
+    maturity_row = _extract_holdings_maturity_row(conid, effective_at, payload)
+    for row in _wide_bucket_row_to_factor_rows(
+        maturity_row,
+        bucket_keys=(
+            "maturity_less_than_1_year",
+            "maturity_1_to_3_years",
+            "maturity_3_to_5_years",
+            "maturity_5_to_10_years",
+            "maturity_10_to_20_years",
+            "maturity_20_to_30_years",
+            "maturity_greater_than_30_years",
+            "maturity_other",
+        ),
+    ):
+        conn.execute(
+            """
+            INSERT INTO holdings_maturity_factors (
+                conid,
+                effective_at,
+                bucket_id,
+                value_num
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["bucket_id"],
+                row["value_num"],
+            ),
+        )
+
+    for row in _extract_holdings_bucket_rows(
+        conid,
+        effective_at,
+        payload,
+        section="industry",
+        name_column="industry",
+    ):
+        conn.execute(
+            """
+            INSERT INTO holdings_industry (
+                conid,
+                effective_at,
+                industry,
+                value_num
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (row["conid"], row["effective_at"], row["industry"], row["value_num"]),
+        )
+    for row in _extract_holdings_bucket_rows(
+        conid,
+        effective_at,
+        payload,
+        section="currency",
+        name_column="currency",
+        extra_column="code",
+    ):
+        conn.execute(
+            """
+            INSERT INTO holdings_currency (
+                conid,
+                effective_at,
+                code,
+                currency,
+                value_num
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["code"],
+                row["currency"],
+                row["value_num"],
+            ),
+        )
+    for row in _extract_holdings_bucket_rows(
+        conid,
+        effective_at,
+        payload,
+        section="investor_country",
+        name_column="country",
+        extra_column="country_code",
+    ):
+        conn.execute(
+            """
+            INSERT INTO holdings_investor_country (
+                conid,
+                effective_at,
+                country_code,
+                country,
+                value_num
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["country_code"],
+                row["country"],
+                row["value_num"],
+            ),
+        )
+    for row in _extract_holdings_bucket_rows(
+        conid,
+        effective_at,
+        payload,
+        section="debt_type",
+        name_column="debt_type",
+    ):
+        conn.execute(
+            """
+            INSERT INTO holdings_debt_type (
+                conid,
+                effective_at,
+                debt_type,
+                value_num
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (row["conid"], row["effective_at"], row["debt_type"], row["value_num"]),
+        )
+    for row in _extract_holdings_geographic_rows(conid, effective_at, payload):
+        conn.execute(
+            """
+            INSERT INTO holdings_geographic_weights (
+                conid,
+                effective_at,
+                region,
+                value_num
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (row["conid"], row["effective_at"], row["region"], row["value_num"]),
+        )
+    for row in _extract_holdings_top10_rows(conid, effective_at, payload):
+        conn.execute(
+            """
+            INSERT INTO holdings_top10 (
+                conid,
+                effective_at,
+                name,
+                holding_weight_num
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (row["conid"], row["effective_at"], row["name"], row["holding_weight_num"]),
+        )
+    return SnapshotWriteResult(
+        payload_hash=capture.payload_hash,
+        capture_batch_id=batch_id,
+        raw_observation_inserted=capture.observation_inserted,
+        effective_at=effective_at,
+    )
+
+
+def write_ratios_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    conid: str,
+    payload: JsonValue | bytes,
+    observed_at: str,
+    source_family: str = "ibkr",
+    capture_batch_id: str | None = None,
+) -> SnapshotWriteResult:
+    source_as_of_date = None
+    if not isinstance(payload, bytes) and isinstance(payload, dict):
+        source_as_of_date = payload.get("as_of_date") or payload.get("asOfDate")
+    batch_id = capture_batch_id or new_capture_batch_id()
+    resolution = resolve_effective_at(
+        "ratios_snapshot",
+        observed_at=observed_at,
+        source_as_of_date=source_as_of_date,
+    )
+    effective_at = resolution.effective_at.isoformat()
+    capture = capture_raw_payload(
+        conn,
+        source_family=source_family,
+        endpoint="ratios",
+        payload=payload,
+        observed_at=observed_at,
+        conid=conid,
+        source_as_of_date=source_as_of_date,
+        capture_batch_id=batch_id,
+    )
+
     conn.execute(
         """
-        INSERT INTO holdings_asset_type (
+        INSERT INTO ratios_snapshots (
             conid,
             effective_at,
-            equity,
-            cash,
-            fixed_income,
-            other
+            observed_at,
+            payload_hash,
+            capture_batch_id,
+            as_of_date
         ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(conid, effective_at) DO UPDATE SET
-            equity = excluded.equity,
-            cash = excluded.cash,
-            fixed_income = excluded.fixed_income,
-            other = excluded.other
+            observed_at = excluded.observed_at,
+            payload_hash = excluded.payload_hash,
+            capture_batch_id = excluded.capture_batch_id,
+            as_of_date = excluded.as_of_date
         """,
         (
-            holdings_row["conid"],
-            holdings_row["effective_at"],
-            holdings_row["equity"],
-            holdings_row["cash"],
-            holdings_row["fixed_income"],
-            holdings_row["other"],
+            conid,
+            effective_at,
+            observed_at,
+            capture.payload_hash,
+            batch_id,
+            to_iso_date(source_as_of_date),
         ),
     )
+    _delete_snapshot_child_rows(
+        conn,
+        tables=tuple(_RATIOS_SECTION_TABLES.values()),
+        conid=conid,
+        effective_at=effective_at,
+    )
+    for section, table_name in _RATIOS_SECTION_TABLES.items():
+        for row in _extract_ratios_metric_rows(
+            conid,
+            effective_at,
+            payload,
+            section=section,
+        ):
+            conn.execute(
+                f"""
+                INSERT INTO {table_name} (
+                    conid,
+                    effective_at,
+                    metric_id,
+                    value_num,
+                    vs_num
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(conid, effective_at, metric_id) DO UPDATE SET
+                    value_num = excluded.value_num,
+                    vs_num = excluded.vs_num
+                """,
+                (
+                    row["conid"],
+                    row["effective_at"],
+                    row["metric_id"],
+                    row["value_num"],
+                    row["vs_num"],
+                ),
+            )
+    return SnapshotWriteResult(
+        payload_hash=capture.payload_hash,
+        capture_batch_id=batch_id,
+        raw_observation_inserted=capture.observation_inserted,
+        effective_at=effective_at,
+    )
+
+
+def write_dividends_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    conid: str,
+    payload: JsonValue | bytes,
+    observed_at: str,
+    source_family: str = "ibkr",
+    capture_batch_id: str | None = None,
+) -> SnapshotWriteResult:
+    source_as_of_date = None
+    if not isinstance(payload, bytes) and isinstance(payload, dict):
+        source_as_of_date = payload.get("as_of_date") or payload.get("asOfDate")
+    batch_id = capture_batch_id or new_capture_batch_id()
+    resolution = resolve_effective_at(
+        "dividends_snapshot",
+        observed_at=observed_at,
+        source_as_of_date=source_as_of_date,
+    )
+    effective_at = resolution.effective_at.isoformat()
+    capture = capture_raw_payload(
+        conn,
+        source_family=source_family,
+        endpoint="dividends",
+        payload=payload,
+        observed_at=observed_at,
+        conid=conid,
+        source_as_of_date=source_as_of_date,
+        capture_batch_id=batch_id,
+    )
+    conn.execute(
+        """
+        INSERT INTO dividends_snapshots (
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            capture_batch_id,
+            as_of_date
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(conid, effective_at) DO UPDATE SET
+            observed_at = excluded.observed_at,
+            payload_hash = excluded.payload_hash,
+            capture_batch_id = excluded.capture_batch_id,
+            as_of_date = excluded.as_of_date
+        """,
+        (
+            conid,
+            effective_at,
+            observed_at,
+            capture.payload_hash,
+            batch_id,
+            to_iso_date(source_as_of_date),
+        ),
+    )
+    conn.execute(
+        "DELETE FROM dividends_industry_metrics_factors WHERE conid = ? AND effective_at = ?",
+        (conid, effective_at),
+    )
+    for row in _extract_dividends_industry_metric_rows(conid, effective_at, payload):
+        conn.execute(
+            """
+            INSERT INTO dividends_industry_metrics_factors (
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                currency
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(conid, effective_at, metric_id) DO UPDATE SET
+                value_num = excluded.value_num,
+                currency = excluded.currency
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["metric_id"],
+                row["value_num"],
+                row["currency"],
+            ),
+        )
+    return SnapshotWriteResult(
+        payload_hash=capture.payload_hash,
+        capture_batch_id=batch_id,
+        raw_observation_inserted=capture.observation_inserted,
+        effective_at=effective_at,
+    )
+
+
+def write_morningstar_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    conid: str,
+    payload: JsonValue | bytes,
+    observed_at: str,
+    source_family: str = "ibkr",
+    capture_batch_id: str | None = None,
+) -> SnapshotWriteResult:
+    source_as_of_date = None
+    q_full_report_id = None
+    if not isinstance(payload, bytes) and isinstance(payload, dict):
+        source_as_of_date = payload.get("as_of_date") or payload.get("asOfDate")
+        q_full_report_id = payload.get("q_full_report_id")
+    batch_id = capture_batch_id or new_capture_batch_id()
+    resolution = resolve_effective_at(
+        "morningstar_snapshot",
+        observed_at=observed_at,
+        source_as_of_date=source_as_of_date,
+    )
+    effective_at = resolution.effective_at.isoformat()
+    capture = capture_raw_payload(
+        conn,
+        source_family=source_family,
+        endpoint="morningstar",
+        payload=payload,
+        observed_at=observed_at,
+        conid=conid,
+        source_as_of_date=source_as_of_date,
+        capture_batch_id=batch_id,
+    )
+    conn.execute(
+        """
+        INSERT INTO morningstar_snapshots (
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            capture_batch_id,
+            as_of_date,
+            q_full_report_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(conid, effective_at) DO UPDATE SET
+            observed_at = excluded.observed_at,
+            payload_hash = excluded.payload_hash,
+            capture_batch_id = excluded.capture_batch_id,
+            as_of_date = excluded.as_of_date,
+            q_full_report_id = excluded.q_full_report_id
+        """,
+        (
+            conid,
+            effective_at,
+            observed_at,
+            capture.payload_hash,
+            batch_id,
+            to_iso_date(source_as_of_date),
+            q_full_report_id,
+        ),
+    )
+    conn.execute(
+        "DELETE FROM morningstar_summary_factors WHERE conid = ? AND effective_at = ?",
+        (conid, effective_at),
+    )
+    for row in _extract_morningstar_summary_rows(conid, effective_at, payload):
+        conn.execute(
+            """
+            INSERT INTO morningstar_summary_factors (
+                conid,
+                effective_at,
+                metric_id,
+                value_text,
+                value_num
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(conid, effective_at, metric_id) DO UPDATE SET
+                value_text = excluded.value_text,
+                value_num = excluded.value_num
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["metric_id"],
+                row["value_text"],
+                row["value_num"],
+            ),
+        )
+    return SnapshotWriteResult(
+        payload_hash=capture.payload_hash,
+        capture_batch_id=batch_id,
+        raw_observation_inserted=capture.observation_inserted,
+        effective_at=effective_at,
+    )
+
+
+def write_lipper_ratings_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    conid: str,
+    payload: JsonValue | bytes,
+    observed_at: str,
+    source_family: str = "ibkr",
+    capture_batch_id: str | None = None,
+) -> SnapshotWriteResult:
+    source_as_of_date = None
+    universes: list[object] = []
+    if not isinstance(payload, bytes) and isinstance(payload, dict):
+        source_as_of_date = payload.get("as_of_date") or payload.get("asOfDate")
+        raw_universes = payload.get("universes")
+        universes = raw_universes if isinstance(raw_universes, list) else []
+    batch_id = capture_batch_id or new_capture_batch_id()
+    resolution = resolve_effective_at(
+        "lipper_ratings_snapshot",
+        observed_at=observed_at,
+        source_as_of_date=source_as_of_date,
+    )
+    effective_at = resolution.effective_at.isoformat()
+    capture = capture_raw_payload(
+        conn,
+        source_family=source_family,
+        endpoint="lipper_ratings",
+        payload=payload,
+        observed_at=observed_at,
+        conid=conid,
+        source_as_of_date=source_as_of_date,
+        capture_batch_id=batch_id,
+    )
+    conn.execute(
+        """
+        INSERT INTO lipper_ratings_snapshots (
+            conid,
+            effective_at,
+            observed_at,
+            payload_hash,
+            capture_batch_id,
+            universe_count
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(conid, effective_at) DO UPDATE SET
+            observed_at = excluded.observed_at,
+            payload_hash = excluded.payload_hash,
+            capture_batch_id = excluded.capture_batch_id,
+            universe_count = excluded.universe_count
+        """,
+        (
+            conid,
+            effective_at,
+            observed_at,
+            capture.payload_hash,
+            batch_id,
+            len(universes),
+        ),
+    )
+    conn.execute(
+        "DELETE FROM lipper_ratings WHERE conid = ? AND effective_at = ?",
+        (conid, effective_at),
+    )
+    for row in _extract_lipper_rating_rows(conid, effective_at, payload):
+        conn.execute(
+            """
+            INSERT INTO lipper_ratings (
+                conid,
+                effective_at,
+                period,
+                metric_id,
+                value_num,
+                rating_label,
+                universe_name,
+                universe_as_of_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(conid, effective_at, universe_name, period, metric_id) DO UPDATE SET
+                value_num = excluded.value_num,
+                rating_label = excluded.rating_label,
+                universe_as_of_date = excluded.universe_as_of_date
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["period"],
+                row["metric_id"],
+                row["value_num"],
+                row["rating_label"],
+                row["universe_name"],
+                row["universe_as_of_date"],
+            ),
+        )
     return SnapshotWriteResult(
         payload_hash=capture.payload_hash,
         capture_batch_id=batch_id,

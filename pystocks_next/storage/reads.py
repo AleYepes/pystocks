@@ -64,68 +64,24 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "profile_and_fees": (
         "conid",
         "effective_at",
-        "asset_type",
-        "classification",
-        "distribution_details",
-        "domicile",
-        "fiscal_date",
-        "fund_category",
-        "fund_management_company",
-        "fund_manager_benchmark",
-        "fund_market_cap_focus",
-        "geographical_focus",
-        "inception_date",
-        "management_approach",
-        "management_expenses",
-        "manager_tenure",
-        "maturity_date",
-        "objective_type",
-        "portfolio_manager",
-        "redemption_charge_actual",
-        "redemption_charge_max",
-        "scheme",
-        "total_expense_ratio",
-        "total_net_assets_value",
-        "total_net_assets_date",
-        "objective",
-        "jap_fund_warning",
-        "theme_name",
+        "field_id",
+        "value_text",
+        "value_num",
+        "value_date",
+        "value_bool",
     ),
-    "holdings_asset_type": (
-        "conid",
-        "effective_at",
-        "equity",
-        "cash",
-        "fixed_income",
-        "other",
-    ),
+    "holdings_asset_type": ("conid", "effective_at", "bucket_id", "value_num"),
     "holdings_debtor_quality": (
         "conid",
         "effective_at",
-        "quality_aaa",
-        "quality_aa",
-        "quality_a",
-        "quality_bbb",
-        "quality_bb",
-        "quality_b",
-        "quality_ccc",
-        "quality_cc",
-        "quality_c",
-        "quality_d",
-        "quality_not_rated",
-        "quality_not_available",
+        "bucket_id",
+        "value_num",
     ),
     "holdings_maturity": (
         "conid",
         "effective_at",
-        "maturity_less_than_1_year",
-        "maturity_1_to_3_years",
-        "maturity_3_to_5_years",
-        "maturity_5_to_10_years",
-        "maturity_10_to_20_years",
-        "maturity_20_to_30_years",
-        "maturity_greater_than_30_years",
-        "maturity_other",
+        "bucket_id",
+        "value_num",
     ),
     "holdings_industry": ("conid", "effective_at", "industry", "value_num"),
     "holdings_currency": (
@@ -183,25 +139,123 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "dividends_industry_metrics": (
         "conid",
         "effective_at",
-        "dividend_yield",
-        "annual_dividend",
-        "dividend_ttm",
-        "dividend_yield_ttm",
+        "metric_id",
+        "value_num",
         "currency",
     ),
     "morningstar_summary": (
         "conid",
         "effective_at",
-        "medalist_rating",
-        "process",
-        "people",
-        "parent",
-        "morningstar_rating",
-        "sustainability_rating",
-        "category",
-        "category_index",
+        "metric_id",
+        "value_text",
+        "value_num",
     ),
-    "lipper_ratings": ("conid", "effective_at", "period", "metric_id", "value_num"),
+    "lipper_ratings": (
+        "conid",
+        "effective_at",
+        "period",
+        "metric_id",
+        "value_num",
+        "rating_label",
+        "universe_name",
+        "universe_as_of_date",
+    ),
+}
+
+SNAPSHOT_TABLE_DATE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "profile_and_fees": ("effective_at", "value_date"),
+    "holdings_asset_type": ("effective_at",),
+    "holdings_debtor_quality": ("effective_at",),
+    "holdings_maturity": ("effective_at",),
+    "holdings_industry": ("effective_at",),
+    "holdings_currency": ("effective_at",),
+    "holdings_investor_country": ("effective_at",),
+    "holdings_geographic_weights": ("effective_at",),
+    "holdings_debt_type": ("effective_at",),
+    "holdings_top10": ("effective_at",),
+    "ratios_key_ratios": ("effective_at",),
+    "ratios_financials": ("effective_at",),
+    "ratios_fixed_income": ("effective_at",),
+    "ratios_dividend": ("effective_at",),
+    "ratios_zscore": ("effective_at",),
+    "dividends_industry_metrics": ("effective_at",),
+    "morningstar_summary": ("effective_at",),
+    "lipper_ratings": ("effective_at", "universe_as_of_date"),
+}
+
+SNAPSHOT_TABLE_NUMERIC_COLUMNS: dict[str, tuple[str, ...]] = {
+    "profile_and_fees": ("value_num", "value_bool"),
+    "holdings_asset_type": ("value_num",),
+    "holdings_debtor_quality": ("value_num",),
+    "holdings_maturity": ("value_num",),
+    "holdings_industry": ("value_num",),
+    "holdings_currency": ("value_num",),
+    "holdings_investor_country": ("value_num",),
+    "holdings_geographic_weights": ("value_num",),
+    "holdings_debt_type": ("value_num",),
+    "holdings_top10": ("holding_weight_num",),
+    "ratios_key_ratios": ("value_num", "vs_num"),
+    "ratios_financials": ("value_num", "vs_num"),
+    "ratios_fixed_income": ("value_num", "vs_num"),
+    "ratios_dividend": ("value_num", "vs_num"),
+    "ratios_zscore": ("value_num", "vs_num"),
+    "dividends_industry_metrics": ("value_num",),
+    "morningstar_summary": ("value_num",),
+    "lipper_ratings": ("value_num",),
+}
+
+SNAPSHOT_TABLE_STRING_COLUMNS: dict[str, tuple[str, ...]] = {
+    "profile_and_fees": ("conid", "field_id", "value_text"),
+    "holdings_asset_type": ("conid", "bucket_id"),
+    "holdings_debtor_quality": ("conid", "bucket_id"),
+    "holdings_maturity": ("conid", "bucket_id"),
+    "holdings_industry": ("conid", "industry"),
+    "holdings_currency": ("conid", "code", "currency"),
+    "holdings_investor_country": ("conid", "country_code", "country"),
+    "holdings_geographic_weights": ("conid", "region"),
+    "holdings_debt_type": ("conid", "debt_type"),
+    "holdings_top10": ("conid", "name"),
+    "ratios_key_ratios": ("conid", "metric_id"),
+    "ratios_financials": ("conid", "metric_id"),
+    "ratios_fixed_income": ("conid", "metric_id"),
+    "ratios_dividend": ("conid", "metric_id"),
+    "ratios_zscore": ("conid", "metric_id"),
+    "dividends_industry_metrics": ("conid", "metric_id", "currency"),
+    "morningstar_summary": ("conid", "metric_id", "value_text"),
+    "lipper_ratings": (
+        "conid",
+        "period",
+        "metric_id",
+        "rating_label",
+        "universe_name",
+    ),
+}
+
+SNAPSHOT_TABLE_SORT_COLUMNS: dict[str, tuple[str, ...]] = {
+    "profile_and_fees": ("conid", "effective_at", "field_id"),
+    "holdings_asset_type": ("conid", "effective_at", "bucket_id"),
+    "holdings_debtor_quality": ("conid", "effective_at", "bucket_id"),
+    "holdings_maturity": ("conid", "effective_at", "bucket_id"),
+    "holdings_industry": ("conid", "effective_at", "industry"),
+    "holdings_currency": ("conid", "effective_at", "code", "currency"),
+    "holdings_investor_country": ("conid", "effective_at", "country_code", "country"),
+    "holdings_geographic_weights": ("conid", "effective_at", "region"),
+    "holdings_debt_type": ("conid", "effective_at", "debt_type"),
+    "holdings_top10": ("conid", "effective_at", "name"),
+    "ratios_key_ratios": ("conid", "effective_at", "metric_id"),
+    "ratios_financials": ("conid", "effective_at", "metric_id"),
+    "ratios_fixed_income": ("conid", "effective_at", "metric_id"),
+    "ratios_dividend": ("conid", "effective_at", "metric_id"),
+    "ratios_zscore": ("conid", "effective_at", "metric_id"),
+    "dividends_industry_metrics": ("conid", "effective_at", "metric_id"),
+    "morningstar_summary": ("conid", "effective_at", "metric_id"),
+    "lipper_ratings": (
+        "conid",
+        "effective_at",
+        "universe_name",
+        "period",
+        "metric_id",
+    ),
 }
 
 
@@ -254,61 +308,14 @@ def _normalize_frame(
 
 def _normalize_snapshot_table(name: str, frame: pd.DataFrame) -> pd.DataFrame:
     columns = SNAPSHOT_TABLE_COLUMNS[name]
-    numeric_columns = tuple(
-        column
-        for column in columns
-        if column
-        not in {
-            "conid",
-            "effective_at",
-            "asset_type",
-            "classification",
-            "distribution_details",
-            "domicile",
-            "fiscal_date",
-            "fund_category",
-            "fund_management_company",
-            "fund_manager_benchmark",
-            "fund_market_cap_focus",
-            "geographical_focus",
-            "inception_date",
-            "management_approach",
-            "maturity_date",
-            "objective_type",
-            "portfolio_manager",
-            "scheme",
-            "total_net_assets_value",
-            "total_net_assets_date",
-            "objective",
-            "jap_fund_warning",
-            "theme_name",
-            "industry",
-            "code",
-            "currency",
-            "country_code",
-            "country",
-            "region",
-            "debt_type",
-            "name",
-            "metric_id",
-            "period",
-            "medalist_rating",
-            "process",
-            "people",
-            "parent",
-            "morningstar_rating",
-            "sustainability_rating",
-            "category",
-        }
-    )
     return _normalize_frame(
         frame,
         columns=columns,
         contract_name=f"snapshot table {name}",
-        date_columns=("effective_at",),
-        numeric_columns=numeric_columns,
-        string_columns=("conid",),
-        sort_by=("conid", "effective_at"),
+        date_columns=SNAPSHOT_TABLE_DATE_COLUMNS[name],
+        numeric_columns=SNAPSHOT_TABLE_NUMERIC_COLUMNS[name],
+        string_columns=SNAPSHOT_TABLE_STRING_COLUMNS[name],
+        sort_by=SNAPSHOT_TABLE_SORT_COLUMNS[name],
     )
 
 
@@ -561,34 +568,13 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
             SELECT
                 conid,
                 effective_at,
-                asset_type,
-                classification,
-                distribution_details,
-                domicile,
-                fiscal_date,
-                fund_category,
-                fund_management_company,
-                fund_manager_benchmark,
-                fund_market_cap_focus,
-                geographical_focus,
-                inception_date,
-                management_approach,
-                management_expenses,
-                manager_tenure,
-                maturity_date,
-                objective_type,
-                portfolio_manager,
-                redemption_charge_actual,
-                redemption_charge_max,
-                scheme,
-                total_expense_ratio,
-                total_net_assets_value,
-                total_net_assets_date,
-                objective,
-                jap_fund_warning,
-                theme_name
-            FROM profile_and_fees
-            ORDER BY conid, effective_at
+                field_id,
+                value_text,
+                value_num,
+                value_date,
+                value_bool
+            FROM profile_and_fees_factors
+            ORDER BY conid, effective_at, field_id
             """,
             name="profile_and_fees",
         ),
@@ -598,14 +584,233 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
             SELECT
                 conid,
                 effective_at,
-                equity,
-                cash,
-                fixed_income,
-                other
-            FROM holdings_asset_type
-            ORDER BY conid, effective_at
+                bucket_id,
+                value_num
+            FROM holdings_asset_type_factors
+            ORDER BY conid, effective_at, bucket_id
             """,
             name="holdings_asset_type",
+        ),
+        "holdings_debtor_quality": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                bucket_id,
+                value_num
+            FROM holdings_debtor_quality_factors
+            ORDER BY conid, effective_at, bucket_id
+            """,
+            name="holdings_debtor_quality",
+        ),
+        "holdings_maturity": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                bucket_id,
+                value_num
+            FROM holdings_maturity_factors
+            ORDER BY conid, effective_at, bucket_id
+            """,
+            name="holdings_maturity",
+        ),
+        "holdings_industry": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                industry,
+                value_num
+            FROM holdings_industry
+            ORDER BY conid, effective_at, industry
+            """,
+            name="holdings_industry",
+        ),
+        "holdings_currency": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                COALESCE(code, currency) AS code,
+                currency,
+                value_num
+            FROM holdings_currency
+            ORDER BY conid, effective_at, code, currency
+            """,
+            name="holdings_currency",
+        ),
+        "holdings_investor_country": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                COALESCE(country_code, country) AS country_code,
+                country,
+                value_num
+            FROM holdings_investor_country
+            ORDER BY conid, effective_at, country_code, country
+            """,
+            name="holdings_investor_country",
+        ),
+        "holdings_geographic_weights": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                region,
+                value_num
+            FROM holdings_geographic_weights
+            ORDER BY conid, effective_at, region
+            """,
+            name="holdings_geographic_weights",
+        ),
+        "holdings_debt_type": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                debt_type,
+                value_num
+            FROM holdings_debt_type
+            ORDER BY conid, effective_at, debt_type
+            """,
+            name="holdings_debt_type",
+        ),
+        "holdings_top10": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                name,
+                holding_weight_num
+            FROM holdings_top10
+            ORDER BY conid, effective_at, name
+            """,
+            name="holdings_top10",
+        ),
+        "ratios_key_ratios": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                vs_num
+            FROM ratios_key_ratios
+            ORDER BY conid, effective_at, metric_id
+            """,
+            name="ratios_key_ratios",
+        ),
+        "ratios_financials": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                vs_num
+            FROM ratios_financials
+            ORDER BY conid, effective_at, metric_id
+            """,
+            name="ratios_financials",
+        ),
+        "ratios_fixed_income": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                vs_num
+            FROM ratios_fixed_income
+            ORDER BY conid, effective_at, metric_id
+            """,
+            name="ratios_fixed_income",
+        ),
+        "ratios_dividend": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                vs_num
+            FROM ratios_dividend
+            ORDER BY conid, effective_at, metric_id
+            """,
+            name="ratios_dividend",
+        ),
+        "ratios_zscore": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                vs_num
+            FROM ratios_zscore
+            ORDER BY conid, effective_at, metric_id
+            """,
+            name="ratios_zscore",
+        ),
+        "dividends_industry_metrics": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_num,
+                currency
+            FROM dividends_industry_metrics_factors
+            ORDER BY conid, effective_at, metric_id
+            """,
+            name="dividends_industry_metrics",
+        ),
+        "morningstar_summary": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                metric_id,
+                value_text,
+                value_num
+            FROM morningstar_summary_factors
+            ORDER BY conid, effective_at, metric_id
+            """,
+            name="morningstar_summary",
+        ),
+        "lipper_ratings": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                period,
+                metric_id,
+                value_num,
+                rating_label,
+                universe_name,
+                universe_as_of_date
+            FROM lipper_ratings
+            ORDER BY conid, effective_at, universe_name, period, metric_id
+            """,
+            name="lipper_ratings",
         ),
     }
     return SnapshotFeatureTablesRead.from_tables(tables)

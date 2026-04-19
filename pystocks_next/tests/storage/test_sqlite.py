@@ -17,11 +17,11 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     first_version = initialize_operational_store(db_path)
     second_version = initialize_operational_store(db_path)
 
-    assert first_version == 5
-    assert second_version == 5
+    assert first_version == 7
+    assert second_version == 7
 
     with connect_sqlite(db_path, read_only=True) as conn:
-        assert current_schema_version(conn) == 5
+        assert current_schema_version(conn) == 7
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
         columns = {
@@ -45,10 +45,34 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
             )
         }
         profile_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(profile_and_fees)")
+            row[1]
+            for row in conn.execute("PRAGMA table_info(profile_and_fees_factors)")
         }
         holdings_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(holdings_asset_type)")
+            row[1]
+            for row in conn.execute("PRAGMA table_info(holdings_asset_type_factors)")
+        }
+        holdings_quality_columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(holdings_debtor_quality_factors)"
+            )
+        }
+        ratios_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(ratios_key_ratios)")
+        }
+        dividends_columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(dividends_industry_metrics_factors)"
+            )
+        }
+        morningstar_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(morningstar_summary_factors)")
+        }
+        lipper_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(lipper_ratings)")
         }
 
     assert journal_mode == "wal"
@@ -58,8 +82,13 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     assert "event_signature" in dividend_columns
     assert "daily_nominal_rate" in risk_free_daily_columns
     assert "population_acceleration" in world_bank_columns
-    assert "total_net_assets_date" in profile_columns
-    assert "fixed_income" in holdings_columns
+    assert "field_id" in profile_columns
+    assert "bucket_id" in holdings_columns
+    assert "bucket_id" in holdings_quality_columns
+    assert "vs_num" in ratios_columns
+    assert "metric_id" in dividends_columns
+    assert "metric_id" in morningstar_columns
+    assert "universe_name" in lipper_columns
 
 
 def test_apply_migrations_upgrades_v1_store_through_supplementary_tables(
@@ -94,8 +123,8 @@ def test_apply_migrations_upgrades_v1_store_through_supplementary_tables(
         )
 
     with connect_sqlite(db_path) as conn:
-        assert apply_migrations(conn) == [2, 3, 4, 5]
-        assert current_schema_version(conn) == 5
+        assert apply_migrations(conn) == [2, 3, 4, 5, 6, 7]
+        assert current_schema_version(conn) == 7
         row = conn.execute(
             """
             SELECT source_as_of_date, capture_batch_id
@@ -120,5 +149,10 @@ def test_apply_migrations_upgrades_v1_store_through_supplementary_tables(
     assert "dividends_events_series" in table_names
     assert "supplementary_risk_free_daily" in table_names
     assert "supplementary_world_bank_country_features" in table_names
-    assert "profile_and_fees" in table_names
-    assert "holdings_asset_type" in table_names
+    assert "profile_and_fees_factors" in table_names
+    assert "holdings_asset_type_factors" in table_names
+    assert "holdings_debtor_quality_factors" in table_names
+    assert "ratios_key_ratios" in table_names
+    assert "dividends_industry_metrics_factors" in table_names
+    assert "morningstar_summary_factors" in table_names
+    assert "lipper_ratings" in table_names
