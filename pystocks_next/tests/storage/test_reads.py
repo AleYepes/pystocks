@@ -15,6 +15,7 @@ from pystocks_next.storage.reads import (
     SnapshotFeatureTablesRead,
     WorldBankCountryFeaturesRead,
     load_dividend_events,
+    load_latest_price_effective_at_by_conid,
     load_price_history,
     load_risk_free_daily,
     load_snapshot_feature_tables,
@@ -123,6 +124,32 @@ def test_load_price_history_reads_from_canonical_storage(
         "2025-12-31",
         "2026-01-02",
     ]
+
+
+def test_load_latest_price_effective_at_by_conid_reads_grouped_dates(
+    temp_store,
+    sample_price_chart_payload: dict[str, object],
+) -> None:
+    upsert_instruments(
+        temp_store,
+        [
+            UniverseInstrument(conid="100", symbol="AAA"),
+            UniverseInstrument(conid="200", symbol="BBB"),
+        ],
+    )
+    write_price_chart_series(
+        temp_store,
+        conid="100",
+        payload=sample_price_chart_payload,
+        observed_at="2026-01-05T10:00:00+00:00",
+    )
+
+    result = load_latest_price_effective_at_by_conid(temp_store, conids=["100", "200"])
+
+    assert result == {
+        "100": pd.Timestamp("2026-01-02").date(),
+        "200": None,
+    }
 
 
 def test_load_dividend_events_reads_from_canonical_storage(

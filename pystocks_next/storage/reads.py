@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from datetime import date
 
 import pandas as pd
 
@@ -488,6 +489,38 @@ def load_price_history(conn: sqlite3.Connection) -> PriceHistoryRead:
         """,
     )
     return PriceHistoryRead.from_frame(frame)
+
+
+def load_latest_price_effective_at_by_conid(
+    conn: sqlite3.Connection,
+    *,
+    conids: Collection[str] | None = None,
+) -> dict[str, date | None]:
+    query = """
+        SELECT
+            conid,
+            MAX(effective_at) AS latest_effective_at
+        FROM price_chart_series
+    """
+    params: tuple[object, ...] = ()
+    requested = [str(conid) for conid in conids] if conids is not None else None
+    if requested:
+        placeholders = ", ".join("?" for _ in requested)
+        query += f" WHERE conid IN ({placeholders})"
+        params = tuple(requested)
+    query += " GROUP BY conid ORDER BY conid"
+
+    rows = conn.execute(query, params).fetchall()
+    latest_by_conid: dict[str, date | None] = {}
+    for row in rows:
+        latest_effective_at = row["latest_effective_at"]
+        if latest_effective_at is None:
+            continue
+        parsed = pd.to_datetime(latest_effective_at, errors="coerce")
+        latest_by_conid[str(row["conid"])] = None if pd.isna(parsed) else parsed.date()
+    if requested is None:
+        return latest_by_conid
+    return {conid: latest_by_conid.get(conid) for conid in requested}
 
 
 def load_dividend_events(conn: sqlite3.Connection) -> DividendEventsRead:
