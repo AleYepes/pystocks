@@ -109,6 +109,34 @@ def test_collect_conid_returns_structured_skip_for_landing_only_instrument() -> 
     assert result.skip_reason == "skip_missing_total_net_assets"
 
 
+def test_run_requests_visible_login_when_auth_is_missing(temp_store) -> None:
+    class _AuthMissingSession(_DummySession):
+        def __init__(self) -> None:
+            self.login_calls: list[tuple[bool, bool]] = []
+
+        async def validate_auth_state(self, *, timeout_s: float = 20.0) -> bool:
+            del timeout_s
+            return False
+
+        async def login(
+            self,
+            *,
+            headless: bool = True,
+            force_browser: bool = False,
+        ) -> bool:
+            self.login_calls.append((headless, force_browser))
+            return False
+
+    session = _AuthMissingSession()
+    collector = FundamentalsCollector(session=session)
+
+    result = asyncio.run(collector.run(temp_store, explicit_conids=["100"]))
+
+    assert result.status == "auth_required"
+    assert result.aborted is True
+    assert session.login_calls == [(False, True)]
+
+
 def test_run_persists_first_slice_end_to_end(
     temp_store,
     sample_profile_and_fees_payload: dict[str, object],

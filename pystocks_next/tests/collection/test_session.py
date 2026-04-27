@@ -100,3 +100,14 @@ def test_session_exposes_fundamentals_auth_probe() -> None:
     assert session.auth_check_endpoints == (
         "/tws.proxy/fundamentals/landing/756733?widgets=objective",
     )
+
+
+def test_default_state_path_matches_legacy_auth_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(Path("/tmp"))
+
+    session = CollectionSession()
+
+    assert session.state_path == Path("/tmp/data/auth_state.json")
+    assert session.credentials_path == Path("/tmp/data/login_credentials.json")

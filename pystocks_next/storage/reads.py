@@ -17,6 +17,28 @@ PRICE_HISTORY_COLUMNS: tuple[str, ...] = (
     "close",
 )
 
+RISK_FREE_SOURCE_COLUMNS: tuple[str, ...] = (
+    "series_id",
+    "source_name",
+    "economy_code",
+    "trade_date",
+    "nominal_rate",
+    "observed_at",
+)
+
+WORLD_BANK_RAW_COLUMNS: tuple[str, ...] = (
+    "economy_code",
+    "indicator_id",
+    "year",
+    "value",
+    "observed_at",
+)
+
+HOLDINGS_COUNTRY_WEIGHT_COLUMNS: tuple[str, ...] = (
+    "economy_code",
+    "weight",
+)
+
 DIVIDEND_EVENTS_COLUMNS: tuple[str, ...] = (
     "conid",
     "symbol",
@@ -29,36 +51,6 @@ DIVIDEND_EVENTS_COLUMNS: tuple[str, ...] = (
     "declaration_date",
     "record_date",
     "payment_date",
-)
-
-RISK_FREE_DAILY_COLUMNS: tuple[str, ...] = (
-    "trade_date",
-    "nominal_rate",
-    "daily_nominal_rate",
-    "source_count",
-    "observed_at",
-)
-
-WORLD_BANK_COUNTRY_FEATURE_COLUMNS: tuple[str, ...] = (
-    "economy_code",
-    "effective_at",
-    "feature_year",
-    "population_level",
-    "population_growth",
-    "population_acceleration",
-    "gdp_pcap_level",
-    "gdp_pcap_growth",
-    "gdp_pcap_acceleration",
-    "economic_output_gdp_level",
-    "economic_output_gdp_growth",
-    "economic_output_gdp_acceleration",
-    "foreign_direct_investment_level",
-    "foreign_direct_investment_growth",
-    "foreign_direct_investment_acceleration",
-    "share_trade_volume_level",
-    "share_trade_volume_growth",
-    "share_trade_volume_acceleration",
-    "observed_at",
 )
 
 SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -376,54 +368,77 @@ class DividendEventsRead:
 
 
 @dataclass(frozen=True, slots=True)
-class RiskFreeDailyRead:
-    """Consumer-oriented daily risk-free contract."""
+class RiskFreeSourcesRead:
+    """Consumer-oriented raw supplementary risk-free source contract."""
 
     frame: pd.DataFrame
 
     @classmethod
-    def empty(cls) -> RiskFreeDailyRead:
-        return cls(frame=_empty_frame(RISK_FREE_DAILY_COLUMNS))
+    def empty(cls) -> RiskFreeSourcesRead:
+        return cls(frame=_empty_frame(RISK_FREE_SOURCE_COLUMNS))
 
     @classmethod
-    def from_frame(cls, frame: pd.DataFrame) -> RiskFreeDailyRead:
-        return cls(
-            frame=_normalize_frame(
-                frame,
-                columns=RISK_FREE_DAILY_COLUMNS,
-                contract_name="risk free daily",
-                date_columns=("trade_date", "observed_at"),
-                numeric_columns=("nominal_rate", "daily_nominal_rate", "source_count"),
-                sort_by=("trade_date",),
-            )
+    def from_frame(cls, frame: pd.DataFrame) -> RiskFreeSourcesRead:
+        normalized = _normalize_frame(
+            frame,
+            columns=RISK_FREE_SOURCE_COLUMNS,
+            contract_name="risk free sources",
+            date_columns=("trade_date", "observed_at"),
+            numeric_columns=("nominal_rate",),
+            string_columns=("series_id", "source_name", "economy_code"),
+            sort_by=("series_id", "trade_date"),
         )
+        if not normalized.empty:
+            normalized["economy_code"] = normalized["economy_code"].str.upper()
+        return cls(frame=normalized)
 
 
 @dataclass(frozen=True, slots=True)
-class WorldBankCountryFeaturesRead:
-    """Consumer-oriented supplementary macro feature contract."""
+class WorldBankRawRead:
+    """Consumer-oriented raw supplementary World Bank contract."""
 
     frame: pd.DataFrame
 
     @classmethod
-    def empty(cls) -> WorldBankCountryFeaturesRead:
-        return cls(frame=_empty_frame(WORLD_BANK_COUNTRY_FEATURE_COLUMNS))
+    def empty(cls) -> WorldBankRawRead:
+        return cls(frame=_empty_frame(WORLD_BANK_RAW_COLUMNS))
 
     @classmethod
-    def from_frame(cls, frame: pd.DataFrame) -> WorldBankCountryFeaturesRead:
-        numeric_columns = tuple(
-            column
-            for column in WORLD_BANK_COUNTRY_FEATURE_COLUMNS
-            if column not in {"economy_code", "effective_at", "observed_at"}
-        )
+    def from_frame(cls, frame: pd.DataFrame) -> WorldBankRawRead:
         normalized = _normalize_frame(
             frame,
-            columns=WORLD_BANK_COUNTRY_FEATURE_COLUMNS,
-            contract_name="world bank country features",
-            date_columns=("effective_at", "observed_at"),
-            numeric_columns=numeric_columns,
+            columns=WORLD_BANK_RAW_COLUMNS,
+            contract_name="world bank raw",
+            date_columns=("observed_at",),
+            numeric_columns=("year", "value"),
+            string_columns=("economy_code", "indicator_id"),
+            sort_by=("economy_code", "indicator_id", "year"),
+        )
+        if not normalized.empty:
+            normalized["economy_code"] = normalized["economy_code"].str.upper()
+            normalized["year"] = normalized["year"].astype("Int64")
+        return cls(frame=normalized)
+
+
+@dataclass(frozen=True, slots=True)
+class HoldingsCountryWeightsRead:
+    """Consumer-oriented latest holdings-country weight contract."""
+
+    frame: pd.DataFrame
+
+    @classmethod
+    def empty(cls) -> HoldingsCountryWeightsRead:
+        return cls(frame=_empty_frame(HOLDINGS_COUNTRY_WEIGHT_COLUMNS))
+
+    @classmethod
+    def from_frame(cls, frame: pd.DataFrame) -> HoldingsCountryWeightsRead:
+        normalized = _normalize_frame(
+            frame,
+            columns=HOLDINGS_COUNTRY_WEIGHT_COLUMNS,
+            contract_name="holdings country weights",
+            numeric_columns=("weight",),
             string_columns=("economy_code",),
-            sort_by=("economy_code", "effective_at"),
+            sort_by=("economy_code",),
         )
         if not normalized.empty:
             normalized["economy_code"] = normalized["economy_code"].str.upper()
@@ -548,36 +563,67 @@ def load_dividend_events(conn: sqlite3.Connection) -> DividendEventsRead:
     return DividendEventsRead.from_frame(frame)
 
 
-def load_risk_free_daily(conn: sqlite3.Connection) -> RiskFreeDailyRead:
+def load_risk_free_sources(conn: sqlite3.Connection) -> RiskFreeSourcesRead:
     frame = _query_frame(
         conn,
         """
         SELECT
+            series_id,
+            source_name,
+            economy_code,
             trade_date,
             nominal_rate,
-            daily_nominal_rate,
-            source_count,
             observed_at
-        FROM supplementary_risk_free_daily
-        ORDER BY trade_date
+        FROM supplementary_risk_free_sources
+        ORDER BY series_id, trade_date
         """,
     )
-    return RiskFreeDailyRead.from_frame(frame)
+    return RiskFreeSourcesRead.from_frame(frame)
 
 
-def load_world_bank_country_features(
-    conn: sqlite3.Connection,
-) -> WorldBankCountryFeaturesRead:
+def load_world_bank_raw(conn: sqlite3.Connection) -> WorldBankRawRead:
     frame = _query_frame(
         conn,
         """
-        SELECT *
-        FROM supplementary_world_bank_country_features
-        ORDER BY economy_code, effective_at
+        SELECT
+            economy_code,
+            indicator_id,
+            year,
+            value,
+            observed_at
+        FROM supplementary_world_bank_raw
+        ORDER BY economy_code, indicator_id, year
         """,
     )
-    normalized = frame.reindex(columns=pd.Index(WORLD_BANK_COUNTRY_FEATURE_COLUMNS))
-    return WorldBankCountryFeaturesRead.from_frame(normalized)
+    return WorldBankRawRead.from_frame(frame)
+
+
+def load_latest_holdings_country_weights(
+    conn: sqlite3.Connection,
+) -> HoldingsCountryWeightsRead:
+    frame = _query_frame(
+        conn,
+        """
+        WITH latest_snapshot_by_conid AS (
+            SELECT
+                conid,
+                MAX(effective_at) AS effective_at
+            FROM holdings_investor_country
+            GROUP BY conid
+        )
+        SELECT
+            UPPER(COALESCE(country_code, country)) AS economy_code,
+            SUM(value_num) AS weight
+        FROM holdings_investor_country AS h
+        INNER JOIN latest_snapshot_by_conid AS latest
+            ON latest.conid = h.conid
+           AND latest.effective_at = h.effective_at
+        WHERE COALESCE(country_code, country) IS NOT NULL
+        GROUP BY UPPER(COALESCE(country_code, country))
+        ORDER BY UPPER(COALESCE(country_code, country))
+        """,
+    )
+    return HoldingsCountryWeightsRead.from_frame(frame)
 
 
 def _load_snapshot_frame_from_db(

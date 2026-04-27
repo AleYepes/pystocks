@@ -545,7 +545,10 @@ class FundamentalsCollector:
         is_authenticated = await self.session.validate_auth_state()
         if not is_authenticated:
             try:
-                is_authenticated = await self.session.login()
+                is_authenticated = await self.session.login(
+                    headless=False,
+                    force_browser=True,
+                )
             except NotImplementedError:
                 is_authenticated = False
         if not is_authenticated:

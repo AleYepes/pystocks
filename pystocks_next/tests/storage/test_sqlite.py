@@ -17,11 +17,11 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     first_version = initialize_operational_store(db_path)
     second_version = initialize_operational_store(db_path)
 
-    assert first_version == 7
-    assert second_version == 7
+    assert first_version == 8
+    assert second_version == 8
 
     with connect_sqlite(db_path, read_only=True) as conn:
-        assert current_schema_version(conn) == 7
+        assert current_schema_version(conn) == 8
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
         columns = {
@@ -33,16 +33,6 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
         }
         dividend_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(dividends_events_series)")
-        }
-        risk_free_daily_columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(supplementary_risk_free_daily)")
-        }
-        world_bank_columns = {
-            row[1]
-            for row in conn.execute(
-                "PRAGMA table_info(supplementary_world_bank_country_features)"
-            )
         }
         profile_columns = {
             row[1]
@@ -80,8 +70,6 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     assert "capture_batch_id" in columns
     assert "observed_at" in price_columns
     assert "event_signature" in dividend_columns
-    assert "daily_nominal_rate" in risk_free_daily_columns
-    assert "population_acceleration" in world_bank_columns
     assert "field_id" in profile_columns
     assert "bucket_id" in holdings_columns
     assert "bucket_id" in holdings_quality_columns
@@ -123,8 +111,8 @@ def test_apply_migrations_upgrades_v1_store_through_supplementary_tables(
         )
 
     with connect_sqlite(db_path) as conn:
-        assert apply_migrations(conn) == [2, 3, 4, 5, 6, 7]
-        assert current_schema_version(conn) == 7
+        assert apply_migrations(conn) == [2, 3, 4, 5, 6, 7, 8]
+        assert current_schema_version(conn) == 8
         row = conn.execute(
             """
             SELECT source_as_of_date, capture_batch_id
@@ -147,8 +135,8 @@ def test_apply_migrations_upgrades_v1_store_through_supplementary_tables(
     assert row["capture_batch_id"] is None
     assert "price_chart_series" in table_names
     assert "dividends_events_series" in table_names
-    assert "supplementary_risk_free_daily" in table_names
-    assert "supplementary_world_bank_country_features" in table_names
+    assert "supplementary_risk_free_daily" not in table_names
+    assert "supplementary_world_bank_country_features" not in table_names
     assert "profile_and_fees_factors" in table_names
     assert "holdings_asset_type_factors" in table_names
     assert "holdings_debtor_quality_factors" in table_names

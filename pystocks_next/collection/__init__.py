@@ -13,6 +13,7 @@ from .products import (
     refresh_product_universe,
 )
 from .session import CollectionSession
+from .supplementary import SupplementaryCollectionResult, refresh_supplementary_sources
 from .telemetry import CollectionTelemetry, EndpointTelemetrySummary
 
 __all__ = [
@@ -25,6 +26,8 @@ __all__ = [
     "FundamentalsConidOutcome",
     "FundamentalsPersistResult",
     "ProductCollectionResult",
+    "SupplementaryCollectionResult",
     "fetch_product_page",
+    "refresh_supplementary_sources",
     "refresh_product_universe",
 ]

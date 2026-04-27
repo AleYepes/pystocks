@@ -164,15 +164,6 @@ MIGRATIONS: tuple[Migration, ...] = (
             )
             """,
             """
-            CREATE TABLE IF NOT EXISTS supplementary_risk_free_daily (
-                trade_date TEXT PRIMARY KEY,
-                nominal_rate REAL,
-                daily_nominal_rate REAL,
-                source_count INTEGER NOT NULL,
-                observed_at TEXT NOT NULL
-            )
-            """,
-            """
             CREATE TABLE IF NOT EXISTS supplementary_world_bank_raw (
                 economy_code TEXT NOT NULL,
                 indicator_id TEXT NOT NULL,
@@ -180,30 +171,6 @@ MIGRATIONS: tuple[Migration, ...] = (
                 value REAL,
                 observed_at TEXT NOT NULL,
                 PRIMARY KEY (economy_code, indicator_id, year)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS supplementary_world_bank_country_features (
-                economy_code TEXT NOT NULL,
-                effective_at TEXT NOT NULL,
-                feature_year INTEGER NOT NULL,
-                population_level REAL,
-                population_growth REAL,
-                population_acceleration REAL,
-                gdp_pcap_level REAL,
-                gdp_pcap_growth REAL,
-                gdp_pcap_acceleration REAL,
-                economic_output_gdp_level REAL,
-                economic_output_gdp_growth REAL,
-                economic_output_gdp_acceleration REAL,
-                foreign_direct_investment_level REAL,
-                foreign_direct_investment_growth REAL,
-                foreign_direct_investment_acceleration REAL,
-                share_trade_volume_level REAL,
-                share_trade_volume_growth REAL,
-                share_trade_volume_acceleration REAL,
-                observed_at TEXT NOT NULL,
-                PRIMARY KEY (economy_code, feature_year)
             )
             """,
             """
@@ -217,10 +184,6 @@ MIGRATIONS: tuple[Migration, ...] = (
             """
             CREATE INDEX IF NOT EXISTS idx_supplementary_world_bank_raw_year
             ON supplementary_world_bank_raw(year, economy_code)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_supplementary_world_bank_country_features_effective_at
-            ON supplementary_world_bank_country_features(effective_at, economy_code)
             """,
         ),
     ),
@@ -983,6 +946,21 @@ MIGRATIONS: tuple[Migration, ...] = (
             """
             CREATE INDEX IF NOT EXISTS idx_lipper_ratings_effective_at
             ON lipper_ratings(effective_at, conid)
+            """,
+        ),
+    ),
+    Migration(
+        version=8,
+        description="retire persisted supplementary derivation tables",
+        statements=(
+            """
+            DROP INDEX IF EXISTS idx_supplementary_world_bank_country_features_effective_at
+            """,
+            """
+            DROP TABLE IF EXISTS supplementary_risk_free_daily
+            """,
+            """
+            DROP TABLE IF EXISTS supplementary_world_bank_country_features
             """,
         ),
     ),
