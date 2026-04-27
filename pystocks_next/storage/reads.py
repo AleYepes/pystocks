@@ -652,7 +652,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 value_num,
                 value_date,
                 value_bool
-            FROM profile_and_fees_factors
+            FROM profile_and_fees
             ORDER BY conid, effective_at, field_id
             """,
             name="profile_and_fees",
@@ -665,7 +665,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 effective_at,
                 bucket_id,
                 value_num
-            FROM holdings_asset_type_factors
+            FROM holdings_asset_type
             ORDER BY conid, effective_at, bucket_id
             """,
             name="holdings_asset_type",
@@ -678,7 +678,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 effective_at,
                 bucket_id,
                 value_num
-            FROM holdings_debtor_quality_factors
+            FROM holdings_debtor_quality
             ORDER BY conid, effective_at, bucket_id
             """,
             name="holdings_debtor_quality",
@@ -691,7 +691,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 effective_at,
                 bucket_id,
                 value_num
-            FROM holdings_maturity_factors
+            FROM holdings_maturity
             ORDER BY conid, effective_at, bucket_id
             """,
             name="holdings_maturity",
@@ -855,7 +855,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 metric_id,
                 value_num,
                 currency
-            FROM dividends_industry_metrics_factors
+            FROM dividends_industry_metrics
             ORDER BY conid, effective_at, metric_id
             """,
             name="dividends_industry_metrics",
@@ -869,7 +869,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 metric_id,
                 value_text,
                 value_num
-            FROM morningstar_summary_factors
+            FROM morningstar_summary
             ORDER BY conid, effective_at, metric_id
             """,
             name="morningstar_summary",

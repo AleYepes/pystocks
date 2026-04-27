@@ -15,28 +15,12 @@ from ..storage import (
     load_risk_free_sources,
     load_world_bank_raw,
 )
+from ..supplementary_sources import RISK_FREE_SERIES_BY_ECONOMY
 from .bundle import (
     MACRO_FEATURE_COLUMNS,
     RISK_FREE_DAILY_COLUMNS,
     AnalysisInputBundle,
 )
-
-WORLD_BANK_INDICATOR_MAP = {
-    "SP.POP.TOTL": "population",
-    "NY.GDP.PCAP.CD": "gdp_pcap",
-    "NY.GDP.MKTP.CD": "economic_output_gdp",
-    "BX.KLT.DINV.WD.GD.ZS": "foreign_direct_investment",
-    "NE.IMP.GNFS.ZS": "imports_goods_services",
-    "NE.EXP.GNFS.ZS": "exports_goods_services",
-}
-
-RISK_FREE_SERIES_BY_ECONOMY = {
-    "USA": "DTB3",
-    "CAN": "IR3TIB01CAM156N",
-    "DEU": "IR3TIB01DEM156N",
-    "GBR": "IR3TIB01GBM156N",
-    "FRA": "IR3TIB01FRA156N",
-}
 
 
 @dataclass(frozen=True, slots=True)

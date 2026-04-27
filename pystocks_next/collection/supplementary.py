@@ -12,28 +12,14 @@ import pandas as pd
 import requests
 
 from ..storage import (
-    load_latest_holdings_country_weights,
     write_supplementary_fetch_log,
     write_supplementary_risk_free_sources,
     write_supplementary_world_bank_raw,
 )
-
-WORLD_BANK_INDICATOR_MAP: dict[str, str] = {
-    "SP.POP.TOTL": "population",
-    "NY.GDP.PCAP.CD": "gdp_pcap",
-    "NY.GDP.MKTP.CD": "economic_output_gdp",
-    "BX.KLT.DINV.WD.GD.ZS": "foreign_direct_investment",
-    "NE.IMP.GNFS.ZS": "imports_goods_services",
-    "NE.EXP.GNFS.ZS": "exports_goods_services",
-}
-
-RISK_FREE_SERIES_BY_ECONOMY: dict[str, str] = {
-    "USA": "DTB3",
-    "CAN": "IR3TIB01CAM156N",
-    "DEU": "IR3TIB01DEM156N",
-    "GBR": "IR3TIB01GBM156N",
-    "FRA": "IR3TIB01FRA156N",
-}
+from ..supplementary_sources import (
+    RISK_FREE_SERIES_BY_ECONOMY,
+    WORLD_BANK_INDICATOR_MAP,
+)
 
 RequestsGet = Callable[..., requests.Response]
 _RISK_FREE_SOURCE_FETCH_COLUMNS: tuple[str, ...] = (
@@ -199,16 +185,10 @@ def refresh_supplementary_sources(
     world_bank_fetcher: Callable[[Sequence[str]], pd.DataFrame] | None = None,
 ) -> SupplementaryCollectionResult:
     observed_at = _utc_now()
-    resolved_economy_codes: Sequence[str]
-    if economy_codes is None:
-        holdings_weights = load_latest_holdings_country_weights(conn).frame
-        resolved_economy_codes = holdings_weights["economy_code"].astype(str).tolist()
-    else:
-        resolved_economy_codes = economy_codes
-
     normalized_economies = [
-        str(code).upper() for code in resolved_economy_codes if str(code).strip()
+        str(code).upper() for code in (economy_codes or ()) if str(code).strip()
     ]
+    normalized_economies = list(dict.fromkeys(normalized_economies))
     if not normalized_economies:
         return SupplementaryCollectionResult(
             status="no_economies",

@@ -4,7 +4,6 @@ import sqlite3
 from pathlib import Path
 
 from pystocks_next.storage.schema import (
-    MIGRATIONS,
     apply_migrations,
     current_schema_version,
 )
@@ -17,11 +16,11 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     first_version = initialize_operational_store(db_path)
     second_version = initialize_operational_store(db_path)
 
-    assert first_version == 8
-    assert second_version == 8
+    assert first_version == 9
+    assert second_version == 9
 
     with connect_sqlite(db_path, read_only=True) as conn:
-        assert current_schema_version(conn) == 8
+        assert current_schema_version(conn) == 9
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
         columns = {
@@ -35,31 +34,23 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
             row[1] for row in conn.execute("PRAGMA table_info(dividends_events_series)")
         }
         profile_columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(profile_and_fees_factors)")
+            row[1] for row in conn.execute("PRAGMA table_info(profile_and_fees)")
         }
         holdings_columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(holdings_asset_type_factors)")
+            row[1] for row in conn.execute("PRAGMA table_info(holdings_asset_type)")
         }
         holdings_quality_columns = {
-            row[1]
-            for row in conn.execute(
-                "PRAGMA table_info(holdings_debtor_quality_factors)"
-            )
+            row[1] for row in conn.execute("PRAGMA table_info(holdings_debtor_quality)")
         }
         ratios_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(ratios_key_ratios)")
         }
         dividends_columns = {
             row[1]
-            for row in conn.execute(
-                "PRAGMA table_info(dividends_industry_metrics_factors)"
-            )
+            for row in conn.execute("PRAGMA table_info(dividends_industry_metrics)")
         }
         morningstar_columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(morningstar_summary_factors)")
+            row[1] for row in conn.execute("PRAGMA table_info(morningstar_summary)")
         }
         lipper_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(lipper_ratings)")
@@ -79,14 +70,45 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     assert "universe_name" in lipper_columns
 
 
-def test_apply_migrations_upgrades_v1_store_through_supplementary_tables(
+def test_apply_migrations_marks_partial_legacy_store_with_canonical_schema(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "legacy_v1.sqlite"
 
     with sqlite3.connect(db_path) as conn:
-        for statement in MIGRATIONS[0].statements:
-            conn.execute(statement)
+        conn.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE raw_payload_blobs (
+                payload_hash TEXT PRIMARY KEY,
+                payload_bytes BLOB NOT NULL,
+                payload_size INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE raw_payload_observations (
+                observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payload_hash TEXT NOT NULL,
+                source_family TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                conid TEXT,
+                observed_at TEXT NOT NULL,
+                source_as_of_date TEXT,
+                UNIQUE(payload_hash, source_family, endpoint, conid, observed_at)
+            )
+            """
+        )
         conn.execute(
             """
             INSERT INTO schema_migrations (version, description, applied_at)
@@ -111,8 +133,8 @@ def test_apply_migrations_upgrades_v1_store_through_supplementary_tables(
         )
 
     with connect_sqlite(db_path) as conn:
-        assert apply_migrations(conn) == [2, 3, 4, 5, 6, 7, 8]
-        assert current_schema_version(conn) == 8
+        assert apply_migrations(conn) == [9]
+        assert current_schema_version(conn) == 9
         row = conn.execute(
             """
             SELECT source_as_of_date, capture_batch_id
@@ -137,10 +159,10 @@ def test_apply_migrations_upgrades_v1_store_through_supplementary_tables(
     assert "dividends_events_series" in table_names
     assert "supplementary_risk_free_daily" not in table_names
     assert "supplementary_world_bank_country_features" not in table_names
-    assert "profile_and_fees_factors" in table_names
-    assert "holdings_asset_type_factors" in table_names
-    assert "holdings_debtor_quality_factors" in table_names
+    assert "profile_and_fees" in table_names
+    assert "holdings_asset_type" in table_names
+    assert "holdings_debtor_quality" in table_names
     assert "ratios_key_ratios" in table_names
-    assert "dividends_industry_metrics_factors" in table_names
-    assert "morningstar_summary_factors" in table_names
+    assert "dividends_industry_metrics" in table_names
+    assert "morningstar_summary" in table_names
     assert "lipper_ratings" in table_names

@@ -37,7 +37,7 @@ def test_write_profile_and_fees_snapshot_persists_tall_factor_rows(
     factor_rows = temp_store.execute(
         """
         SELECT field_id, value_text, value_num, value_date, value_bool
-        FROM profile_and_fees_factors
+        FROM profile_and_fees
         WHERE conid = '100'
         ORDER BY field_id
         """
@@ -77,7 +77,7 @@ def test_write_holdings_snapshot_persists_tall_factor_rows(
     asset_type_rows = temp_store.execute(
         """
         SELECT bucket_id, value_num
-        FROM holdings_asset_type_factors
+        FROM holdings_asset_type
         WHERE conid = '100'
         ORDER BY bucket_id
         """
@@ -85,7 +85,7 @@ def test_write_holdings_snapshot_persists_tall_factor_rows(
     debtor_rows = temp_store.execute(
         """
         SELECT bucket_id, value_num
-        FROM holdings_debtor_quality_factors
+        FROM holdings_debtor_quality
         WHERE conid = '100'
         ORDER BY bucket_id
         """
@@ -93,7 +93,7 @@ def test_write_holdings_snapshot_persists_tall_factor_rows(
     maturity_rows = temp_store.execute(
         """
         SELECT bucket_id, value_num
-        FROM holdings_maturity_factors
+        FROM holdings_maturity
         WHERE conid = '100'
         ORDER BY bucket_id
         """
@@ -285,7 +285,7 @@ def test_write_dividends_snapshot_persists_tall_metric_rows(
     rows = temp_store.execute(
         """
         SELECT metric_id, value_num, currency
-        FROM dividends_industry_metrics_factors
+        FROM dividends_industry_metrics
         WHERE conid = '100'
         ORDER BY metric_id
         """
@@ -316,7 +316,7 @@ def test_write_morningstar_snapshot_persists_tall_summary_rows(
     rows = temp_store.execute(
         """
         SELECT metric_id, value_text, value_num
-        FROM morningstar_summary_factors
+        FROM morningstar_summary
         WHERE conid = '100'
         ORDER BY metric_id
         """

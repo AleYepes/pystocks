@@ -1279,13 +1279,13 @@ def write_profile_and_fees_snapshot(
         (conid, effective_at, observed_at, capture.payload_hash, batch_id),
     )
     conn.execute(
-        "DELETE FROM profile_and_fees_factors WHERE conid = ? AND effective_at = ?",
+        "DELETE FROM profile_and_fees WHERE conid = ? AND effective_at = ?",
         (conid, effective_at),
     )
     for row in factor_rows:
         conn.execute(
             """
-            INSERT INTO profile_and_fees_factors (
+            INSERT INTO profile_and_fees (
                 conid,
                 effective_at,
                 field_id,
@@ -1377,9 +1377,9 @@ def write_holdings_snapshot(
     _delete_snapshot_child_rows(
         conn,
         tables=(
-            "holdings_asset_type_factors",
-            "holdings_debtor_quality_factors",
-            "holdings_maturity_factors",
+            "holdings_asset_type",
+            "holdings_debtor_quality",
+            "holdings_maturity",
             "holdings_industry",
             "holdings_currency",
             "holdings_investor_country",
@@ -1396,7 +1396,7 @@ def write_holdings_snapshot(
     ):
         conn.execute(
             """
-            INSERT INTO holdings_asset_type_factors (
+            INSERT INTO holdings_asset_type (
                 conid,
                 effective_at,
                 bucket_id,
@@ -1427,7 +1427,7 @@ def write_holdings_snapshot(
     ):
         conn.execute(
             """
-            INSERT INTO holdings_debtor_quality_factors (
+            INSERT INTO holdings_debtor_quality (
                 conid,
                 effective_at,
                 bucket_id,
@@ -1458,7 +1458,7 @@ def write_holdings_snapshot(
     ):
         conn.execute(
             """
-            INSERT INTO holdings_maturity_factors (
+            INSERT INTO holdings_maturity (
                 conid,
                 effective_at,
                 bucket_id,
@@ -1745,13 +1745,13 @@ def write_dividends_snapshot(
         ),
     )
     conn.execute(
-        "DELETE FROM dividends_industry_metrics_factors WHERE conid = ? AND effective_at = ?",
+        "DELETE FROM dividends_industry_metrics WHERE conid = ? AND effective_at = ?",
         (conid, effective_at),
     )
     for row in _extract_dividends_industry_metric_rows(conid, effective_at, payload):
         conn.execute(
             """
-            INSERT INTO dividends_industry_metrics_factors (
+            INSERT INTO dividends_industry_metrics (
                 conid,
                 effective_at,
                 metric_id,
@@ -1838,13 +1838,13 @@ def write_morningstar_snapshot(
         ),
     )
     conn.execute(
-        "DELETE FROM morningstar_summary_factors WHERE conid = ? AND effective_at = ?",
+        "DELETE FROM morningstar_summary WHERE conid = ? AND effective_at = ?",
         (conid, effective_at),
     )
     for row in _extract_morningstar_summary_rows(conid, effective_at, payload):
         conn.execute(
             """
-            INSERT INTO morningstar_summary_factors (
+            INSERT INTO morningstar_summary (
                 conid,
                 effective_at,
                 metric_id,

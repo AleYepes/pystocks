@@ -9,27 +9,13 @@ from pystocks_next.storage import (
     load_risk_free_sources,
     load_world_bank_raw,
 )
-from pystocks_next.storage.writes import write_holdings_snapshot
-from pystocks_next.universe.products import UniverseInstrument, upsert_instruments
 
 
 def test_refresh_supplementary_sources_persists_raw_tables_and_fetch_logs(
     temp_store,
-    sample_holdings_payload: dict[str, object],
     sample_risk_free_sources_frame: pd.DataFrame,
     sample_world_bank_raw_frame: pd.DataFrame,
 ) -> None:
-    upsert_instruments(
-        temp_store,
-        [UniverseInstrument(conid="100", symbol="AAA", currency="USD")],
-    )
-    write_holdings_snapshot(
-        temp_store,
-        conid="100",
-        payload=sample_holdings_payload,
-        observed_at="2026-01-05T10:00:00+00:00",
-    )
-
     captured_economies: list[str] = []
 
     def fake_world_bank_fetcher(economy_codes: Sequence[str]) -> pd.DataFrame:
@@ -38,6 +24,7 @@ def test_refresh_supplementary_sources_persists_raw_tables_and_fetch_logs(
 
     result = refresh_supplementary_sources(
         temp_store,
+        economy_codes=["US"],
         risk_free_fetcher=lambda: sample_risk_free_sources_frame,
         world_bank_fetcher=fake_world_bank_fetcher,
     )

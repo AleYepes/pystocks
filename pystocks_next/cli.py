@@ -15,7 +15,11 @@ from .collection import (
 )
 from .config import PystocksNextConfig
 from .feature_inputs import build_analysis_input_bundle
-from .storage import connect_sqlite, initialize_operational_store
+from .storage import (
+    connect_sqlite,
+    initialize_operational_store,
+    load_latest_holdings_country_weights,
+)
 
 
 def _load_text_lines(path: str | None) -> list[str] | None:
@@ -129,8 +133,11 @@ class PyStocksNextCLI:
     ) -> dict[str, object]:
         config = self._config()
         initialize_operational_store(config.sqlite.path)
-        economy_codes = _load_text_lines(economy_codes_file)
         with connect_sqlite(config.sqlite.path) as conn:
+            economy_codes = _load_text_lines(economy_codes_file)
+            if economy_codes is None:
+                holdings_weights = load_latest_holdings_country_weights(conn).frame
+                economy_codes = holdings_weights["economy_code"].astype(str).tolist()
             result = refresh_supplementary_sources(
                 conn,
                 economy_codes=economy_codes,

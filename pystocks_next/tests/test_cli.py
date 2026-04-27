@@ -16,7 +16,7 @@ def test_init_storage_bootstraps_rebuild_store(
     result = PyStocksNextCLI().init_storage()
 
     assert result["status"] == "ok"
-    assert result["schema_version"] == 8
+    assert result["schema_version"] == 9
     assert Path(str(result["sqlite_path"])).exists()
     assert Path(str(result["artifacts_dir"])).exists()
 
