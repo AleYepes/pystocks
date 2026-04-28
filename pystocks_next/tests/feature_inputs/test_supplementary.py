@@ -13,6 +13,7 @@ from pystocks_next.storage import (
     write_supplementary_risk_free_sources,
     write_supplementary_world_bank_raw,
 )
+from pystocks_next.tests.support import RecordingProgressSink
 from pystocks_next.universe.products import UniverseInstrument, upsert_instruments
 
 
@@ -174,3 +175,19 @@ def test_build_analysis_input_bundle_reads_supplementary_inputs_from_storage(
     ]
     assert bundle.macro_features["economy_code"].tolist().count("USA") == 3
     assert bundle.macro_features["economy_code"].tolist().count("CAN") == 3
+
+
+def test_build_analysis_input_bundle_reports_progress(temp_store) -> None:
+    progress = RecordingProgressSink()
+
+    bundle = build_analysis_input_bundle(conn=temp_store, progress=progress)
+
+    assert bundle.prices.empty
+    assert progress.events == [
+        ("start", "Building feature inputs", 4, "step"),
+        ("advance", "Building feature inputs", 1, "Built price inputs"),
+        ("advance", "Building feature inputs", 1, "Built dividend inputs"),
+        ("advance", "Building feature inputs", 1, "Built snapshot inputs"),
+        ("advance", "Building feature inputs", 1, "Built supplementary inputs"),
+        ("close", "Building feature inputs", None, "Feature inputs ready"),
+    ]

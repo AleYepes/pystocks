@@ -151,12 +151,9 @@ def test_run_dividend_preprocess_writes_parquet_outputs(tmp_path, monkeypatch):
 
 def test_build_analysis_panel_writes_parquet_output(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        analysis_module, "load_price_history", lambda sqlite_path: pd.DataFrame()
-    )
-    monkeypatch.setattr(
         analysis_module,
-        "preprocess_price_history",
-        lambda price_df, config=None, show_progress=False: {
+        "load_saved_price_preprocess_results",
+        lambda output_dir=None: {
             "prices": pd.DataFrame(
                 [
                     {
@@ -171,13 +168,8 @@ def test_build_analysis_panel_writes_parquet_output(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         analysis_module,
-        "save_price_preprocess_results",
-        lambda result, output_dir=None: {"prices_path": "prices.parquet"},
-    )
-    monkeypatch.setattr(
-        analysis_module,
         "load_snapshot_features",
-        lambda sqlite_path: pd.DataFrame(
+        lambda output_dir=None: pd.DataFrame(
             [{"conid": "a", "effective_at": pd.Timestamp("2026-01-31")}]
         ),
     )
@@ -191,14 +183,14 @@ def test_build_analysis_panel_writes_parquet_output(tmp_path, monkeypatch):
     monkeypatch.setattr(
         analysis_module,
         "load_risk_free_daily",
-        lambda sqlite_path: pd.DataFrame(
+        lambda output_dir=None: pd.DataFrame(
             {"trade_date": [pd.Timestamp("2026-01-31")], "daily_nominal_rate": [0.0]}
         ),
     )
     monkeypatch.setattr(
         analysis_module,
         "load_world_bank_country_features",
-        lambda sqlite_path: pd.DataFrame(
+        lambda output_dir=None: pd.DataFrame(
             [
                 {
                     "economy_code": "USA",

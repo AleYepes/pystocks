@@ -12,6 +12,7 @@ from urllib.parse import parse_qs
 
 import httpx
 
+from ..progress import ProgressSink
 from ..storage import (
     UnresolvedEffectiveAtError,
     load_latest_price_effective_at_by_conid,
@@ -524,6 +525,7 @@ class FundamentalsCollector:
         force: bool = False,
         telemetry_output_path: Path | None = None,
         max_auth_retries: int = 1,
+        progress: ProgressSink | None = None,
     ) -> FundamentalsCollectionResult:
         if explicit_conids is not None:
             targets = select_explicit_targets(list(explicit_conids))
@@ -577,6 +579,15 @@ class FundamentalsCollector:
         aborted = False
 
         pending = list(targets)
+        tracker = (
+            progress.stage(
+                "Collecting fundamentals",
+                total=len(targets),
+                unit="conid",
+            )
+            if progress is not None
+            else None
+        )
         while pending:
             conid = pending.pop(0)
             async with self.session.get_client() as client:
@@ -594,6 +605,8 @@ class FundamentalsCollector:
                     break
                 auth_retries += 1
                 pending.insert(0, conid)
+                if tracker is not None:
+                    tracker.advance(step=0, detail=f"reauthenticated for {conid}")
                 continue
 
             storage_result = self.persist_outcome(conn, outcome)
@@ -604,6 +617,12 @@ class FundamentalsCollector:
             unchanged_events += storage_result.unchanged_events
             series_raw_rows_written += storage_result.series_raw_rows_written
             series_latest_rows_upserted += storage_result.series_latest_rows_upserted
+            if tracker is not None:
+                tracker.advance(
+                    detail=(
+                        f"{conid} {outcome.status}, {saved_snapshots} snapshots saved"
+                    )
+                )
 
         telemetry_path_text: str | None = None
         latest_telemetry_path_text: str | None = None
@@ -620,6 +639,13 @@ class FundamentalsCollector:
             auth_retries=auth_retries,
             aborted=aborted,
         )
+        if tracker is not None:
+            tracker.close(
+                detail=(
+                    f"{processed_conids}/{len(targets)} conids, "
+                    f"{saved_snapshots} snapshots saved"
+                )
+            )
         if telemetry_output_path is not None:
             telemetry_path, latest_path = self.telemetry.write_report(
                 telemetry_output_path,

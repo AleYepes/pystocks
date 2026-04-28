@@ -1,12 +1,13 @@
 # pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportOperatorIssue=false, reportGeneralTypeIssues=false
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pycountry
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
+from ..progress import make_progress_bar
 from ..storage.readers import (
     load_risk_free_daily as _load_risk_free_daily,
 )
@@ -16,23 +17,11 @@ from ..storage.readers import (
 from ..storage.readers import (
     query_frame,
 )
-
-WORLD_BANK_INDICATOR_MAP = {
-    "SP.POP.TOTL": "population",
-    "NY.GDP.PCAP.CD": "gdp_pcap",
-    "NY.GDP.MKTP.CD": "economic_output_gdp",
-    "BX.KLT.DINV.WD.GD.ZS": "foreign_direct_investment",
-    "NE.IMP.GNFS.ZS": "imports_goods_services",
-    "NE.EXP.GNFS.ZS": "exports_goods_services",
-}
-
-RISK_FREE_SERIES_BY_ECONOMY = {
-    "USA": "DTB3",
-    "CAN": "IR3TIB01CAM156N",
-    "DEU": "IR3TIB01DEM156N",
-    "GBR": "IR3TIB01GBM156N",
-    "FRA": "IR3TIB01FRA156N",
-}
+from ..storage.txn import transaction
+from ..supplementary_contract import (
+    RISK_FREE_SERIES_BY_ECONOMY,
+    normalize_economy_code,
+)
 
 
 @dataclass
@@ -47,26 +36,7 @@ def _empty_frame(columns):
 
 
 def _normalize_economy_code(value):
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    upper = text.upper()
-    if len(upper) == 3 and upper.isalpha():
-        country = pycountry.countries.get(alpha_3=upper)
-        return country.alpha_3 if country else upper
-    if len(upper) == 2 and upper.isalpha():
-        country = pycountry.countries.get(alpha_2=upper)
-        return country.alpha_3 if country else upper
-    country = pycountry.countries.get(name=text)
-    if country:
-        return country.alpha_3
-    try:
-        matches = pycountry.countries.search_fuzzy(text)
-    except LookupError:
-        return upper
-    return matches[0].alpha_3 if matches else upper
+    return normalize_economy_code(value)
 
 
 def load_risk_free_sources(sqlite_path=SQLITE_DB_PATH):
@@ -501,6 +471,120 @@ def preprocess_world_bank_country_features(raw_df, config=None):
     )
 
 
+def _utc_now():
+    return datetime.now(UTC).isoformat()
+
+
+def _write_preprocess_log(
+    tx, dataset, row_count, min_key=None, max_key=None, notes=None
+):
+    tx.execute(
+        """
+        INSERT INTO supplementary_fetch_log (
+            dataset,
+            fetched_at,
+            status,
+            record_count,
+            min_key,
+            max_key,
+            notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [dataset, _utc_now(), "ok", int(row_count), min_key, max_key, notes],
+    )
+
+
+def persist_supplementary_preprocess_results(result, sqlite_path=SQLITE_DB_PATH):
+    risk_free_daily = result["risk_free_daily"]
+    world_bank_country_features = result["world_bank_country_features"]
+    with transaction(sqlite_path) as tx:
+        tx.write_frame(
+            "supplementary_risk_free_daily",
+            risk_free_daily,
+            if_exists="replace",
+            index=False,
+        )
+        tx.write_frame(
+            "supplementary_world_bank_country_features",
+            world_bank_country_features,
+            if_exists="replace",
+            index=False,
+        )
+        _write_preprocess_log(
+            tx,
+            "risk_free_daily",
+            len(risk_free_daily),
+            min_key=(
+                str(risk_free_daily["trade_date"].min().date())
+                if not risk_free_daily.empty
+                else None
+            ),
+            max_key=(
+                str(risk_free_daily["trade_date"].max().date())
+                if not risk_free_daily.empty
+                else None
+            ),
+            notes="Preprocessed weighted daily risk-free rates",
+        )
+        _write_preprocess_log(
+            tx,
+            "world_bank_country_features",
+            len(world_bank_country_features),
+            min_key=(
+                str(int(world_bank_country_features["feature_year"].min()))
+                if not world_bank_country_features.empty
+                else None
+            ),
+            max_key=(
+                str(int(world_bank_country_features["feature_year"].max()))
+                if not world_bank_country_features.empty
+                else None
+            ),
+            notes="Preprocessed annual country macro features",
+        )
+
+
+def _analysis_output_dir(output_dir=None):
+    return Path(output_dir or (DATA_DIR / "analysis"))
+
+
+def load_saved_risk_free_daily(output_dir=None):
+    path = _analysis_output_dir(output_dir) / "analysis_risk_free_daily.parquet"
+    if not path.exists():
+        raise FileNotFoundError(path)
+    df = pd.read_parquet(path)
+    if df.empty:
+        return df
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    df["observed_at"] = pd.to_datetime(df["observed_at"])
+    for column in ["nominal_rate", "daily_nominal_rate", "source_count"]:
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+    return df
+
+
+def load_saved_world_bank_country_features(output_dir=None):
+    path = (
+        _analysis_output_dir(output_dir)
+        / "analysis_world_bank_country_features.parquet"
+    )
+    if not path.exists():
+        raise FileNotFoundError(path)
+    df = pd.read_parquet(path)
+    if df.empty:
+        return df
+    if "economy_code" in df.columns:
+        df["economy_code"] = df["economy_code"].astype(str).str.upper()
+    for column in ["effective_at", "observed_at"]:
+        if column in df.columns:
+            df[column] = pd.to_datetime(df[column], errors="coerce")
+    for column in df.columns:
+        if column in {"economy_code", "effective_at", "observed_at"}:
+            continue
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    return df
+
+
 def save_supplementary_preprocess_results(result, output_dir=None):
     output_dir = Path(output_dir or (DATA_DIR / "analysis"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -515,25 +599,36 @@ def save_supplementary_preprocess_results(result, output_dir=None):
 
 
 def run_supplementary_preprocess(
-    sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs
+    sqlite_path=SQLITE_DB_PATH, output_dir=None, show_progress=False, **config_kwargs
 ):
     config = SupplementaryPreprocessConfig(**config_kwargs)
-    series_weights = build_risk_free_series_weights(
-        load_risk_free_country_weights(sqlite_path)
-    )
-    risk_free = derive_risk_free_daily(
-        load_risk_free_sources(sqlite_path),
-        config=config,
-        series_weights=series_weights,
-    )
-    world_bank = preprocess_world_bank_country_features(
-        load_world_bank_raw(sqlite_path), config=config
-    )
+    with make_progress_bar(
+        show_progress=show_progress,
+        total=2,
+        desc="Supplementary preprocess",
+        unit="stage",
+        leave=True,
+    ) as progress:
+        series_weights = build_risk_free_series_weights(
+            load_risk_free_country_weights(sqlite_path)
+        )
+        risk_free = derive_risk_free_daily(
+            load_risk_free_sources(sqlite_path),
+            config=config,
+            series_weights=series_weights,
+        )
+        progress.update(1)
+
+        world_bank = preprocess_world_bank_country_features(
+            load_world_bank_raw(sqlite_path), config=config
+        )
+        progress.update(1)
     result = {
         "risk_free_daily": risk_free,
         "world_bank_country_features": world_bank,
         "config": config,
     }
+    persist_supplementary_preprocess_results(result, sqlite_path=sqlite_path)
     paths = save_supplementary_preprocess_results(result, output_dir=output_dir)
     return {
         "status": "ok",

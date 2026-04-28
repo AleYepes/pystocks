@@ -9,6 +9,7 @@ from pystocks_next.storage import (
     load_risk_free_sources,
     load_world_bank_raw,
 )
+from pystocks_next.tests.support import RecordingProgressSink
 
 
 def test_refresh_supplementary_sources_persists_raw_tables_and_fetch_logs(
@@ -58,3 +59,43 @@ def test_refresh_supplementary_sources_returns_no_economies_without_targets(
     assert result.status == "no_economies"
     assert result.economy_count == 0
     assert result.fetch_log_rows == 0
+
+
+def test_refresh_supplementary_sources_reports_progress(
+    temp_store,
+    sample_risk_free_sources_frame: pd.DataFrame,
+    sample_world_bank_raw_frame: pd.DataFrame,
+) -> None:
+    progress = RecordingProgressSink()
+
+    refresh_supplementary_sources(
+        temp_store,
+        economy_codes=["US"],
+        risk_free_fetcher=lambda: sample_risk_free_sources_frame,
+        world_bank_fetcher=lambda economy_codes: sample_world_bank_raw_frame,
+        progress=progress,
+    )
+
+    assert progress.events == [
+        ("start", "Refreshing supplementary data", 4, "step"),
+        (
+            "advance",
+            "Refreshing supplementary data",
+            1,
+            "Fetched risk-free source series",
+        ),
+        ("advance", "Refreshing supplementary data", 1, "Fetched World Bank series"),
+        (
+            "advance",
+            "Refreshing supplementary data",
+            1,
+            "Persisted risk-free source series",
+        ),
+        (
+            "advance",
+            "Refreshing supplementary data",
+            1,
+            "Persisted supplementary rows for 1 economies",
+        ),
+        ("close", "Refreshing supplementary data", None, "4 rows written"),
+    ]

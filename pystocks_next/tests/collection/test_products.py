@@ -9,6 +9,7 @@ from pystocks_next.collection.products import (
     fetch_product_page,
     refresh_product_universe,
 )
+from pystocks_next.tests.support import RecordingProgressSink
 from pystocks_next.universe import list_instruments
 
 
@@ -98,3 +99,27 @@ def test_refresh_product_universe_filters_malformed_and_dedupes(
     assert result.products_upserted == 1
     assert result.page_count == 1
     assert [(item.conid, item.symbol) for item in instruments] == [("100", "AAA2")]
+
+
+def test_refresh_product_universe_reports_progress(temp_store) -> None:
+    client = _FakeClient(
+        [
+            _FakeResponse(200, {"products": [{"conid": "100"}, {"conid": "101"}]}),
+            _FakeResponse(200, {"products": []}),
+        ]
+    )
+    progress = RecordingProgressSink()
+
+    asyncio.run(
+        refresh_product_universe(
+            temp_store,
+            client=client,
+            progress=progress,
+        )
+    )
+
+    assert progress.events == [
+        ("start", "Refreshing universe", None, "page"),
+        ("advance", "Refreshing universe", 1, "2 products across 1 pages"),
+        ("close", "Refreshing universe", None, "2 products across 1 pages"),
+    ]

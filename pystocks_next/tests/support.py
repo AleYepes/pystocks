@@ -5,6 +5,37 @@ import pandas as pd
 from pystocks_next.storage.reads import SNAPSHOT_TABLE_COLUMNS
 
 
+class RecordingProgressTracker:
+    def __init__(
+        self,
+        events: list[tuple[str, str, object | None, object | None]],
+        label: str,
+    ) -> None:
+        self._events = events
+        self._label = label
+
+    def advance(self, step: int = 1, *, detail: str | None = None) -> None:
+        self._events.append(("advance", self._label, step, detail))
+
+    def close(self, *, detail: str | None = None) -> None:
+        self._events.append(("close", self._label, None, detail))
+
+
+class RecordingProgressSink:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, object | None, object | None]] = []
+
+    def stage(
+        self,
+        label: str,
+        *,
+        total: int | None = None,
+        unit: str = "item",
+    ) -> RecordingProgressTracker:
+        self.events.append(("start", label, total, unit))
+        return RecordingProgressTracker(self.events, label)
+
+
 def build_sample_raw_payload(
     *, conid: str = "123", as_of_date: str = "2026-01-02"
 ) -> dict[str, object]:

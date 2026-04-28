@@ -5,130 +5,17 @@ import numpy as np
 import pandas as pd
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
+from ..progress import make_progress_bar
 from ..storage.readers import (
     load_snapshot_feature_tables as _load_snapshot_feature_tables,
 )
+from .snapshot_contract import SNAPSHOT_SOURCE_CONTRACTS, SNAPSHOT_TABLE_COLUMNS
 
 
 @dataclass
 class SnapshotPreprocessConfig:
     holdings_sum_tolerance: float = 0.05
     sparse_category_threshold: int = 1
-
-
-SNAPSHOT_TABLE_COLUMNS = {
-    "profile_and_fees": [
-        "conid",
-        "effective_at",
-        "asset_type",
-        "classification",
-        "distribution_details",
-        "domicile",
-        "fiscal_date",
-        "fund_category",
-        "fund_management_company",
-        "fund_manager_benchmark",
-        "fund_market_cap_focus",
-        "geographical_focus",
-        "inception_date",
-        "management_approach",
-        "management_expenses",
-        "manager_tenure",
-        "maturity_date",
-        "objective_type",
-        "portfolio_manager",
-        "redemption_charge_actual",
-        "redemption_charge_max",
-        "scheme",
-        "total_expense_ratio",
-        "total_net_assets_value",
-        "total_net_assets_date",
-        "objective",
-        "jap_fund_warning",
-        "theme_name",
-    ],
-    "holdings_asset_type": [
-        "conid",
-        "effective_at",
-        "equity",
-        "cash",
-        "fixed_income",
-        "other",
-    ],
-    "holdings_debtor_quality": [
-        "conid",
-        "effective_at",
-        "quality_aaa",
-        "quality_aa",
-        "quality_a",
-        "quality_bbb",
-        "quality_bb",
-        "quality_b",
-        "quality_ccc",
-        "quality_cc",
-        "quality_c",
-        "quality_d",
-        "quality_not_rated",
-        "quality_not_available",
-    ],
-    "holdings_maturity": [
-        "conid",
-        "effective_at",
-        "maturity_less_than_1_year",
-        "maturity_1_to_3_years",
-        "maturity_3_to_5_years",
-        "maturity_5_to_10_years",
-        "maturity_10_to_20_years",
-        "maturity_20_to_30_years",
-        "maturity_greater_than_30_years",
-        "maturity_other",
-    ],
-    "holdings_industry": ["conid", "effective_at", "industry", "value_num"],
-    "holdings_currency": ["conid", "effective_at", "code", "currency", "value_num"],
-    "holdings_investor_country": [
-        "conid",
-        "effective_at",
-        "country_code",
-        "country",
-        "value_num",
-    ],
-    "holdings_geographic_weights": ["conid", "effective_at", "region", "value_num"],
-    "holdings_debt_type": ["conid", "effective_at", "debt_type", "value_num"],
-    "holdings_top10": ["conid", "effective_at", "name", "holding_weight_num"],
-    "ratios_key_ratios": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
-    "ratios_financials": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
-    "ratios_fixed_income": [
-        "conid",
-        "effective_at",
-        "metric_id",
-        "value_num",
-        "vs_num",
-    ],
-    "ratios_dividend": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
-    "ratios_zscore": ["conid", "effective_at", "metric_id", "value_num", "vs_num"],
-    "dividends_industry_metrics": [
-        "conid",
-        "effective_at",
-        "dividend_yield",
-        "annual_dividend",
-        "dividend_ttm",
-        "dividend_yield_ttm",
-        "currency",
-    ],
-    "morningstar_summary": [
-        "conid",
-        "effective_at",
-        "medalist_rating",
-        "process",
-        "people",
-        "parent",
-        "morningstar_rating",
-        "sustainability_rating",
-        "category",
-        "category_index",
-    ],
-    "lipper_ratings": ["conid", "effective_at", "period", "metric_id", "value_num"],
-}
 
 
 def _empty_frame(columns):
@@ -276,6 +163,74 @@ def _assign_sleeve(row):
     if "mixed" in asset_type or "alternative" in asset_type or "money" in asset_type:
         return "other"
     return "equity"
+
+
+def _compose_feature_frames(frames):
+    normalized_frames = []
+    for frame in frames:
+        if frame.empty:
+            continue
+        work = frame.copy()
+        work["conid"] = work["conid"].astype(str)
+        work["effective_at"] = pd.to_datetime(work["effective_at"])
+        normalized_frames.append(
+            work.sort_values(["conid", "effective_at"]).reset_index(drop=True)
+        )
+
+    if not normalized_frames:
+        return _empty_frame(["conid", "effective_at"])
+
+    composed = (
+        pd.concat(
+            [frame[["conid", "effective_at"]] for frame in normalized_frames],
+            ignore_index=True,
+        )
+        .drop_duplicates()
+        .sort_values(["conid", "effective_at"])
+        .reset_index(drop=True)
+    )
+
+    for frame in normalized_frames:
+        value_columns = [
+            column
+            for column in frame.columns
+            if column not in {"conid", "effective_at"}
+        ]
+        if not value_columns:
+            continue
+
+        merged_parts = []
+        for conid, left_group in composed.groupby("conid", sort=False):
+            left_group = left_group.sort_values("effective_at").reset_index(drop=True)
+            right_group = (
+                frame.loc[frame["conid"] == conid]
+                .sort_values("effective_at")
+                .reset_index(drop=True)
+            )
+            if right_group.empty:
+                empty_group = left_group.copy()
+                for column in value_columns:
+                    empty_group[column] = np.nan
+                merged_parts.append(empty_group)
+                continue
+
+            merged_parts.append(
+                pd.merge_asof(
+                    left_group,
+                    right_group,
+                    on="effective_at",
+                    by="conid",
+                    direction="backward",
+                )
+            )
+
+        composed = (
+            pd.concat(merged_parts, ignore_index=True)
+            .sort_values(["conid", "effective_at"])
+            .reset_index(drop=True)
+        )
+
+    return composed
 
 
 def _summarize_source_table(df, table_name):
@@ -508,7 +463,12 @@ def load_snapshot_feature_tables(sqlite_path=SQLITE_DB_PATH):
     return _load_snapshot_feature_tables(sqlite_path=sqlite_path)
 
 
-def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB_PATH):
+def preprocess_snapshot_features(
+    tables=None,
+    config=None,
+    sqlite_path=SQLITE_DB_PATH,
+    show_progress=False,
+):
     config = config or SnapshotPreprocessConfig()
     tables = (
         load_snapshot_feature_tables(sqlite_path)
@@ -521,147 +481,171 @@ def preprocess_snapshot_features(tables=None, config=None, sqlite_path=SQLITE_DB
     ratio_diagnostics = []
     table_summary = []
 
-    for table_name, df in tables.items():
-        table_summary.append(_summarize_source_table(df, table_name))
+    with make_progress_bar(
+        show_progress=show_progress,
+        total=13,
+        desc="Snapshot preprocess",
+        unit="stage",
+        leave=True,
+    ) as progress:
+        for table_name, df in tables.items():
+            table_summary.append(_summarize_source_table(df, table_name))
+        progress.update(1)
 
-    profile = tables["profile_and_fees"].copy()
-    if not profile.empty:
-        if "total_net_assets_value" in profile.columns:
-            profile["total_net_assets_num"] = profile["total_net_assets_value"].map(
-                _parse_scaled_number
+        profile = tables["profile_and_fees"].copy()
+        if not profile.empty:
+            if "total_net_assets_value" in profile.columns:
+                profile["total_net_assets_num"] = profile["total_net_assets_value"].map(
+                    _parse_scaled_number
+                )
+            frames.append(
+                _prefix_frame(
+                    profile,
+                    SNAPSHOT_SOURCE_CONTRACTS["profile_and_fees"].prefix
+                    or "profile_and_fees",
+                )
             )
-        frames.append(_prefix_frame(profile, "profile"))
+        progress.update(1)
 
-    wide_holdings = [
-        ("holdings_asset_type", "holding_asset"),
-        ("holdings_debtor_quality", "holding_quality"),
-        ("holdings_maturity", "holding_maturity"),
-    ]
-    for table_name, prefix in wide_holdings:
-        df = tables[table_name].copy()
-        if df.empty:
-            continue
-        value_columns = [
-            col for col in df.columns if col not in {"conid", "effective_at"}
-        ]
-        holdings_diagnostics.append(
-            _wide_holdings_diagnostics(df, table_name, value_columns, config)
-        )
-        frames.append(_prefix_frame(df, prefix))
-
-    industry = tables["holdings_industry"].copy()
-    if not industry.empty:
-        holdings_diagnostics.append(
-            _long_holdings_diagnostics(
-                industry, "holdings_industry", "industry", "value_num", config
+        for table_name, contract in SNAPSHOT_SOURCE_CONTRACTS.items():
+            if contract.output_kind != "wide_holdings":
+                continue
+            df = tables[table_name].copy()
+            if df.empty:
+                continue
+            value_columns = [
+                col for col in df.columns if col not in {"conid", "effective_at"}
+            ]
+            holdings_diagnostics.append(
+                _wide_holdings_diagnostics(df, table_name, value_columns, config)
             )
-        )
-        frames.append(
-            _pivot_series_frame(industry, "industry", "value_num", "industry")
-        )
+            frames.append(_prefix_frame(df, contract.prefix or table_name))
+        progress.update(1)
 
-    currency = tables["holdings_currency"].copy()
-    if not currency.empty:
-        holdings_diagnostics.append(
-            _long_holdings_diagnostics(
-                currency, "holdings_currency", "code", "value_num", config
+        industry = tables["holdings_industry"].copy()
+        if not industry.empty:
+            holdings_diagnostics.append(
+                _long_holdings_diagnostics(
+                    industry, "holdings_industry", "industry", "value_num", config
+                )
             )
-        )
-        currency["currency_key"] = currency["code"].where(
-            currency["code"].notna(), currency["currency"]
-        )
-        frames.append(
-            _pivot_series_frame(currency, "currency_key", "value_num", "currency")
-        )
-
-    country = tables["holdings_investor_country"].copy()
-    if not country.empty:
-        holdings_diagnostics.append(
-            _long_holdings_diagnostics(
-                country,
-                "holdings_investor_country",
-                "country_code",
-                "value_num",
-                config,
+            frames.append(
+                _pivot_series_frame(industry, "industry", "value_num", "industry")
             )
-        )
-        country["country_key"] = country["country_code"].where(
-            country["country_code"].notna(), country["country"]
-        )
-        frames.append(
-            _pivot_series_frame(country, "country_key", "value_num", "country")
-        )
+        progress.update(1)
 
-    region = tables["holdings_geographic_weights"].copy()
-    if not region.empty:
-        holdings_diagnostics.append(
-            _long_holdings_diagnostics(
-                region, "holdings_geographic_weights", "region", "value_num", config
+        currency = tables["holdings_currency"].copy()
+        if not currency.empty:
+            holdings_diagnostics.append(
+                _long_holdings_diagnostics(
+                    currency, "holdings_currency", "code", "value_num", config
+                )
             )
-        )
-        frames.append(_pivot_series_frame(region, "region", "value_num", "region"))
-
-    debt_type = tables["holdings_debt_type"].copy()
-    if not debt_type.empty:
-        holdings_diagnostics.append(
-            _long_holdings_diagnostics(
-                debt_type, "holdings_debt_type", "debt_type", "value_num", config
+            currency["currency_key"] = currency["code"].where(
+                currency["code"].notna(), currency["currency"]
             )
+            frames.append(
+                _pivot_series_frame(currency, "currency_key", "value_num", "currency")
+            )
+        progress.update(1)
+
+        country = tables["holdings_investor_country"].copy()
+        if not country.empty:
+            holdings_diagnostics.append(
+                _long_holdings_diagnostics(
+                    country,
+                    "holdings_investor_country",
+                    "country_code",
+                    "value_num",
+                    config,
+                )
+            )
+            country["country_key"] = country["country_code"].where(
+                country["country_code"].notna(), country["country"]
+            )
+            frames.append(
+                _pivot_series_frame(country, "country_key", "value_num", "country")
+            )
+        progress.update(1)
+
+        region = tables["holdings_geographic_weights"].copy()
+        if not region.empty:
+            holdings_diagnostics.append(
+                _long_holdings_diagnostics(
+                    region, "holdings_geographic_weights", "region", "value_num", config
+                )
+            )
+            frames.append(_pivot_series_frame(region, "region", "value_num", "region"))
+        progress.update(1)
+
+        debt_type = tables["holdings_debt_type"].copy()
+        if not debt_type.empty:
+            holdings_diagnostics.append(
+                _long_holdings_diagnostics(
+                    debt_type, "holdings_debt_type", "debt_type", "value_num", config
+                )
+            )
+            frames.append(
+                _pivot_series_frame(debt_type, "debt_type", "value_num", "debt_type")
+            )
+        progress.update(1)
+
+        top10_features, top10_diagnostics = _top10_features_and_diagnostics(
+            tables["holdings_top10"], config
         )
-        frames.append(
-            _pivot_series_frame(debt_type, "debt_type", "value_num", "debt_type")
-        )
+        if not top10_features.empty:
+            frames.append(top10_features)
+        if not top10_diagnostics.empty:
+            holdings_diagnostics.append(top10_diagnostics)
+        progress.update(1)
 
-    top10_features, top10_diagnostics = _top10_features_and_diagnostics(
-        tables["holdings_top10"], config
-    )
-    if not top10_features.empty:
-        frames.append(top10_features)
-    if not top10_diagnostics.empty:
-        holdings_diagnostics.append(top10_diagnostics)
+        for table_name, contract in SNAPSHOT_SOURCE_CONTRACTS.items():
+            if contract.output_kind != "metric":
+                continue
+            df = tables[table_name].copy()
+            if df.empty:
+                continue
+            key_cols = list(contract.key_cols)
+            ratio_diagnostics.append(_ratio_diagnostics(df, table_name, key_cols))
+            frames.append(
+                _pivot_metric_frame(df, contract.prefix or table_name, key_cols)
+            )
+        progress.update(1)
 
-    ratio_tables = [
-        ("ratios_key_ratios", "ratio_key", ["metric_id"]),
-        ("ratios_financials", "ratio_financial", ["metric_id"]),
-        ("ratios_fixed_income", "ratio_fixed_income", ["metric_id"]),
-        ("ratios_dividend", "ratio_dividend", ["metric_id"]),
-        ("ratios_zscore", "ratio_zscore", ["metric_id"]),
-    ]
-    for table_name, prefix, key_cols in ratio_tables:
-        df = tables[table_name].copy()
-        if df.empty:
-            continue
-        ratio_diagnostics.append(_ratio_diagnostics(df, table_name, key_cols))
-        frames.append(_pivot_metric_frame(df, prefix, key_cols))
+        dividend_metrics = tables["dividends_industry_metrics"].copy()
+        if not dividend_metrics.empty:
+            frames.append(
+                _prefix_frame(
+                    dividend_metrics,
+                    SNAPSHOT_SOURCE_CONTRACTS["dividends_industry_metrics"].prefix
+                    or "dividends_industry_metrics",
+                )
+            )
+        progress.update(1)
 
-    dividend_metrics = tables["dividends_industry_metrics"].copy()
-    if not dividend_metrics.empty:
-        frames.append(_prefix_frame(dividend_metrics, "dividend_metric"))
+        morningstar = tables["morningstar_summary"].copy()
+        if not morningstar.empty:
+            frames.append(
+                _prefix_frame(
+                    morningstar,
+                    SNAPSHOT_SOURCE_CONTRACTS["morningstar_summary"].prefix
+                    or "morningstar_summary",
+                )
+            )
+        progress.update(1)
 
-    morningstar = tables["morningstar_summary"].copy()
-    if not morningstar.empty:
-        frames.append(_prefix_frame(morningstar, "morningstar"))
-
-    lipper = tables["lipper_ratings"].copy()
-    if not lipper.empty:
-        ratio_diagnostics.append(
-            _ratio_diagnostics(lipper, "lipper_ratings", ["period", "metric_id"])
-        )
-        frames.append(_pivot_metric_frame(lipper, "lipper", ["period", "metric_id"]))
-
-    frames = [frame for frame in frames if not frame.empty]
-    if not frames:
-        features = _empty_frame(["conid", "effective_at", "sleeve"])
-    else:
-        features = frames[0]
-        for frame in frames[1:]:
-            features = features.merge(frame, on=["conid", "effective_at"], how="outer")
-        features["conid"] = features["conid"].astype(str)
-        features["effective_at"] = pd.to_datetime(features["effective_at"])
-        features["sleeve"] = features.apply(_assign_sleeve, axis=1)
-        features = features.sort_values(["conid", "effective_at"]).reset_index(
-            drop=True
-        )
+        frames = [frame for frame in frames if not frame.empty]
+        if not frames:
+            features = _empty_frame(["conid", "effective_at", "sleeve"])
+        else:
+            features = _compose_feature_frames(frames)
+            features["conid"] = features["conid"].astype(str)
+            features["effective_at"] = pd.to_datetime(features["effective_at"])
+            features["sleeve"] = features.apply(_assign_sleeve, axis=1)
+            features = features.sort_values(["conid", "effective_at"]).reset_index(
+                drop=True
+            )
+        progress.update(1)
 
     holdings_diag = (
         pd.concat(holdings_diagnostics, ignore_index=True)
@@ -739,11 +723,28 @@ def save_snapshot_preprocess_results(result, output_dir=None):
     }
 
 
+def load_saved_snapshot_features(output_dir=None):
+    output_dir = Path(output_dir or (DATA_DIR / "analysis"))
+    features_path = output_dir / "analysis_snapshot_features.parquet"
+    if not features_path.exists():
+        raise FileNotFoundError(features_path)
+    features = pd.read_parquet(features_path)
+    if features.empty:
+        return features
+    features["conid"] = features["conid"].astype(str)
+    features["effective_at"] = pd.to_datetime(features["effective_at"])
+    return features
+
+
 def run_snapshot_preprocess(
-    sqlite_path=SQLITE_DB_PATH, output_dir=None, **config_kwargs
+    sqlite_path=SQLITE_DB_PATH, output_dir=None, show_progress=False, **config_kwargs
 ):
     config = SnapshotPreprocessConfig(**config_kwargs)
-    result = preprocess_snapshot_features(config=config, sqlite_path=sqlite_path)
+    result = preprocess_snapshot_features(
+        config=config,
+        sqlite_path=sqlite_path,
+        show_progress=show_progress,
+    )
     paths = save_snapshot_preprocess_results(result, output_dir=output_dir)
 
     features = result["features"]

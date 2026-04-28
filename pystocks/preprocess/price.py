@@ -338,6 +338,68 @@ def save_price_preprocess_results(result, output_dir=None):
     }
 
 
+def load_saved_price_preprocess_results(output_dir=None):
+    output_dir = Path(output_dir or (DATA_DIR / "analysis"))
+    prices_path = output_dir / "analysis_daily_returns.parquet"
+    eligibility_path = output_dir / "analysis_price_eligibility.parquet"
+    if not prices_path.exists():
+        raise FileNotFoundError(prices_path)
+    if not eligibility_path.exists():
+        raise FileNotFoundError(eligibility_path)
+
+    prices = pd.read_parquet(prices_path)
+    eligibility = pd.read_parquet(eligibility_path)
+
+    if not prices.empty:
+        prices["conid"] = prices["conid"].astype(str)
+        prices["trade_date"] = pd.to_datetime(prices["trade_date"])
+        numeric_columns = [
+            "price",
+            "open",
+            "high",
+            "low",
+            "close",
+            "price_value",
+            "clean_price",
+            "raw_return",
+            "clean_return",
+        ]
+        bool_columns = [
+            "is_valid_price",
+            "is_stale_price",
+            "is_outlier_return",
+            "is_price_level_anomaly",
+            "is_clean_price",
+        ]
+        for column in numeric_columns:
+            if column in prices.columns:
+                prices[column] = pd.to_numeric(prices[column], errors="coerce")
+        for column in bool_columns:
+            if column in prices.columns:
+                prices[column] = prices[column].astype(bool)
+
+    if not eligibility.empty:
+        eligibility["conid"] = eligibility["conid"].astype(str)
+        for column in [
+            "total_rows",
+            "valid_rows",
+            "expected_business_days",
+            "max_internal_gap_days",
+        ]:
+            if column in eligibility.columns:
+                eligibility[column] = pd.to_numeric(
+                    eligibility[column], errors="coerce"
+                )
+        if "missing_ratio" in eligibility.columns:
+            eligibility["missing_ratio"] = pd.to_numeric(
+                eligibility["missing_ratio"], errors="coerce"
+            )
+        if "eligible" in eligibility.columns:
+            eligibility["eligible"] = eligibility["eligible"].astype(bool)
+
+    return {"prices": prices, "eligibility": eligibility}
+
+
 def run_price_preprocess(
     sqlite_path=SQLITE_DB_PATH,
     output_dir=None,

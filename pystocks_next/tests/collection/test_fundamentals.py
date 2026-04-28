@@ -9,6 +9,8 @@ from typing import cast
 from pystocks_next.collection.fundamentals import (
     EndpointFetchResult,
     FundamentalsCollector,
+    FundamentalsConidOutcome,
+    FundamentalsPersistResult,
 )
 from pystocks_next.storage import (
     load_dividend_events,
@@ -16,6 +18,7 @@ from pystocks_next.storage import (
     load_snapshot_feature_tables,
 )
 from pystocks_next.storage.writes import write_price_chart_series
+from pystocks_next.tests.support import RecordingProgressSink
 from pystocks_next.universe import UniverseInstrument, upsert_instruments
 
 
@@ -204,3 +207,36 @@ def test_run_persists_first_slice_end_to_end(
     assert not snapshot_tables["profile_and_fees"].empty
     assert not snapshot_tables["holdings_asset_type"].empty
     assert not snapshot_tables["ratios_key_ratios"].empty
+
+
+def test_run_reports_progress_for_processed_conids(temp_store) -> None:
+    collector = FundamentalsCollector(session=_DummySession())
+    progress = RecordingProgressSink()
+
+    async def fake_collect_conid(_client, conid: str) -> FundamentalsConidOutcome:
+        return FundamentalsConidOutcome(
+            conid=conid,
+            status="saved",
+            observed_at="2026-01-04T10:00:00+00:00",
+        )
+
+    collector.collect_conid = fake_collect_conid  # type: ignore[method-assign]
+    collector.persist_outcome = lambda conn, outcome: FundamentalsPersistResult(  # type: ignore[method-assign]
+        saved_snapshots=1
+    )
+
+    result = asyncio.run(
+        collector.run(
+            temp_store,
+            explicit_conids=["100", "101"],
+            progress=progress,
+        )
+    )
+
+    assert result.processed_conids == 2
+    assert progress.events == [
+        ("start", "Collecting fundamentals", 2, "conid"),
+        ("advance", "Collecting fundamentals", 1, "100 saved, 1 snapshots saved"),
+        ("advance", "Collecting fundamentals", 1, "101 saved, 2 snapshots saved"),
+        ("close", "Collecting fundamentals", None, "2/2 conids, 2 snapshots saved"),
+    ]

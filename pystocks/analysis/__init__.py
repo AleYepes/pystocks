@@ -21,22 +21,28 @@ except ImportError:  # pragma: no cover - exercised in environments without Babe
 
 from ..config import DATA_DIR, SQLITE_DB_PATH
 from ..preprocess.price import (
-    PricePreprocessConfig,
-    load_price_history,
-    preprocess_price_history,
-    save_price_preprocess_results,
+    load_saved_price_preprocess_results,
 )
-from ..preprocess.snapshots import (
-    load_snapshot_features as load_preprocessed_snapshot_features,
-)
+from ..preprocess.snapshot_contract import expand_snapshot_feature_sources
+from ..preprocess.snapshots import load_saved_snapshot_features
 from ..preprocess.supplementary import (
-    load_risk_free_daily as load_preprocessed_risk_free_daily,
-)
-from ..preprocess.supplementary import (
-    load_world_bank_country_features as load_preprocessed_world_bank_country_features,
+    load_saved_risk_free_daily,
+    load_saved_world_bank_country_features,
 )
 from ..progress import make_progress_bar, track_progress
 from ..storage.txn import transaction
+
+PRICE_PREPROCESS_COMMAND = "./venv/bin/python -m pystocks.cli preprocess_prices"
+SNAPSHOT_PREPROCESS_COMMAND = "./venv/bin/python -m pystocks.cli preprocess_snapshots"
+SUPPLEMENTARY_FETCH_COMMAND = (
+    "./venv/bin/python -m pystocks.cli fetch_supplementary_data"
+)
+SUPPLEMENTARY_PREPROCESS_COMMAND = (
+    "./venv/bin/python -m pystocks.cli preprocess_supplementary_data"
+)
+SUPPLEMENTARY_REFRESH_COMMAND = (
+    "./venv/bin/python -m pystocks.cli refresh_supplementary_data"
+)
 
 
 @dataclass
@@ -189,8 +195,8 @@ COMPOSITE_SOURCE_COLUMNS = {
     "composite__concentration": [
         "top10__top10_weight_sum",
         "top10__top10_weight_max",
-        "industry__*",
-        "country__*",
+        "industry::*",
+        "country::*",
     ],
 }
 
@@ -609,27 +615,9 @@ def _add_currency_bloc_features(df):
 
 def _source_columns_for_feature(column, panel_slice):
     if column in COMPOSITE_SOURCE_COLUMNS:
-        sources = []
-        for source in COMPOSITE_SOURCE_COLUMNS[column]:
-            if source == "industry__*":
-                sources.extend(
-                    sorted(
-                        col
-                        for col in panel_slice.columns
-                        if col.startswith("industry__")
-                    )
-                )
-            elif source == "country__*":
-                sources.extend(
-                    sorted(
-                        col
-                        for col in panel_slice.columns
-                        if col.startswith("country__")
-                    )
-                )
-            elif source in panel_slice.columns:
-                sources.append(source)
-        return sources
+        return expand_snapshot_feature_sources(
+            list(panel_slice.columns), COMPOSITE_SOURCE_COLUMNS[column]
+        )
     if column.startswith("supersector__"):
         return [
             source
@@ -782,38 +770,66 @@ def _bounded_align_return_frame(returns_wide, max_gap_days):
     return aligned
 
 
-def load_snapshot_features(sqlite_path=SQLITE_DB_PATH):
-    return load_preprocessed_snapshot_features(sqlite_path=sqlite_path)
+def load_snapshot_features(output_dir=None):
+    return load_saved_snapshot_features(output_dir=output_dir)
 
 
-def load_risk_free_daily(sqlite_path=SQLITE_DB_PATH):
-    return load_preprocessed_risk_free_daily(sqlite_path=sqlite_path)
+def load_risk_free_daily(output_dir=None):
+    return load_saved_risk_free_daily(output_dir=output_dir)
 
 
-def load_world_bank_country_features(sqlite_path=SQLITE_DB_PATH):
-    return load_preprocessed_world_bank_country_features(sqlite_path=sqlite_path)
+def load_world_bank_country_features(output_dir=None):
+    return load_saved_world_bank_country_features(output_dir=output_dir)
 
 
 def _prepare_analysis_inputs(config, show_progress=False):
-    price_config = PricePreprocessConfig(outlier_z_threshold=config.outlier_z_threshold)
-    price_result = preprocess_price_history(
-        load_price_history(config.sqlite_path),
-        config=price_config,
-        show_progress=show_progress,
-    )
-    save_price_preprocess_results(price_result, output_dir=config.output_dir)
-    snapshot_features = load_snapshot_features(config.sqlite_path)
-    risk_free_daily = load_risk_free_daily(config.sqlite_path)
-    world_bank_country_features = load_world_bank_country_features(config.sqlite_path)
+    del show_progress
+    try:
+        price_result = load_saved_price_preprocess_results(config.output_dir)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Missing preprocessed price artifacts. Run "
+            f"`{PRICE_PREPROCESS_COMMAND}` first."
+        ) from exc
+
+    try:
+        snapshot_features = load_snapshot_features(config.output_dir)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Missing preprocessed snapshot artifacts. Run "
+            f"`{SNAPSHOT_PREPROCESS_COMMAND}` first."
+        ) from exc
+
+    try:
+        risk_free_daily = load_risk_free_daily(config.output_dir)
+        world_bank_country_features = load_world_bank_country_features(
+            config.output_dir
+        )
+    except FileNotFoundError as exc:
+        if config.require_supplementary_data:
+            raise RuntimeError(
+                "Missing preprocessed supplementary artifacts. Run "
+                f"`{SUPPLEMENTARY_FETCH_COMMAND}` then "
+                f"`{SUPPLEMENTARY_PREPROCESS_COMMAND}`, or run "
+                f"`{SUPPLEMENTARY_REFRESH_COMMAND}`, first."
+            ) from exc
+        risk_free_daily = pd.DataFrame()
+        world_bank_country_features = pd.DataFrame()
 
     if config.require_supplementary_data:
         if config.use_risk_free_excess and risk_free_daily.empty:
             raise RuntimeError(
-                "Missing supplementary risk-free data. Run refresh_supplementary_data first."
+                "Missing supplementary risk-free data. Run "
+                f"`{SUPPLEMENTARY_FETCH_COMMAND}` then "
+                f"`{SUPPLEMENTARY_PREPROCESS_COMMAND}`, or run "
+                f"`{SUPPLEMENTARY_REFRESH_COMMAND}`, first."
             )
         if config.include_macro_features and world_bank_country_features.empty:
             raise RuntimeError(
-                "Missing supplementary World Bank features. Run refresh_supplementary_data first."
+                "Missing supplementary World Bank features. Run "
+                f"`{SUPPLEMENTARY_FETCH_COMMAND}` then "
+                f"`{SUPPLEMENTARY_PREPROCESS_COMMAND}`, or run "
+                f"`{SUPPLEMENTARY_REFRESH_COMMAND}`, first."
             )
 
     return snapshot_features, price_result, risk_free_daily, world_bank_country_features
@@ -1249,7 +1265,10 @@ def build_analysis_panel_data(
         and (world_bank_country_features is None or world_bank_country_features.empty)
     ):
         raise RuntimeError(
-            "Missing supplementary World Bank features. Run refresh_supplementary_data first."
+            "Missing supplementary World Bank features. Run "
+            f"`{SUPPLEMENTARY_FETCH_COMMAND}` then "
+            f"`{SUPPLEMENTARY_PREPROCESS_COMMAND}`, or run "
+            f"`{SUPPLEMENTARY_REFRESH_COMMAND}`, first."
         )
 
     panels = []

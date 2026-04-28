@@ -27,7 +27,7 @@ def track_progress(
     total=None,
     desc=None,
     unit=None,
-    leave=False,
+    leave=True,
 ):
     if not show_progress:
         return iterable
@@ -47,7 +47,7 @@ def make_progress_bar(
     total=None,
     desc=None,
     unit=None,
-    leave=False,
+    leave=True,
 ):
     if not show_progress:
         return _NullProgressBar()

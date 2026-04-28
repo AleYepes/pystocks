@@ -145,7 +145,7 @@ def test_dividends_series_and_metrics_are_refactored_to_new_schema():
                 FROM dividends_industry_metrics
                 WHERE conid = ? AND effective_at = ?
                 """,
-                ["divs_1", "2026-02-27"],
+                ["divs_1", "2026-03-01"],
             ).fetchone()
             assert metrics[0] == pytest.approx(0.0122)
             assert metrics[1] == pytest.approx(25.65)
@@ -200,7 +200,7 @@ def test_dividends_series_and_metrics_are_refactored_to_new_schema():
                 FROM dividends_snapshots
                 WHERE conid = ? AND effective_at = ?
                 """,
-                ["divs_1", "2026-02-27"],
+                ["divs_1", "2026-03-01"],
             ).fetchone()[0]
             payload = store._load_blob_payload(payload_hash)
             history = payload.get("history", {})

@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from ..progress import ProgressSink
 from ..universe import UniverseInstrument, upsert_instruments
 
 PRODUCT_PAGE_SIZE = 500
@@ -136,10 +137,16 @@ async def refresh_product_universe(
     retries: int = 5,
     page_size: int = PRODUCT_PAGE_SIZE,
     sleep: SleepFn = asyncio.sleep,
+    progress: ProgressSink | None = None,
 ) -> ProductCollectionResult:
     owns_client = client is None
     client_obj: httpx.AsyncClient | ProductHttpClient = (
         httpx.AsyncClient() if client is None else client
+    )
+    tracker = (
+        progress.stage("Refreshing universe", unit="page")
+        if progress is not None
+        else None
     )
 
     all_products: list[Mapping[str, Any]] = []
@@ -164,12 +171,20 @@ async def refresh_product_universe(
                 product for product in raw_products if isinstance(product, Mapping)
             ]
             all_products.extend(valid_products)
+            if tracker is not None:
+                tracker.advance(
+                    detail=f"{len(all_products)} products across {page_count} pages"
+                )
             if len(raw_products) < page_size:
                 break
             page_number += 1
     finally:
         if owns_client:
             await client_obj.aclose()
+        if tracker is not None:
+            tracker.close(
+                detail=f"{len(all_products)} products across {page_count} pages"
+            )
 
     instruments = _normalize_products(all_products)
     products_upserted = upsert_instruments(conn, instruments)

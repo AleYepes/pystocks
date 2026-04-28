@@ -374,8 +374,11 @@ class CollectionSession:
                 state="visible",
                 timeout=30_000,
             )
-            await page.fill("input[name='username']", username)
-            await page.fill("input[name='password']", password)
+            # Use type with delay to simulate human input and avoid fields being cleared
+            await page.click("input[name='username']")
+            await page.type("input[name='username']", username, delay=100)
+            await page.click("input[name='password']")
+            await page.type("input[name='password']", password, delay=100)
             await page.click("form.xyzform-username button[type='submit']")
             return True
         except Exception as exc:

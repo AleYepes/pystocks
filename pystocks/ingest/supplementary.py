@@ -9,16 +9,13 @@ import pandas as pd
 import requests
 
 from ..config import SQLITE_DB_PATH
-from ..preprocess.supplementary import (
+from ..progress import track_progress
+from ..storage.txn import transaction
+from ..supplementary_contract import (
     RISK_FREE_SERIES_BY_ECONOMY,
     WORLD_BANK_INDICATOR_MAP,
-    _normalize_economy_code,
-    build_risk_free_series_weights,
-    derive_risk_free_daily,
-    load_risk_free_country_weights,
-    preprocess_world_bank_country_features,
+    normalize_economy_code,
 )
-from ..storage.txn import transaction
 
 WORLD_BANK_ECONOMY_BATCH_SIZE = 40
 
@@ -55,10 +52,18 @@ def _fetch_fred_series_csv(series_id):
     return out[["series_id", "source_name", "trade_date", "nominal_rate"]]
 
 
-def fetch_risk_free_sources(series_map=None):
+def fetch_risk_free_sources(series_map=None, show_progress=False):
     series_map = series_map or RISK_FREE_SERIES_BY_ECONOMY
     frames = []
-    for economy_code, series_id in series_map.items():
+    items = list(series_map.items())
+    for economy_code, series_id in track_progress(
+        items,
+        show_progress=show_progress,
+        total=len(items),
+        desc="Risk-free series",
+        unit="series",
+        leave=True,
+    ):
         frame = _fetch_fred_series_csv(series_id)
         if not frame.empty:
             frame["economy_code"] = economy_code
@@ -94,7 +99,7 @@ def _normalize_world_bank_economies(economy_codes: Iterable[str]) -> list[str]:
     normalized_codes: list[str] = []
     seen: set[str] = set()
     for value in economy_codes:
-        code = _normalize_economy_code(value)
+        code = normalize_economy_code(value)
         if code is None:
             continue
         upper = str(code).upper()
@@ -112,7 +117,7 @@ def _load_world_bank_supported_economies(wb_module) -> set[str]:
     for item in wb_module.economy.list():
         if not isinstance(item, dict):
             continue
-        code = _normalize_economy_code(item.get("id"))
+        code = normalize_economy_code(item.get("id"))
         if code is None:
             continue
         upper = str(code).upper()
@@ -148,7 +153,9 @@ def _extract_world_bank_scalar(value):
     return value
 
 
-def _iter_world_bank_rows(indicator_ids, economies: Iterable[str], wb_module=None):
+def _iter_world_bank_rows(
+    indicator_ids, economies: Iterable[str], wb_module=None, show_progress=False
+):
     wb_module = wb_module or _load_wbgapi_module()
     normalized = _normalize_world_bank_economies(economy_codes=economies)
     if not normalized:
@@ -161,7 +168,15 @@ def _iter_world_bank_rows(indicator_ids, economies: Iterable[str], wb_module=Non
 
     rows: list[dict] = []
     series = list(indicator_ids)
-    for chunk in _chunked_economies(recognized):
+    chunks = list(_chunked_economies(recognized))
+    for chunk in track_progress(
+        chunks,
+        show_progress=show_progress,
+        total=len(chunks),
+        desc="World Bank batches",
+        unit="batch",
+        leave=True,
+    ):
         try:
             rows.extend(
                 wb_module.data.fetch(
@@ -177,11 +192,13 @@ def _iter_world_bank_rows(indicator_ids, economies: Iterable[str], wb_module=Non
     return rows
 
 
-def fetch_world_bank_raw(economy_codes, indicator_map=None):
+def fetch_world_bank_raw(economy_codes, indicator_map=None, show_progress=False):
     indicator_map = indicator_map or WORLD_BANK_INDICATOR_MAP
     indicator_ids = list(indicator_map)
     rows = []
-    for item in _iter_world_bank_rows(indicator_ids, economy_codes):
+    for item in _iter_world_bank_rows(
+        indicator_ids, economy_codes, show_progress=show_progress
+    ):
         economy = _extract_world_bank_scalar(item.get("economy"))
         indicator_id = _extract_world_bank_scalar(item.get("series"))
         year = item.get("time")
@@ -193,7 +210,7 @@ def fetch_world_bank_raw(economy_codes, indicator_map=None):
             continue
         rows.append(
             {
-                "economy_code": _normalize_economy_code(economy),
+                "economy_code": normalize_economy_code(economy),
                 "indicator_id": str(indicator_id),
                 "year": year_value,
                 "value": pd.to_numeric(item.get("value"), errors="coerce"),
@@ -230,12 +247,15 @@ def _write_fetch_log(
     )
 
 
-def refresh_supplementary_data(sqlite_path=SQLITE_DB_PATH):
-    risk_free_sources = fetch_risk_free_sources()
+def fetch_supplementary_data(
+    sqlite_path=SQLITE_DB_PATH,
+    *,
+    show_progress=False,
+):
+    risk_free_sources = fetch_risk_free_sources(show_progress=show_progress)
     if risk_free_sources.empty:
         raise RuntimeError("Risk-free refresh returned no source rows.")
 
-    country_weights = load_risk_free_country_weights(sqlite_path)
     economy_codes = []
     with transaction(sqlite_path) as tx:
         holdings_countries = tx.read_frame(
@@ -249,7 +269,7 @@ def refresh_supplementary_data(sqlite_path=SQLITE_DB_PATH):
             economy_codes = [
                 code
                 for code in (
-                    _normalize_economy_code(value)
+                    normalize_economy_code(value)
                     for value in holdings_countries["economy_code"].tolist()
                 )
                 if code
@@ -259,7 +279,7 @@ def refresh_supplementary_data(sqlite_path=SQLITE_DB_PATH):
             "No holdings_investor_country rows were found for supplementary refresh."
         )
 
-    world_bank_raw = fetch_world_bank_raw(economy_codes)
+    world_bank_raw = fetch_world_bank_raw(economy_codes, show_progress=show_progress)
     if world_bank_raw.empty:
         raise RuntimeError("World Bank refresh returned no rows.")
 
@@ -269,15 +289,6 @@ def refresh_supplementary_data(sqlite_path=SQLITE_DB_PATH):
     world_bank_raw = world_bank_raw.copy()
     world_bank_raw["fetched_at"] = fetched_at
 
-    series_weights = build_risk_free_series_weights(
-        country_weights, series_map=RISK_FREE_SERIES_BY_ECONOMY
-    )
-    risk_free_daily = derive_risk_free_daily(
-        risk_free_sources,
-        series_weights=series_weights,
-    )
-    world_bank_features = preprocess_world_bank_country_features(world_bank_raw)
-
     with transaction(sqlite_path) as tx:
         tx.write_frame(
             "supplementary_risk_free_sources",
@@ -286,20 +297,8 @@ def refresh_supplementary_data(sqlite_path=SQLITE_DB_PATH):
             index=False,
         )
         tx.write_frame(
-            "supplementary_risk_free_daily",
-            risk_free_daily,
-            if_exists="replace",
-            index=False,
-        )
-        tx.write_frame(
             "supplementary_world_bank_raw",
             world_bank_raw,
-            if_exists="replace",
-            index=False,
-        )
-        tx.write_frame(
-            "supplementary_world_bank_country_features",
-            world_bank_features,
             if_exists="replace",
             index=False,
         )
@@ -321,20 +320,10 @@ def refresh_supplementary_data(sqlite_path=SQLITE_DB_PATH):
             max_key=str(int(world_bank_raw["year"].max())),
             notes="World Bank annual indicator rows",
         )
-        _write_fetch_log(
-            tx,
-            "world_bank_country_features",
-            "ok",
-            len(world_bank_features),
-            min_key=str(int(world_bank_features["feature_year"].min())),
-            max_key=str(int(world_bank_features["feature_year"].max())),
-            notes="Preprocessed annual country features",
-        )
 
     return {
         "status": "ok",
         "risk_free_source_rows": int(len(risk_free_sources)),
-        "risk_free_daily_rows": int(len(risk_free_daily)),
         "world_bank_raw_rows": int(len(world_bank_raw)),
-        "world_bank_feature_rows": int(len(world_bank_features)),
+        "economy_count": int(len(economy_codes)),
     }

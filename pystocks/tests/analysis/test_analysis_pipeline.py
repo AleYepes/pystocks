@@ -1132,30 +1132,23 @@ def _stub_price_result():
     }
 
 
-def test_build_analysis_panel_preprocesses_inputs_once(tmp_path, monkeypatch):
+def test_build_analysis_panel_loads_preprocessed_inputs_once(tmp_path, monkeypatch):
     counts = {"prices": 0, "snapshots": 0, "risk_free": 0, "macro": 0}
 
-    monkeypatch.setattr(
-        analysis_module, "load_price_history", lambda sqlite_path: pd.DataFrame()
-    )
-
-    def fake_preprocess_price_history(price_df, config=None, show_progress=False):
+    def fake_load_saved_price_preprocess_results(output_dir=None):
         counts["prices"] += 1
         return _stub_price_result()
 
-    def fake_load_snapshot_features(sqlite_path):
+    def fake_load_snapshot_features(output_dir=None):
         counts["snapshots"] += 1
         return pd.DataFrame(
             [{"conid": "a", "effective_at": pd.Timestamp("2026-01-31")}]
         )
 
     monkeypatch.setattr(
-        analysis_module, "preprocess_price_history", fake_preprocess_price_history
-    )
-    monkeypatch.setattr(
         analysis_module,
-        "save_price_preprocess_results",
-        lambda result, output_dir=None: {"prices_path": "prices.parquet"},
+        "load_saved_price_preprocess_results",
+        fake_load_saved_price_preprocess_results,
     )
     monkeypatch.setattr(
         analysis_module, "load_snapshot_features", fake_load_snapshot_features
@@ -1163,7 +1156,7 @@ def test_build_analysis_panel_preprocesses_inputs_once(tmp_path, monkeypatch):
     monkeypatch.setattr(
         analysis_module,
         "load_risk_free_daily",
-        lambda sqlite_path: (
+        lambda output_dir=None: (
             counts.__setitem__("risk_free", counts["risk_free"] + 1)
             or pd.DataFrame(
                 {
@@ -1176,7 +1169,7 @@ def test_build_analysis_panel_preprocesses_inputs_once(tmp_path, monkeypatch):
     monkeypatch.setattr(
         analysis_module,
         "load_world_bank_country_features",
-        lambda sqlite_path: (
+        lambda output_dir=None: (
             counts.__setitem__("macro", counts["macro"] + 1)
             or pd.DataFrame(
                 [
@@ -1217,30 +1210,23 @@ def test_build_analysis_panel_preprocesses_inputs_once(tmp_path, monkeypatch):
     assert (tmp_path / "analysis_snapshot_panel.parquet").exists()
 
 
-def test_run_factor_research_preprocesses_inputs_once(tmp_path, monkeypatch):
+def test_run_factor_research_loads_preprocessed_inputs_once(tmp_path, monkeypatch):
     counts = {"prices": 0, "snapshots": 0, "risk_free": 0, "macro": 0}
 
-    monkeypatch.setattr(
-        analysis_module, "load_price_history", lambda sqlite_path: pd.DataFrame()
-    )
-
-    def fake_preprocess_price_history(price_df, config=None, show_progress=False):
+    def fake_load_saved_price_preprocess_results(output_dir=None):
         counts["prices"] += 1
         return _stub_price_result()
 
-    def fake_load_snapshot_features(sqlite_path):
+    def fake_load_snapshot_features(output_dir=None):
         counts["snapshots"] += 1
         return pd.DataFrame(
             [{"conid": "a", "effective_at": pd.Timestamp("2026-01-31")}]
         )
 
     monkeypatch.setattr(
-        analysis_module, "preprocess_price_history", fake_preprocess_price_history
-    )
-    monkeypatch.setattr(
         analysis_module,
-        "save_price_preprocess_results",
-        lambda result, output_dir=None: {"prices_path": "prices.parquet"},
+        "load_saved_price_preprocess_results",
+        fake_load_saved_price_preprocess_results,
     )
     monkeypatch.setattr(
         analysis_module, "load_snapshot_features", fake_load_snapshot_features
@@ -1248,7 +1234,7 @@ def test_run_factor_research_preprocesses_inputs_once(tmp_path, monkeypatch):
     monkeypatch.setattr(
         analysis_module,
         "load_risk_free_daily",
-        lambda sqlite_path: (
+        lambda output_dir=None: (
             counts.__setitem__("risk_free", counts["risk_free"] + 1)
             or pd.DataFrame(
                 {
@@ -1261,7 +1247,7 @@ def test_run_factor_research_preprocesses_inputs_once(tmp_path, monkeypatch):
     monkeypatch.setattr(
         analysis_module,
         "load_world_bank_country_features",
-        lambda sqlite_path: (
+        lambda output_dir=None: (
             counts.__setitem__("macro", counts["macro"] + 1)
             or pd.DataFrame(
                 [

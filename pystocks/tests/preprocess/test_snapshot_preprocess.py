@@ -203,6 +203,57 @@ def test_preprocess_snapshot_features_drops_storage_only_columns():
     assert "holding_asset__storage_only_weight" not in features.columns
 
 
+def test_preprocess_snapshot_features_carries_forward_unaligned_endpoint_dates():
+    result = preprocess_snapshot_features(
+        tables={
+            "profile_and_fees": pd.DataFrame(
+                [
+                    {
+                        "conid": "a",
+                        "effective_at": "2026-01-31",
+                        "asset_type": "Equity",
+                        "total_net_assets_value": "$100M",
+                    }
+                ]
+            ),
+            "holdings_asset_type": pd.DataFrame(
+                [
+                    {
+                        "conid": "a",
+                        "effective_at": "2026-02-15",
+                        "equity": 0.9,
+                        "fixed_income": 0.1,
+                    }
+                ]
+            ),
+            "ratios_key_ratios": pd.DataFrame(
+                [
+                    {
+                        "conid": "a",
+                        "effective_at": "2026-02-28",
+                        "metric_id": "price_book",
+                        "value_num": 1.25,
+                    }
+                ]
+            ),
+        }
+    )
+
+    features = (
+        result["features"].sort_values(["conid", "effective_at"]).reset_index(drop=True)
+    )
+
+    assert features["effective_at"].dt.strftime("%Y-%m-%d").tolist() == [
+        "2026-01-31",
+        "2026-02-15",
+        "2026-02-28",
+    ]
+    final_row = features.iloc[-1]
+    assert final_row["profile__total_net_assets_num"] == 100_000_000.0
+    assert final_row["holding_asset__equity"] == 0.9
+    assert final_row["ratio_key__price_book"] == 1.25
+
+
 def test_build_analysis_panel_uses_processed_snapshot_features():
     snapshot_result = preprocess_snapshot_features(
         tables={

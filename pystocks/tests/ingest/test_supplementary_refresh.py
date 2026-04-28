@@ -67,7 +67,7 @@ def test_fetch_world_bank_raw_raises_clear_error_without_wbgapi(monkeypatch):
         )
 
 
-def test_refresh_supplementary_data_writes_normalized_tables(tmp_path, monkeypatch):
+def test_fetch_supplementary_data_writes_raw_tables(tmp_path, monkeypatch):
     db_path = tmp_path / "supplementary.sqlite"
     init_storage(db_path)
 
@@ -91,7 +91,7 @@ def test_refresh_supplementary_data_writes_normalized_tables(tmp_path, monkeypat
     monkeypatch.setattr(
         supplementary_module,
         "fetch_risk_free_sources",
-        lambda series_map=None: pd.DataFrame(
+        lambda series_map=None, show_progress=False: pd.DataFrame(
             [
                 {
                     "series_id": "DTB3",
@@ -113,7 +113,7 @@ def test_refresh_supplementary_data_writes_normalized_tables(tmp_path, monkeypat
     monkeypatch.setattr(
         supplementary_module,
         "fetch_world_bank_raw",
-        lambda economy_codes, indicator_map=None: pd.DataFrame(
+        lambda economy_codes, indicator_map=None, show_progress=False: pd.DataFrame(
             [
                 {
                     "economy_code": "USA",
@@ -191,28 +191,28 @@ def test_refresh_supplementary_data_writes_normalized_tables(tmp_path, monkeypat
         ),
     )
 
-    result = supplementary_module.refresh_supplementary_data(sqlite_path=db_path)
+    result = supplementary_module.fetch_supplementary_data(sqlite_path=db_path)
 
     assert result["status"] == "ok"
 
     with sqlite3.connect(db_path) as conn:
         risk_free_rows = conn.execute(
-            "SELECT COUNT(*) FROM supplementary_risk_free_daily"
+            "SELECT COUNT(*) FROM supplementary_risk_free_sources"
         ).fetchone()[0]
         risk_free_nominal_rate = conn.execute(
-            "SELECT nominal_rate FROM supplementary_risk_free_daily"
+            "SELECT nominal_rate FROM supplementary_risk_free_sources"
         ).fetchone()[0]
         macro_rows = conn.execute(
-            "SELECT COUNT(*) FROM supplementary_world_bank_country_features"
+            "SELECT COUNT(*) FROM supplementary_world_bank_raw"
         ).fetchone()[0]
         log_rows = conn.execute(
             "SELECT COUNT(*) FROM supplementary_fetch_log"
         ).fetchone()[0]
 
-    assert risk_free_rows == 1
-    assert risk_free_nominal_rate == pytest.approx(0.022)
-    assert macro_rows == 2
-    assert log_rows == 3
+    assert risk_free_rows == 2
+    assert risk_free_nominal_rate == pytest.approx(0.03)
+    assert macro_rows == 12
+    assert log_rows == 2
 
 
 def test_load_world_bank_country_features_tolerates_old_schema(tmp_path):

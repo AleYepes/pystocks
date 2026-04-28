@@ -423,7 +423,7 @@ def test_holdings_snapshot_accepts_camel_case_as_of_date():
                 """,
                 ["holdings_asof_camel_1"],
             ).fetchone()
-            assert row[0] == "2026-02-21"
+            assert row[0] == "2026-02-20"
             assert row[1] == "2026-02-20"
         finally:
             con.close()

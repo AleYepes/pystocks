@@ -5,7 +5,10 @@ from pystocks.preprocess.supplementary import (
     build_risk_free_series_weights,
     derive_risk_free_daily,
     load_risk_free_country_weights,
+    load_saved_risk_free_daily,
+    load_saved_world_bank_country_features,
     preprocess_world_bank_country_features,
+    run_supplementary_preprocess,
 )
 
 
@@ -296,3 +299,159 @@ def test_preprocess_world_bank_country_features_derives_acceleration():
 
     assert usa_2025["population_growth"] == 15.0
     assert usa_2025["population_acceleration"] == 5.0
+
+
+def test_run_supplementary_preprocess_persists_db_and_parquet_outputs(tmp_path):
+    import sqlite3
+
+    from pystocks.storage.schema import init_storage
+
+    db_path = tmp_path / "supplementary.sqlite"
+    init_storage(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany(
+            """
+            INSERT INTO holdings_investor_country (conid, effective_at, country_code, value_num)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                ("1", "2026-01-31", "USA", 0.60),
+                ("1", "2026-01-31", "CAN", 0.40),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO supplementary_risk_free_sources (
+                series_id,
+                source_name,
+                trade_date,
+                nominal_rate,
+                fetched_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                ("DTB3", "fred", "2026-01-02", 0.03, "2026-01-03T00:00:00+00:00"),
+                (
+                    "IR3TIB01CAM156N",
+                    "fred",
+                    "2026-01-02",
+                    0.01,
+                    "2026-01-03T00:00:00+00:00",
+                ),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO supplementary_world_bank_raw (
+                economy_code,
+                indicator_id,
+                year,
+                value,
+                fetched_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                ("USA", "SP.POP.TOTL", 2024, 90.0, "2026-01-03T00:00:00+00:00"),
+                ("USA", "SP.POP.TOTL", 2025, 100.0, "2026-01-03T00:00:00+00:00"),
+                ("USA", "NY.GDP.PCAP.CD", 2024, 9.0, "2026-01-03T00:00:00+00:00"),
+                ("USA", "NY.GDP.PCAP.CD", 2025, 10.0, "2026-01-03T00:00:00+00:00"),
+                (
+                    "USA",
+                    "NY.GDP.MKTP.CD",
+                    2024,
+                    900.0,
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                (
+                    "USA",
+                    "NY.GDP.MKTP.CD",
+                    2025,
+                    1000.0,
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                (
+                    "USA",
+                    "BX.KLT.DINV.WD.GD.ZS",
+                    2024,
+                    1.0,
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                (
+                    "USA",
+                    "BX.KLT.DINV.WD.GD.ZS",
+                    2025,
+                    1.2,
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                ("USA", "NE.IMP.GNFS.ZS", 2024, 40.0, "2026-01-03T00:00:00+00:00"),
+                ("USA", "NE.IMP.GNFS.ZS", 2025, 42.0, "2026-01-03T00:00:00+00:00"),
+                ("USA", "NE.EXP.GNFS.ZS", 2024, 60.0, "2026-01-03T00:00:00+00:00"),
+                ("USA", "NE.EXP.GNFS.ZS", 2025, 58.0, "2026-01-03T00:00:00+00:00"),
+                ("CAN", "SP.POP.TOTL", 2024, 45.0, "2026-01-03T00:00:00+00:00"),
+                ("CAN", "SP.POP.TOTL", 2025, 50.0, "2026-01-03T00:00:00+00:00"),
+                ("CAN", "NY.GDP.PCAP.CD", 2024, 9.5, "2026-01-03T00:00:00+00:00"),
+                ("CAN", "NY.GDP.PCAP.CD", 2025, 10.0, "2026-01-03T00:00:00+00:00"),
+                (
+                    "CAN",
+                    "NY.GDP.MKTP.CD",
+                    2024,
+                    450.0,
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                (
+                    "CAN",
+                    "NY.GDP.MKTP.CD",
+                    2025,
+                    500.0,
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                (
+                    "CAN",
+                    "BX.KLT.DINV.WD.GD.ZS",
+                    2024,
+                    2.0,
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                (
+                    "CAN",
+                    "BX.KLT.DINV.WD.GD.ZS",
+                    2025,
+                    2.5,
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                ("CAN", "NE.IMP.GNFS.ZS", 2024, 25.0, "2026-01-03T00:00:00+00:00"),
+                ("CAN", "NE.IMP.GNFS.ZS", 2025, 24.0, "2026-01-03T00:00:00+00:00"),
+                ("CAN", "NE.EXP.GNFS.ZS", 2024, 25.0, "2026-01-03T00:00:00+00:00"),
+                ("CAN", "NE.EXP.GNFS.ZS", 2025, 26.0, "2026-01-03T00:00:00+00:00"),
+            ],
+        )
+        conn.commit()
+
+    result = run_supplementary_preprocess(sqlite_path=db_path, output_dir=tmp_path)
+
+    assert result["status"] == "ok"
+
+    with sqlite3.connect(db_path) as conn:
+        risk_free_rows = conn.execute(
+            "SELECT COUNT(*) FROM supplementary_risk_free_daily"
+        ).fetchone()[0]
+        world_bank_rows = conn.execute(
+            "SELECT COUNT(*) FROM supplementary_world_bank_country_features"
+        ).fetchone()[0]
+
+    assert risk_free_rows == 1
+    assert world_bank_rows == 4
+
+    risk_free_daily = load_saved_risk_free_daily(output_dir=tmp_path)
+    world_bank_features = load_saved_world_bank_country_features(output_dir=tmp_path)
+
+    assert risk_free_daily.loc[0, "nominal_rate"] == pytest.approx(0.022)
+    assert (tmp_path / "analysis_risk_free_daily.parquet").exists()
+    assert (tmp_path / "analysis_world_bank_country_features.parquet").exists()
+    assert sorted(world_bank_features["feature_year"].tolist()) == [
+        2024,
+        2024,
+        2025,
+        2025,
+    ]

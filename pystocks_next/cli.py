@@ -15,6 +15,7 @@ from .collection import (
 )
 from .config import PystocksNextConfig
 from .feature_inputs import build_analysis_input_bundle
+from .progress import make_progress_sink
 from .storage import (
     connect_sqlite,
     initialize_operational_store,
@@ -74,11 +75,12 @@ class PyStocksNextCLI:
             "schema_version": version,
         }
 
-    def refresh_universe(self) -> dict[str, object]:
+    def refresh_universe(self, show_progress: bool = True) -> dict[str, object]:
         config = self._config()
         initialize_operational_store(config.sqlite.path)
+        progress = make_progress_sink(show_progress=show_progress)
         with connect_sqlite(config.sqlite.path) as conn:
-            result = asyncio.run(refresh_product_universe(conn))
+            result = asyncio.run(refresh_product_universe(conn, progress=progress))
         payload = asdict(result)
         payload["sqlite_path"] = str(config.sqlite.path)
         return payload
@@ -107,11 +109,13 @@ class PyStocksNextCLI:
         force: bool = False,
         conids_file: str | None = None,
         telemetry_filename: str = "fundamentals_collection.json",
+        show_progress: bool = True,
     ) -> dict[str, object]:
         config = self._config()
         initialize_operational_store(config.sqlite.path)
         explicit_conids = _load_text_lines(conids_file)
         telemetry_output_path = config.artifacts_dir / "collection" / telemetry_filename
+        progress = make_progress_sink(show_progress=show_progress)
         with connect_sqlite(config.sqlite.path) as conn:
             result = asyncio.run(
                 FundamentalsCollector(session=self._collection_session()).run(
@@ -121,6 +125,7 @@ class PyStocksNextCLI:
                     start_index=start_index,
                     force=force,
                     telemetry_output_path=telemetry_output_path,
+                    progress=progress,
                 )
             )
         payload = asdict(result)
@@ -130,9 +135,11 @@ class PyStocksNextCLI:
     def refresh_supplementary(
         self,
         economy_codes_file: str | None = None,
+        show_progress: bool = True,
     ) -> dict[str, object]:
         config = self._config()
         initialize_operational_store(config.sqlite.path)
+        progress = make_progress_sink(show_progress=show_progress)
         with connect_sqlite(config.sqlite.path) as conn:
             economy_codes = _load_text_lines(economy_codes_file)
             if economy_codes is None:
@@ -141,16 +148,18 @@ class PyStocksNextCLI:
             result = refresh_supplementary_sources(
                 conn,
                 economy_codes=economy_codes,
+                progress=progress,
             )
         payload = asdict(result)
         payload["sqlite_path"] = str(config.sqlite.path)
         return payload
 
-    def build_inputs(self) -> dict[str, object]:
+    def build_inputs(self, show_progress: bool = True) -> dict[str, object]:
         config = self._config()
         initialize_operational_store(config.sqlite.path)
+        progress = make_progress_sink(show_progress=show_progress)
         with connect_sqlite(config.sqlite.path, read_only=True) as conn:
-            bundle = build_analysis_input_bundle(conn=conn)
+            bundle = build_analysis_input_bundle(conn=conn, progress=progress)
         return {
             "status": "ok",
             "sqlite_path": str(config.sqlite.path),
@@ -169,10 +178,13 @@ class PyStocksNextCLI:
         conids_file: str | None = None,
         economy_codes_file: str | None = None,
         telemetry_filename: str = "fundamentals_collection.json",
+        show_progress: bool = True,
     ) -> dict[str, object]:
         result: dict[str, object] = {"storage": self.init_storage()}
         if refresh_universe:
-            result["refresh_universe"] = self.refresh_universe()
+            result["refresh_universe"] = self.refresh_universe(
+                show_progress=show_progress
+            )
         if collect_fundamentals:
             result["collect_fundamentals"] = self.collect_fundamentals(
                 limit=limit,
@@ -180,13 +192,15 @@ class PyStocksNextCLI:
                 force=force,
                 conids_file=conids_file,
                 telemetry_filename=telemetry_filename,
+                show_progress=show_progress,
             )
         if refresh_supplementary:
             result["refresh_supplementary"] = self.refresh_supplementary(
-                economy_codes_file=economy_codes_file
+                economy_codes_file=economy_codes_file,
+                show_progress=show_progress,
             )
         if build_inputs:
-            result["build_inputs"] = self.build_inputs()
+            result["build_inputs"] = self.build_inputs(show_progress=show_progress)
         return result
 
 

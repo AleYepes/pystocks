@@ -18,6 +18,7 @@ from .normalize import (
     normalize_ownership_snapshot,
 )
 from .schema import init_storage
+from .time_contract import ENDPOINT_TIME_CONTRACTS
 
 logger = logging.getLogger(__name__)
 
@@ -810,25 +811,60 @@ class FundamentalsStore:
         return out
 
     def _resolve_effective_dates(self, endpoint_payloads, _observed_at):
-        ratios_payload = endpoint_payloads.get("ratios")
+        observed_date = _observed_at.date()
+        resolved: dict[str, tuple[str | None, str]] = {}
 
-        ratios_date = (
-            _extract_as_of_date(ratios_payload)
-            if isinstance(ratios_payload, dict)
-            else None
-        )
+        for endpoint, payload in endpoint_payloads.items():
+            contract = ENDPOINT_TIME_CONTRACTS.get(endpoint)
+            if contract is None:
+                resolved[endpoint] = (None, f"{endpoint}.time_contract_missing")
+                continue
 
-        if ratios_date is not None:
-            effective_at = ratios_date.isoformat()
-            effective_source = "ratios.as_of_date_anchor"
-        else:
-            effective_at = None
-            effective_source = "ratios.as_of_date_missing"
+            if contract.effective_at_policy == "series_max_point_or_observed_date":
+                max_point_date = self._series_snapshot_max_date(endpoint, payload)
+                if max_point_date is not None:
+                    resolved[endpoint] = (
+                        max_point_date.isoformat(),
+                        f"{endpoint}.max_series_point_date",
+                    )
+                    continue
+                resolved[endpoint] = (
+                    observed_date.isoformat(),
+                    f"{endpoint}.observed_at_fallback",
+                )
+                continue
 
-        return {
-            endpoint: (effective_at, effective_source)
-            for endpoint in endpoint_payloads.keys()
+            as_of_date = (
+                _extract_as_of_date(payload) if isinstance(payload, dict) else None
+            )
+            if as_of_date is not None:
+                resolved[endpoint] = (as_of_date.isoformat(), f"{endpoint}.as_of_date")
+                continue
+            resolved[endpoint] = (
+                observed_date.isoformat(),
+                f"{endpoint}.observed_at_fallback",
+            )
+
+        return resolved
+
+    def _series_snapshot_max_date(self, endpoint, payload):
+        row_extractors = {
+            "price_chart": _extract_price_chart_rows,
+            "sentiment_search": _extract_sentiment_search_rows,
         }
+        extractor = row_extractors.get(endpoint)
+        if extractor is None:
+            return None
+        rows = extractor(payload)
+        candidate_dates = [
+            _parse_date_candidate(row.get("effective_at"))
+            for row in rows
+            if row.get("effective_at")
+        ]
+        valid_dates = [value for value in candidate_dates if value is not None]
+        if not valid_dates:
+            return None
+        return max(valid_dates)
 
     def _endpoint_payloads_from_snapshot(self, snapshot):
         payloads = {}
@@ -2478,7 +2514,7 @@ class FundamentalsStore:
             if saved_any_endpoint:
                 conn.commit()
 
-        status = "ok" if saved_any_endpoint else "missing_ratios_effective_at"
+        status = "ok" if saved_any_endpoint else "missing_effective_at"
         return {
             "inserted_events": inserted_events,
             "overwritten_events": overwritten_events,

@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 import requests
 
+from ..progress import ProgressSink
 from ..storage import (
     write_supplementary_fetch_log,
     write_supplementary_risk_free_sources,
@@ -183,6 +184,7 @@ def refresh_supplementary_sources(
     economy_codes: Sequence[str] | None = None,
     risk_free_fetcher: Callable[[], pd.DataFrame] | None = None,
     world_bank_fetcher: Callable[[Sequence[str]], pd.DataFrame] | None = None,
+    progress: ProgressSink | None = None,
 ) -> SupplementaryCollectionResult:
     observed_at = _utc_now()
     normalized_economies = [
@@ -197,23 +199,34 @@ def refresh_supplementary_sources(
             fetch_log_rows=0,
             economy_count=0,
         )
+    tracker = (
+        progress.stage("Refreshing supplementary data", total=4, unit="step")
+        if progress is not None
+        else None
+    )
 
     risk_free_sources = (
         risk_free_fetcher()
         if risk_free_fetcher is not None
         else fetch_risk_free_sources()
     )
+    if tracker is not None:
+        tracker.advance(detail="Fetched risk-free source series")
     world_bank_raw = (
         world_bank_fetcher(normalized_economies)
         if world_bank_fetcher is not None
         else fetch_world_bank_raw(economy_codes=normalized_economies)
     )
+    if tracker is not None:
+        tracker.advance(detail="Fetched World Bank series")
 
     risk_free_result = write_supplementary_risk_free_sources(
         conn,
         frame=risk_free_sources,
         observed_at=observed_at,
     )
+    if tracker is not None:
+        tracker.advance(detail="Persisted risk-free source series")
     world_bank_result = write_supplementary_world_bank_raw(
         conn,
         frame=world_bank_raw,
@@ -245,6 +258,17 @@ def refresh_supplementary_sources(
         min_key=str(world_bank_raw["year"].min()) if not world_bank_raw.empty else None,
         max_key=str(world_bank_raw["year"].max()) if not world_bank_raw.empty else None,
     )
+    if tracker is not None:
+        tracker.advance(
+            detail=(
+                f"Persisted supplementary rows for {len(normalized_economies)} economies"
+            )
+        )
+        tracker.close(
+            detail=(
+                f"{risk_free_result.rows_written + world_bank_result.rows_written} rows written"
+            )
+        )
     return SupplementaryCollectionResult(
         status="ok",
         risk_free_source_rows=risk_free_result.rows_written,
