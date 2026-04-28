@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-import pycountry
 
 from ..storage import (
     HoldingsCountryWeightsRead,
@@ -15,7 +14,10 @@ from ..storage import (
     load_risk_free_sources,
     load_world_bank_raw,
 )
-from ..supplementary_sources import RISK_FREE_SERIES_BY_ECONOMY
+from ..supplementary_sources import (
+    RISK_FREE_SERIES_BY_ECONOMY,
+    normalize_economy_code,
+)
 from .bundle import (
     MACRO_FEATURE_COLUMNS,
     RISK_FREE_DAILY_COLUMNS,
@@ -44,29 +46,6 @@ def _empty_frame(columns: tuple[str, ...]) -> pd.DataFrame:
     return pd.DataFrame(
         {column: pd.Series(dtype="object") for column in columns}
     ).reindex(columns=pd.Index(columns))
-
-
-def _normalize_economy_code(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    upper = text.upper()
-    if len(upper) == 3 and upper.isalpha():
-        country = pycountry.countries.get(alpha_3=upper)
-        return country.alpha_3 if country is not None else upper
-    if len(upper) == 2 and upper.isalpha():
-        country = pycountry.countries.get(alpha_2=upper)
-        return country.alpha_3 if country is not None else upper
-    country = pycountry.countries.get(name=text)
-    if country is not None:
-        return str(country.alpha_3)
-    try:
-        matches = pycountry.countries.search_fuzzy(text)
-    except LookupError:
-        return upper
-    return str(matches[0].alpha_3) if matches else upper
 
 
 def _resolve_risk_free_sources_frame(
@@ -121,7 +100,7 @@ def build_risk_free_series_weights(
         return pd.Series(dtype=float)
     weights = country_weights.copy()
     weights["economy_code"] = [
-        _normalize_economy_code(value) for value in weights["economy_code"].tolist()
+        normalize_economy_code(value) for value in weights["economy_code"].tolist()
     ]
     weights["weight"] = pd.to_numeric(weights["weight"], errors="coerce")
     weights = weights.loc[

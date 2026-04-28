@@ -41,7 +41,7 @@ def test_refresh_supplementary_sources_persists_raw_tables_and_fetch_logs(
     assert result.world_bank_raw_rows == 2
     assert result.fetch_log_rows == 2
     assert result.economy_count == 1
-    assert captured_economies == ["US"]
+    assert captured_economies == ["USA"]
     assert stored_risk_free["economy_code"].tolist() == ["USA", "CAN"]
     assert stored_world_bank["economy_code"].tolist() == ["USA", "USA"]
     assert fetch_log_count == 2
@@ -59,6 +59,39 @@ def test_refresh_supplementary_sources_returns_no_economies_without_targets(
     assert result.status == "no_economies"
     assert result.economy_count == 0
     assert result.fetch_log_rows == 0
+
+
+def test_refresh_supplementary_sources_normalizes_and_filters_economy_codes(
+    temp_store,
+) -> None:
+    captured_economies: list[str] = []
+
+    def fake_world_bank_fetcher(economy_codes: Sequence[str]) -> pd.DataFrame:
+        captured_economies.extend(str(code) for code in economy_codes)
+        return pd.DataFrame(
+            columns=pd.Index(["economy_code", "indicator_id", "year", "value"])
+        )
+
+    result = refresh_supplementary_sources(
+        temp_store,
+        economy_codes=["US", "jp", "Unidentified", "United Kingdom", "", "US"],
+        risk_free_fetcher=lambda: pd.DataFrame(
+            columns=pd.Index(
+                [
+                    "series_id",
+                    "source_name",
+                    "trade_date",
+                    "nominal_rate",
+                    "economy_code",
+                ]
+            )
+        ),
+        world_bank_fetcher=fake_world_bank_fetcher,
+    )
+
+    assert result.status == "ok"
+    assert result.economy_count == 3
+    assert captured_economies == ["USA", "JPN", "GBR"]
 
 
 def test_refresh_supplementary_sources_reports_progress(

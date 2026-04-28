@@ -20,6 +20,7 @@ from ..storage import (
 from ..supplementary_sources import (
     RISK_FREE_SERIES_BY_ECONOMY,
     WORLD_BANK_INDICATOR_MAP,
+    normalize_economy_codes,
 )
 
 RequestsGet = Callable[..., requests.Response]
@@ -187,10 +188,7 @@ def refresh_supplementary_sources(
     progress: ProgressSink | None = None,
 ) -> SupplementaryCollectionResult:
     observed_at = _utc_now()
-    normalized_economies = [
-        str(code).upper() for code in (economy_codes or ()) if str(code).strip()
-    ]
-    normalized_economies = list(dict.fromkeys(normalized_economies))
+    normalized_economies = normalize_economy_codes(economy_codes or ())
     if not normalized_economies:
         return SupplementaryCollectionResult(
             status="no_economies",
