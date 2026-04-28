@@ -412,7 +412,6 @@ def build_sample_morningstar_payload() -> dict[str, object]:
 
 def build_sample_lipper_payload() -> dict[str, object]:
     return {
-        "as_of_date": "2026-01-03",
         "universes": [
             {
                 "name": "Sweden",

@@ -358,7 +358,7 @@ def test_write_lipper_ratings_snapshot_persists_rows(
         """
     ).fetchall()
 
-    assert result.effective_at == "2026-01-03"
+    assert result.effective_at == "2026-01-30"
     assert snapshot_row["universe_count"] == 1
     assert [
         (

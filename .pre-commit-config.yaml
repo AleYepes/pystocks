@@ -16,3 +16,9 @@ repos:
         entry: ./venv/bin/python -m pyright
         language: system
         pass_filenames: false
+      - id: pytest
+        name: pytest
+        entry: ./venv/bin/python -m pytest -q
+        language: system
+        pass_filenames: false
+        always_run: true

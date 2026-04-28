@@ -68,12 +68,13 @@ def test_build_snapshot_input_bundle_builds_features_and_diagnostics(
 
     bundle = build_snapshot_input_bundle(conn=temp_store)
 
-    assert bundle.snapshot_features["conid"].tolist() == ["100", "100", "100"]
+    assert bundle.snapshot_features["conid"].tolist() == ["100", "100", "100", "100"]
     assert bundle.snapshot_features["effective_at"].dt.strftime(
         "%Y-%m-%d"
     ).tolist() == [
         "2026-01-03",
         "2026-01-05",
+        "2026-01-30",
         "2026-01-31",
     ]
 
@@ -82,6 +83,9 @@ def test_build_snapshot_input_bundle_builds_features_and_diagnostics(
     ].iloc[0]
     row_observed = bundle.snapshot_features.loc[
         bundle.snapshot_features["effective_at"].dt.strftime("%Y-%m-%d") == "2026-01-05"
+    ].iloc[0]
+    row_lipper = bundle.snapshot_features.loc[
+        bundle.snapshot_features["effective_at"].dt.strftime("%Y-%m-%d") == "2026-01-30"
     ].iloc[0]
     row_morningstar = bundle.snapshot_features.loc[
         bundle.snapshot_features["effective_at"].dt.strftime("%Y-%m-%d") == "2026-01-31"
@@ -105,8 +109,9 @@ def test_build_snapshot_input_bundle_builds_features_and_diagnostics(
     assert row_asof["ratio_key_vs__price_sales"] == pytest.approx(0.0146)
     assert row_asof["ratio_fixed_income__current_yield"] == pytest.approx(3.17)
     assert row_asof["dividend_metric__dividend_yield"] == pytest.approx(0.0122)
-    assert row_asof["lipper__overall_total_return"] == pytest.approx(5.0)
-    assert row_asof["lipper__3_year_total_return"] == pytest.approx(4.0)
+
+    assert row_lipper["lipper__overall_total_return"] == pytest.approx(5.0)
+    assert row_lipper["lipper__3_year_total_return"] == pytest.approx(4.0)
 
     assert row_morningstar["morningstar__medalist_rating"] == "Silver"
     assert row_morningstar["morningstar__morningstar_rating"] == pytest.approx(4.0)

@@ -1086,6 +1086,33 @@ def _extract_lipper_rating_rows(
     return rows
 
 
+def _resolve_lipper_source_as_of_date(payload: JsonValue | bytes) -> DateLike:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return None
+
+    root_value = payload.get("as_of_date") or payload.get("asOfDate")
+    if to_iso_date(root_value) is not None:
+        return root_value
+
+    universes = payload.get("universes")
+    if not isinstance(universes, list):
+        return None
+
+    parsed_dates: dict[str, DateLike] = {}
+    for universe in universes:
+        if not isinstance(universe, dict):
+            continue
+        raw_value = universe.get("as_of_date") or universe.get("asOfDate")
+        parsed = to_iso_date(raw_value)
+        if parsed is None:
+            continue
+        parsed_dates.setdefault(parsed, raw_value)
+
+    if not parsed_dates:
+        return None
+    return parsed_dates[max(parsed_dates)]
+
+
 def write_price_chart_series(
     conn: sqlite3.Connection,
     *,
@@ -1883,7 +1910,7 @@ def write_lipper_ratings_snapshot(
     source_as_of_date = None
     universes: list[object] = []
     if not isinstance(payload, bytes) and isinstance(payload, dict):
-        source_as_of_date = payload.get("as_of_date") or payload.get("asOfDate")
+        source_as_of_date = _resolve_lipper_source_as_of_date(payload)
         raw_universes = payload.get("universes")
         universes = raw_universes if isinstance(raw_universes, list) else []
     batch_id = capture_batch_id or new_capture_batch_id()
