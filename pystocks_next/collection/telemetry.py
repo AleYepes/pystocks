@@ -17,6 +17,20 @@ class EndpointTelemetrySummary:
     status_codes: dict[str, int]
 
 
+@dataclass(frozen=True, slots=True)
+class PersistenceFailureSummary:
+    conid: str
+    endpoint_name: str
+    endpoint_family: str
+    request_path: str
+    observed_at: str
+    status_code: int
+    is_useful: bool
+    exception_type: str
+    exception_message: str
+    artifact_path: str | None
+
+
 @dataclass(slots=True)
 class CollectionTelemetry:
     run_started_at: str = field(
@@ -27,6 +41,7 @@ class CollectionTelemetry:
     status_codes: dict[str, Counter[str]] = field(
         default_factory=lambda: defaultdict(Counter)
     )
+    persistence_failures: list[PersistenceFailureSummary] = field(default_factory=list)
 
     def record_call(self, endpoint_family: str, status_code: int) -> None:
         self.endpoint_calls[endpoint_family] += 1
@@ -34,6 +49,35 @@ class CollectionTelemetry:
 
     def record_useful_payload(self, endpoint_family: str) -> None:
         self.endpoint_useful_payloads[endpoint_family] += 1
+
+    def record_persistence_failure(
+        self,
+        *,
+        conid: str,
+        endpoint_name: str,
+        endpoint_family: str,
+        request_path: str,
+        observed_at: str,
+        status_code: int,
+        is_useful: bool,
+        exception_type: str,
+        exception_message: str,
+        artifact_path: str | None,
+    ) -> None:
+        self.persistence_failures.append(
+            PersistenceFailureSummary(
+                conid=conid,
+                endpoint_name=endpoint_name,
+                endpoint_family=endpoint_family,
+                request_path=request_path,
+                observed_at=observed_at,
+                status_code=status_code,
+                is_useful=is_useful,
+                exception_type=exception_type,
+                exception_message=exception_message,
+                artifact_path=artifact_path,
+            )
+        )
 
     def build_endpoint_summary(self) -> list[EndpointTelemetrySummary]:
         endpoints = sorted(
@@ -64,6 +108,7 @@ class CollectionTelemetry:
             "run_started_at": self.run_started_at,
             "run_stats": dict(run_stats),
             "endpoint_summary": [asdict(row) for row in self.build_endpoint_summary()],
+            "persistence_failures": [asdict(row) for row in self.persistence_failures],
         }
 
     def write_report(

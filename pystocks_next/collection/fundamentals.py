@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from collections.abc import Collection, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
@@ -32,6 +33,11 @@ from .session import CollectionSession
 from .telemetry import CollectionTelemetry
 
 _SKIP_MISSING_TOTAL_NET_ASSETS = "skip_missing_total_net_assets"
+
+
+def _sanitize_path_segment(value: str) -> str:
+    sanitized = "".join(char if char.isalnum() else "_" for char in value.strip())
+    return sanitized.strip("_") or "unknown"
 
 
 class EndpointHttpResponse(Protocol):
@@ -514,6 +520,50 @@ class FundamentalsCollector:
             series_latest_rows_upserted=series_latest_rows_upserted,
         )
 
+    def _write_persistence_failure_artifact(
+        self,
+        *,
+        outcome: FundamentalsConidOutcome,
+        telemetry_output_path: Path | None,
+        exc: Exception,
+    ) -> Path | None:
+        if telemetry_output_path is None:
+            return None
+
+        artifact_dir = telemetry_output_path.parent / "persist_failures"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_name = (
+            f"{_sanitize_path_segment(outcome.conid)}_"
+            f"{_sanitize_path_segment(type(exc).__name__)}_"
+            f"{_sanitize_path_segment(new_capture_batch_id())}.json"
+        )
+        artifact_path = artifact_dir / artifact_name
+        payload = {
+            "conid": outcome.conid,
+            "status": outcome.status,
+            "observed_at": outcome.observed_at,
+            "skip_reason": outcome.skip_reason,
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
+            "endpoint_payloads": [
+                {
+                    "endpoint_name": item.endpoint_name,
+                    "endpoint_family": item.endpoint_family,
+                    "request_path": item.request_path,
+                    "conid": item.conid,
+                    "observed_at": item.observed_at,
+                    "status_code": item.status_code,
+                    "is_useful": item.is_useful,
+                    "payload": item.payload,
+                }
+                for item in outcome.endpoint_payloads
+            ],
+        }
+        artifact_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str)
+        )
+        return artifact_path
+
     async def run(
         self,
         conn: sqlite3.Connection,
@@ -609,7 +659,56 @@ class FundamentalsCollector:
                     tracker.advance(step=0, detail=f"reauthenticated for {conid}")
                 continue
 
-            storage_result = self.persist_outcome(conn, outcome)
+            try:
+                storage_result = self.persist_outcome(conn, outcome)
+            except Exception as exc:
+                if tracker is not None:
+                    tracker.close(
+                        detail=f"failed at {conid} after {processed_conids} conids"
+                    )
+                artifact_path = self._write_persistence_failure_artifact(
+                    outcome=outcome,
+                    telemetry_output_path=telemetry_output_path,
+                    exc=exc,
+                )
+                for payload in outcome.endpoint_payloads:
+                    self.telemetry.record_persistence_failure(
+                        conid=payload.conid,
+                        endpoint_name=payload.endpoint_name,
+                        endpoint_family=payload.endpoint_family,
+                        request_path=payload.request_path,
+                        observed_at=payload.observed_at,
+                        status_code=payload.status_code,
+                        is_useful=payload.is_useful,
+                        exception_type=type(exc).__name__,
+                        exception_message=str(exc),
+                        artifact_path=str(artifact_path)
+                        if artifact_path is not None
+                        else None,
+                    )
+                if telemetry_output_path is not None:
+                    self.telemetry.write_report(
+                        telemetry_output_path,
+                        run_stats={
+                            "status": "failed",
+                            "failed_conid": conid,
+                            "total_targeted_conids": len(targets),
+                            "processed_conids": processed_conids,
+                            "saved_snapshots": saved_snapshots,
+                            "inserted_events": inserted_events,
+                            "overwritten_events": overwritten_events,
+                            "unchanged_events": unchanged_events,
+                            "series_raw_rows_written": series_raw_rows_written,
+                            "series_latest_rows_upserted": series_latest_rows_upserted,
+                            "auth_retries": auth_retries,
+                            "aborted": aborted,
+                        },
+                    )
+                if artifact_path is not None:
+                    exc.add_note(f"Persistence failure artifact: {artifact_path}")
+                if telemetry_output_path is not None:
+                    exc.add_note(f"Telemetry report: {telemetry_output_path}")
+                raise
             processed_conids += 1
             saved_snapshots += storage_result.saved_snapshots
             inserted_events += storage_result.inserted_events

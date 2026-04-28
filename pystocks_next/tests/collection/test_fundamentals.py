@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from pystocks_next.collection.fundamentals import (
+    CollectedEndpointPayload,
     EndpointFetchResult,
     FundamentalsCollector,
     FundamentalsConidOutcome,
     FundamentalsPersistResult,
 )
 from pystocks_next.storage import (
+    UnresolvedEffectiveAtError,
     load_dividend_events,
     load_price_history,
     load_snapshot_feature_tables,
@@ -240,3 +245,70 @@ def test_run_reports_progress_for_processed_conids(temp_store) -> None:
         ("advance", "Collecting fundamentals", 1, "101 saved, 2 snapshots saved"),
         ("close", "Collecting fundamentals", None, "2/2 conids, 2 snapshots saved"),
     ]
+
+
+def test_run_writes_persistence_failure_artifact_and_report(
+    temp_store,
+    sample_morningstar_payload: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    collector = FundamentalsCollector(session=_DummySession())
+
+    async def fake_collect_conid(_client, conid: str) -> FundamentalsConidOutcome:
+        return FundamentalsConidOutcome(
+            conid=conid,
+            status="success",
+            observed_at="2026-01-04T10:00:00+00:00",
+            endpoint_payloads=(
+                CollectedEndpointPayload(
+                    endpoint_name="morningstar",
+                    endpoint_family="mstar",
+                    request_path=f"mstar/fund/detail?conid={conid}",
+                    conid=conid,
+                    observed_at="2026-01-04T10:00:00+00:00",
+                    payload=sample_morningstar_payload,
+                    status_code=200,
+                    is_useful=True,
+                ),
+            ),
+        )
+
+    def fake_persist_outcome(_conn, _outcome) -> FundamentalsPersistResult:
+        raise UnresolvedEffectiveAtError(
+            "morningstar_snapshot", "source_as_of_date is required"
+        )
+
+    collector.collect_conid = fake_collect_conid  # type: ignore[method-assign]
+    collector.persist_outcome = fake_persist_outcome  # type: ignore[method-assign]
+    telemetry_path = tmp_path / "fundamentals_run_telemetry.json"
+
+    with pytest.raises(UnresolvedEffectiveAtError) as exc_info:
+        asyncio.run(
+            collector.run(
+                temp_store,
+                explicit_conids=["100"],
+                telemetry_output_path=telemetry_path,
+            )
+        )
+
+    report_payload = json.loads(telemetry_path.read_text())
+    artifact_paths = sorted((tmp_path / "persist_failures").glob("*.json"))
+
+    assert artifact_paths
+    assert "Persistence failure artifact:" in "\n".join(exc_info.value.__notes__)
+    assert "Telemetry report:" in "\n".join(exc_info.value.__notes__)
+    assert report_payload["run_stats"]["status"] == "failed"
+    assert report_payload["run_stats"]["failed_conid"] == "100"
+    assert len(report_payload["persistence_failures"]) == 1
+    assert report_payload["persistence_failures"][0]["artifact_path"] == str(
+        artifact_paths[0]
+    )
+
+    artifact_payload = json.loads(artifact_paths[0].read_text())
+    assert artifact_payload["conid"] == "100"
+    assert artifact_payload["exception_type"] == "UnresolvedEffectiveAtError"
+    assert artifact_payload["endpoint_payloads"][0]["endpoint_name"] == "morningstar"
+    assert (
+        artifact_payload["endpoint_payloads"][0]["payload"]
+        == sample_morningstar_payload
+    )
