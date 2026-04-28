@@ -1113,6 +1113,33 @@ def _resolve_lipper_source_as_of_date(payload: JsonValue | bytes) -> DateLike:
     return parsed_dates[max(parsed_dates)]
 
 
+def _resolve_morningstar_source_as_of_date(payload: JsonValue | bytes) -> DateLike:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return None
+
+    root_value = payload.get("as_of_date") or payload.get("asOfDate")
+    if to_iso_date(root_value) is not None:
+        return root_value
+
+    summary = payload.get("summary")
+    if not isinstance(summary, list):
+        return None
+
+    parsed_dates: dict[str, DateLike] = {}
+    for item in summary:
+        if not isinstance(item, dict):
+            continue
+        raw_value = item.get("publish_date") or item.get("publishDate")
+        parsed = to_iso_date(raw_value)
+        if parsed is None:
+            continue
+        parsed_dates.setdefault(parsed, raw_value)
+
+    if not parsed_dates:
+        return None
+    return parsed_dates[max(parsed_dates)]
+
+
 def write_price_chart_series(
     conn: sqlite3.Connection,
     *,
@@ -1817,7 +1844,7 @@ def write_morningstar_snapshot(
     source_as_of_date = None
     q_full_report_id = None
     if not isinstance(payload, bytes) and isinstance(payload, dict):
-        source_as_of_date = payload.get("as_of_date") or payload.get("asOfDate")
+        source_as_of_date = _resolve_morningstar_source_as_of_date(payload)
         q_full_report_id = payload.get("q_full_report_id")
     batch_id = capture_batch_id or new_capture_batch_id()
     resolution = resolve_effective_at(

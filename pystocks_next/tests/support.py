@@ -426,12 +426,16 @@ def build_sample_morningstar_payload() -> dict[str, object]:
         "as_of_date": "20260131",
         "q_full_report_id": "report_123",
         "summary": [
-            {"id": "medalist_rating", "value": "Silver"},
-            {"id": "process", "value": "High"},
-            {"id": "people", "value": "Above_Average"},
-            {"id": "parent", "value": "Above_Average"},
-            {"id": "morningstar_rating", "value": "4"},
-            {"id": "sustainability_rating", "value": "Average"},
+            {"id": "medalist_rating", "value": "Silver", "publish_date": "20260128"},
+            {"id": "process", "value": "High", "publish_date": "20260128"},
+            {"id": "people", "value": "Above_Average", "publish_date": "20260128"},
+            {"id": "parent", "value": "Above_Average", "publish_date": "20250716"},
+            {"id": "morningstar_rating", "value": "4", "publish_date": "20260131"},
+            {
+                "id": "sustainability_rating",
+                "value": "Average",
+                "publish_date": "20251231",
+            },
             {"id": "category", "value": "Large Blend"},
             {
                 "id": "category_index",
