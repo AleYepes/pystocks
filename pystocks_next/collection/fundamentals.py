@@ -124,6 +124,13 @@ class FundamentalsCollectionResult:
     latest_telemetry_path: str | None = None
 
 
+class EndpointPersistenceError(RuntimeError):
+    def __init__(self, payload: CollectedEndpointPayload, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.payload = payload
+        self.cause = cause
+
+
 class FundamentalsCollector:
     """Thin fundamentals runner for the first collection slice."""
 
@@ -439,54 +446,9 @@ class FundamentalsCollector:
         for payload in outcome.endpoint_payloads:
             if payload.status_code != 200 or not isinstance(payload.payload, dict):
                 continue
-            if payload.endpoint_name == "profile_and_fees":
-                write_profile_and_fees_snapshot(
-                    conn,
-                    conid=payload.conid,
-                    payload=payload.payload,
-                    observed_at=payload.observed_at,
-                    capture_batch_id=batch_id,
-                )
-                saved_snapshots += 1
-            elif payload.endpoint_name == "holdings" and payload.is_useful:
-                write_holdings_snapshot(
-                    conn,
-                    conid=payload.conid,
-                    payload=payload.payload,
-                    observed_at=payload.observed_at,
-                    capture_batch_id=batch_id,
-                )
-                saved_snapshots += 1
-            elif payload.endpoint_name == "ratios" and payload.is_useful:
-                write_ratios_snapshot(
-                    conn,
-                    conid=payload.conid,
-                    payload=payload.payload,
-                    observed_at=payload.observed_at,
-                    capture_batch_id=batch_id,
-                )
-                saved_snapshots += 1
-            elif payload.endpoint_name == "lipper_ratings" and payload.is_useful:
-                write_lipper_ratings_snapshot(
-                    conn,
-                    conid=payload.conid,
-                    payload=payload.payload,
-                    observed_at=payload.observed_at,
-                    capture_batch_id=batch_id,
-                )
-                saved_snapshots += 1
-            elif payload.endpoint_name == "morningstar" and payload.is_useful:
-                write_morningstar_snapshot(
-                    conn,
-                    conid=payload.conid,
-                    payload=payload.payload,
-                    observed_at=payload.observed_at,
-                    capture_batch_id=batch_id,
-                )
-                saved_snapshots += 1
-            elif payload.endpoint_name == "dividends" and payload.is_useful:
-                try:
-                    write_dividends_snapshot(
+            try:
+                if payload.endpoint_name == "profile_and_fees":
+                    write_profile_and_fees_snapshot(
                         conn,
                         conid=payload.conid,
                         payload=payload.payload,
@@ -494,25 +456,73 @@ class FundamentalsCollector:
                         capture_batch_id=batch_id,
                     )
                     saved_snapshots += 1
-                except UnresolvedEffectiveAtError:
-                    pass
-                dividend_series_result = write_dividend_events_series(
-                    conn,
-                    conid=payload.conid,
-                    payload=payload.payload,
-                    observed_at=payload.observed_at,
-                    capture_batch_id=batch_id,
-                )
-                inserted_events += dividend_series_result.rows_inserted
-            elif payload.endpoint_name == "price_chart":
-                price_series_result = write_price_chart_series(
-                    conn,
-                    conid=payload.conid,
-                    payload=payload.payload,
-                    observed_at=payload.observed_at,
-                    capture_batch_id=batch_id,
-                )
-                series_latest_rows_upserted += price_series_result.rows_upserted
+                elif payload.endpoint_name == "holdings" and payload.is_useful:
+                    write_holdings_snapshot(
+                        conn,
+                        conid=payload.conid,
+                        payload=payload.payload,
+                        observed_at=payload.observed_at,
+                        capture_batch_id=batch_id,
+                    )
+                    saved_snapshots += 1
+                elif payload.endpoint_name == "ratios" and payload.is_useful:
+                    write_ratios_snapshot(
+                        conn,
+                        conid=payload.conid,
+                        payload=payload.payload,
+                        observed_at=payload.observed_at,
+                        capture_batch_id=batch_id,
+                    )
+                    saved_snapshots += 1
+                elif payload.endpoint_name == "lipper_ratings" and payload.is_useful:
+                    write_lipper_ratings_snapshot(
+                        conn,
+                        conid=payload.conid,
+                        payload=payload.payload,
+                        observed_at=payload.observed_at,
+                        capture_batch_id=batch_id,
+                    )
+                    saved_snapshots += 1
+                elif payload.endpoint_name == "morningstar" and payload.is_useful:
+                    write_morningstar_snapshot(
+                        conn,
+                        conid=payload.conid,
+                        payload=payload.payload,
+                        observed_at=payload.observed_at,
+                        capture_batch_id=batch_id,
+                    )
+                    saved_snapshots += 1
+                elif payload.endpoint_name == "dividends" and payload.is_useful:
+                    try:
+                        write_dividends_snapshot(
+                            conn,
+                            conid=payload.conid,
+                            payload=payload.payload,
+                            observed_at=payload.observed_at,
+                            capture_batch_id=batch_id,
+                        )
+                        saved_snapshots += 1
+                    except UnresolvedEffectiveAtError:
+                        pass
+                    dividend_series_result = write_dividend_events_series(
+                        conn,
+                        conid=payload.conid,
+                        payload=payload.payload,
+                        observed_at=payload.observed_at,
+                        capture_batch_id=batch_id,
+                    )
+                    inserted_events += dividend_series_result.rows_inserted
+                elif payload.endpoint_name == "price_chart":
+                    price_series_result = write_price_chart_series(
+                        conn,
+                        conid=payload.conid,
+                        payload=payload.payload,
+                        observed_at=payload.observed_at,
+                        capture_batch_id=batch_id,
+                    )
+                    series_latest_rows_upserted += price_series_result.rows_upserted
+            except Exception as exc:
+                raise EndpointPersistenceError(payload, exc) from exc
 
         return FundamentalsPersistResult(
             saved_snapshots=saved_snapshots,
@@ -524,6 +534,7 @@ class FundamentalsCollector:
         self,
         *,
         outcome: FundamentalsConidOutcome,
+        failing_payload: CollectedEndpointPayload,
         telemetry_output_path: Path | None,
         exc: Exception,
     ) -> Path | None:
@@ -545,18 +556,18 @@ class FundamentalsCollector:
             "skip_reason": outcome.skip_reason,
             "exception_type": type(exc).__name__,
             "exception_message": str(exc),
-            "endpoint_payloads": [
-                {
-                    "endpoint_name": item.endpoint_name,
-                    "endpoint_family": item.endpoint_family,
-                    "request_path": item.request_path,
-                    "conid": item.conid,
-                    "observed_at": item.observed_at,
-                    "status_code": item.status_code,
-                    "is_useful": item.is_useful,
-                    "payload": item.payload,
-                }
-                for item in outcome.endpoint_payloads
+            "failing_endpoint": {
+                "endpoint_name": failing_payload.endpoint_name,
+                "endpoint_family": failing_payload.endpoint_family,
+                "request_path": failing_payload.request_path,
+                "conid": failing_payload.conid,
+                "observed_at": failing_payload.observed_at,
+                "status_code": failing_payload.status_code,
+                "is_useful": failing_payload.is_useful,
+                "payload": failing_payload.payload,
+            },
+            "available_endpoints": [
+                item.endpoint_name for item in outcome.endpoint_payloads
             ],
         }
         artifact_path.write_text(
@@ -661,31 +672,32 @@ class FundamentalsCollector:
 
             try:
                 storage_result = self.persist_outcome(conn, outcome)
-            except Exception as exc:
+            except EndpointPersistenceError as exc:
+                cause = exc.cause
                 if tracker is not None:
                     tracker.close(
                         detail=f"failed at {conid} after {processed_conids} conids"
                     )
                 artifact_path = self._write_persistence_failure_artifact(
                     outcome=outcome,
+                    failing_payload=exc.payload,
                     telemetry_output_path=telemetry_output_path,
-                    exc=exc,
+                    exc=cause,
                 )
-                for payload in outcome.endpoint_payloads:
-                    self.telemetry.record_persistence_failure(
-                        conid=payload.conid,
-                        endpoint_name=payload.endpoint_name,
-                        endpoint_family=payload.endpoint_family,
-                        request_path=payload.request_path,
-                        observed_at=payload.observed_at,
-                        status_code=payload.status_code,
-                        is_useful=payload.is_useful,
-                        exception_type=type(exc).__name__,
-                        exception_message=str(exc),
-                        artifact_path=str(artifact_path)
-                        if artifact_path is not None
-                        else None,
-                    )
+                self.telemetry.record_persistence_failure(
+                    conid=exc.payload.conid,
+                    endpoint_name=exc.payload.endpoint_name,
+                    endpoint_family=exc.payload.endpoint_family,
+                    request_path=exc.payload.request_path,
+                    observed_at=exc.payload.observed_at,
+                    status_code=exc.payload.status_code,
+                    is_useful=exc.payload.is_useful,
+                    exception_type=type(cause).__name__,
+                    exception_message=str(cause),
+                    artifact_path=str(artifact_path)
+                    if artifact_path is not None
+                    else None,
+                )
                 if telemetry_output_path is not None:
                     self.telemetry.write_report(
                         telemetry_output_path,
@@ -705,10 +717,10 @@ class FundamentalsCollector:
                         },
                     )
                 if artifact_path is not None:
-                    exc.add_note(f"Persistence failure artifact: {artifact_path}")
+                    cause.add_note(f"Persistence failure artifact: {artifact_path}")
                 if telemetry_output_path is not None:
-                    exc.add_note(f"Telemetry report: {telemetry_output_path}")
-                raise
+                    cause.add_note(f"Telemetry report: {telemetry_output_path}")
+                raise cause.with_traceback(cause.__traceback__)
             processed_conids += 1
             saved_snapshots += storage_result.saved_snapshots
             inserted_events += storage_result.inserted_events

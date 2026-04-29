@@ -12,6 +12,7 @@ import pytest
 from pystocks_next.collection.fundamentals import (
     CollectedEndpointPayload,
     EndpointFetchResult,
+    EndpointPersistenceError,
     FundamentalsCollector,
     FundamentalsConidOutcome,
     FundamentalsPersistResult,
@@ -250,6 +251,7 @@ def test_run_reports_progress_for_processed_conids(temp_store) -> None:
 def test_run_writes_persistence_failure_artifact_and_report(
     temp_store,
     sample_morningstar_payload: dict[str, object],
+    sample_profile_and_fees_payload: dict[str, object],
     tmp_path: Path,
 ) -> None:
     collector = FundamentalsCollector(session=_DummySession())
@@ -260,6 +262,16 @@ def test_run_writes_persistence_failure_artifact_and_report(
             status="success",
             observed_at="2026-01-04T10:00:00+00:00",
             endpoint_payloads=(
+                CollectedEndpointPayload(
+                    endpoint_name="profile_and_fees",
+                    endpoint_family="mf_profile_and_fees",
+                    request_path=f"mf_profile_and_fees/{conid}?sustainability=UK&lang=en",
+                    conid=conid,
+                    observed_at="2026-01-04T10:00:00+00:00",
+                    payload=sample_profile_and_fees_payload,
+                    status_code=200,
+                    is_useful=True,
+                ),
                 CollectedEndpointPayload(
                     endpoint_name="morningstar",
                     endpoint_family="mstar",
@@ -273,9 +285,12 @@ def test_run_writes_persistence_failure_artifact_and_report(
             ),
         )
 
-    def fake_persist_outcome(_conn, _outcome) -> FundamentalsPersistResult:
-        raise UnresolvedEffectiveAtError(
-            "morningstar_snapshot", "source_as_of_date is required"
+    def fake_persist_outcome(_conn, outcome) -> FundamentalsPersistResult:
+        raise EndpointPersistenceError(
+            outcome.endpoint_payloads[-1],
+            UnresolvedEffectiveAtError(
+                "morningstar_snapshot", "source_as_of_date is required"
+            ),
         )
 
     collector.collect_conid = fake_collect_conid  # type: ignore[method-assign]
@@ -307,8 +322,9 @@ def test_run_writes_persistence_failure_artifact_and_report(
     artifact_payload = json.loads(artifact_paths[0].read_text())
     assert artifact_payload["conid"] == "100"
     assert artifact_payload["exception_type"] == "UnresolvedEffectiveAtError"
-    assert artifact_payload["endpoint_payloads"][0]["endpoint_name"] == "morningstar"
-    assert (
-        artifact_payload["endpoint_payloads"][0]["payload"]
-        == sample_morningstar_payload
-    )
+    assert artifact_payload["available_endpoints"] == [
+        "profile_and_fees",
+        "morningstar",
+    ]
+    assert artifact_payload["failing_endpoint"]["endpoint_name"] == "morningstar"
+    assert artifact_payload["failing_endpoint"]["payload"] == sample_morningstar_payload
