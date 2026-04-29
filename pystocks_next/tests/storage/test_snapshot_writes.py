@@ -357,6 +357,59 @@ def test_write_morningstar_snapshot_falls_back_to_latest_summary_publish_date(
     assert snapshot_row["as_of_date"] == "2026-01-31"
 
 
+def test_write_morningstar_snapshot_falls_back_to_commentary_publish_date(
+    temp_store,
+) -> None:
+    upsert_instruments(temp_store, [UniverseInstrument(conid="100", symbol="AAA")])
+    payload = {
+        "summary": [
+            {
+                "id": "category",
+                "title": "Category",
+                "value": "Trading - Leveraged/Inverse Equity",
+                "q": False,
+            }
+        ],
+        "commentary": [
+            {
+                "id": "sustainability",
+                "title": "Sustainability",
+                "q": True,
+                "publish_date": "20250531",
+                "text": "Insufficient data.",
+            }
+        ],
+    }
+
+    result = write_morningstar_snapshot(
+        temp_store,
+        conid="100",
+        payload=payload,
+        observed_at="2026-01-05T10:00:00+00:00",
+    )
+
+    snapshot_row = temp_store.execute(
+        """
+        SELECT effective_at, as_of_date
+        FROM morningstar_snapshots
+        WHERE conid = '100'
+        """
+    ).fetchone()
+    summary_row = temp_store.execute(
+        """
+        SELECT metric_id, value_text
+        FROM morningstar_summary
+        WHERE conid = '100'
+        """
+    ).fetchone()
+
+    assert result.effective_at == "2025-05-31"
+    assert snapshot_row["effective_at"] == "2025-05-31"
+    assert snapshot_row["as_of_date"] == "2025-05-31"
+    assert summary_row["metric_id"] == "category"
+    assert summary_row["value_text"] == "Trading - Leveraged/Inverse Equity"
+
+
 def test_write_lipper_ratings_snapshot_persists_rows(
     temp_store,
     sample_lipper_payload: dict[str, object],

@@ -1121,19 +1121,19 @@ def _resolve_morningstar_source_as_of_date(payload: JsonValue | bytes) -> DateLi
     if to_iso_date(root_value) is not None:
         return root_value
 
-    summary = payload.get("summary")
-    if not isinstance(summary, list):
-        return None
-
     parsed_dates: dict[str, DateLike] = {}
-    for item in summary:
-        if not isinstance(item, dict):
+    for section_name in ("summary", "commentary"):
+        section = payload.get(section_name)
+        if not isinstance(section, list):
             continue
-        raw_value = item.get("publish_date") or item.get("publishDate")
-        parsed = to_iso_date(raw_value)
-        if parsed is None:
-            continue
-        parsed_dates.setdefault(parsed, raw_value)
+        for item in section:
+            if not isinstance(item, dict):
+                continue
+            raw_value = item.get("publish_date") or item.get("publishDate")
+            parsed = to_iso_date(raw_value)
+            if parsed is None:
+                continue
+            parsed_dates.setdefault(parsed, raw_value)
 
     if not parsed_dates:
         return None
