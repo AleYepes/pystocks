@@ -426,6 +426,8 @@ _PROFILE_DATE_FIELD_IDS = {
 
 _PROFILE_NUMERIC_FIELD_IDS = {
     "management_expenses",
+    "morningstar_stylebox_x_index",
+    "morningstar_stylebox_y_index",
     "redemption_charge_actual",
     "redemption_charge_max",
     "total_expense_ratio",
@@ -443,6 +445,86 @@ _DIVIDENDS_METRIC_ID_ALIASES = {
     "dividend_ttm": "dividend_ttm",
     "annual_dividend": "dividend_ttm",
 }
+
+
+def _sanitize_segment(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_") or "field"
+
+
+def _normalize_profile_themes(payload: Mapping[str, object]) -> str | None:
+    themes = payload.get("themes", [])
+    if not isinstance(themes, list):
+        return None
+
+    names: list[str] = []
+    for item in themes:
+        if isinstance(item, str):
+            name = item.strip()
+        elif isinstance(item, dict):
+            raw_name = item.get("theme_name") or item.get("name")
+            name = str(raw_name).strip() if raw_name is not None else ""
+        else:
+            name = ""
+        if name:
+            names.append(name)
+    return " | ".join(dict.fromkeys(names)) if names else None
+
+
+def _extract_profile_stylebox_fields(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    mstar = payload.get("mstar")
+    if not isinstance(mstar, dict):
+        return {}
+    hist = mstar.get("hist")
+    if not isinstance(hist, list) or not hist:
+        return {}
+    first_pair = hist[0]
+    if not isinstance(first_pair, list) or len(first_pair) < 2:
+        return {}
+
+    x_index = _parse_int(first_pair[0])
+    y_index = _parse_int(first_pair[1])
+    if x_index is None or y_index is None:
+        return {}
+
+    x_axis = mstar.get("x_axis")
+    y_axis = mstar.get("y_axis")
+    x_axis_tag = mstar.get("x_axis_tag")
+    y_axis_tag = mstar.get("y_axis_tag")
+    x_label = (
+        str(x_axis[x_index])
+        if isinstance(x_axis, list) and 0 <= x_index < len(x_axis)
+        else None
+    )
+    y_label = (
+        str(y_axis[y_index])
+        if isinstance(y_axis, list) and 0 <= y_index < len(y_axis)
+        else None
+    )
+    x_tag = (
+        _sanitize_segment(x_axis_tag[x_index])
+        if isinstance(x_axis_tag, list) and 0 <= x_index < len(x_axis_tag)
+        else _sanitize_segment(x_label)
+        if x_label is not None
+        else None
+    )
+    y_tag = (
+        _sanitize_segment(y_axis_tag[y_index])
+        if isinstance(y_axis_tag, list) and 0 <= y_index < len(y_axis_tag)
+        else _sanitize_segment(y_label)
+        if y_label is not None
+        else None
+    )
+
+    return {
+        "morningstar_stylebox": f"{x_tag}_{y_tag}" if x_tag and y_tag else None,
+        "morningstar_stylebox_x": x_label,
+        "morningstar_stylebox_y": y_label,
+        "morningstar_stylebox_x_index": x_index,
+        "morningstar_stylebox_y_index": y_index,
+    }
+
 
 _MORNINGSTAR_SUMMARY_ID_TO_COLUMN = {
     "medalist_rating": "medalist_rating",
@@ -490,6 +572,11 @@ def _extract_profile_and_fees_row(
         "objective": None,
         "jap_fund_warning": None,
         "theme_name": None,
+        "morningstar_stylebox": None,
+        "morningstar_stylebox_x": None,
+        "morningstar_stylebox_y": None,
+        "morningstar_stylebox_x_index": None,
+        "morningstar_stylebox_y_index": None,
     }
     if isinstance(payload, bytes) or not isinstance(payload, dict):
         return profile_row
@@ -498,12 +585,8 @@ def _extract_profile_and_fees_row(
         str(payload.get("objective")) if payload.get("objective") is not None else None
     )
     profile_row["jap_fund_warning"] = _to_int_bool(payload.get("jap_fund_warning"))
-    themes = [
-        str(item.get("theme_name")).strip()
-        for item in payload.get("themes", [])
-        if isinstance(item, dict) and item.get("theme_name")
-    ]
-    profile_row["theme_name"] = " | ".join(dict.fromkeys(themes)) if themes else None
+    profile_row["theme_name"] = _normalize_profile_themes(payload)
+    profile_row.update(_extract_profile_stylebox_fields(payload))
 
     fund_and_profile = payload.get("fund_and_profile", [])
     if not isinstance(fund_and_profile, list):
@@ -558,6 +641,70 @@ def _snapshot_factor_row(
     }
 
 
+def _extract_profile_report_factor_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+    reports = payload.get("reports", [])
+    if not isinstance(reports, list):
+        return []
+
+    rows: list[dict[str, object]] = []
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        report_id = _sanitize_segment(report.get("name") or "report")
+        report_as_of_date = to_iso_date(
+            report.get("as_of_date") or report.get("asOfDate")
+        )
+        if report_as_of_date is not None:
+            rows.append(
+                _snapshot_factor_row(
+                    conid=conid,
+                    effective_at=effective_at,
+                    factor_id=f"report_{report_id}_as_of_date",
+                    value_date=report_as_of_date,
+                )
+            )
+
+        fields = report.get("fields", [])
+        if not isinstance(fields, list):
+            continue
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            name = field.get("name")
+            if name is None:
+                continue
+            value = field.get("value")
+            if value is None:
+                continue
+            factor_id = f"report_{report_id}_{_sanitize_segment(name)}"
+            numeric_value = _parse_number(value, percent_as_fraction=True)
+            if numeric_value is not None:
+                rows.append(
+                    _snapshot_factor_row(
+                        conid=conid,
+                        effective_at=effective_at,
+                        factor_id=factor_id,
+                        value_num=numeric_value,
+                    )
+                )
+            else:
+                rows.append(
+                    _snapshot_factor_row(
+                        conid=conid,
+                        effective_at=effective_at,
+                        factor_id=factor_id,
+                        value_text=str(value),
+                    )
+                )
+    return rows
+
+
 def _extract_profile_and_fees_factor_rows(
     conid: str,
     effective_at: str,
@@ -610,6 +757,7 @@ def _extract_profile_and_fees_factor_rows(
                     value_text=str(value),
                 )
             )
+    rows.extend(_extract_profile_report_factor_rows(conid, effective_at, payload))
     return rows
 
 
@@ -619,10 +767,6 @@ _HOLDINGS_ASSET_TYPE_MAP = {
     "fixed_income": "fixed_income",
     "other": "other",
 }
-
-
-def _sanitize_segment(value: object) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_") or "field"
 
 
 def _pick_first_present(mapping: Mapping[str, object], *keys: str) -> object:

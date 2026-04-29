@@ -53,6 +53,74 @@ def test_write_profile_and_fees_snapshot_persists_tall_factor_rows(
     assert by_field["jap_fund_warning"]["value_bool"] == 0
 
 
+def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
+    temp_store,
+) -> None:
+    upsert_instruments(temp_store, [UniverseInstrument(conid="100", symbol="AAA")])
+    payload = {
+        "objective": "Track an index.",
+        "symbol": "SPY",
+        "fund_and_profile": [
+            {"name": "Asset Type", "value": "Equity"},
+            {"name": "Launch Opening Price", "value": "1993-01-22"},
+            {"name": "Total Net Assets (Month End)", "value": "$708.92B (2026/01/30)"},
+        ],
+        "mstar": {
+            "x_axis": ["Value", "Core", "Growth"],
+            "y_axis": ["Large", "Multi", "Mid", "Small"],
+            "x_axis_tag": ["value", "core", "growth"],
+            "y_axis_tag": ["large", "multi", "mid", "small"],
+            "selected": [],
+            "hist": [[2, 1]],
+        },
+        "reports": [
+            {
+                "name": "Annual Report",
+                "as_of_date": 1759204800000,
+                "fields": [
+                    {"name": "Total Expense", "value": "0.0893%", "is_summary": True},
+                    {"name": "Management Fees", "value": "0.0469%"},
+                ],
+            },
+            {"as_of_date": 0},
+        ],
+        "themes": ["Index Tracking"],
+        "expenses_allocation": [],
+        "jap_fund_warning": False,
+    }
+
+    write_profile_and_fees_snapshot(
+        temp_store,
+        conid="100",
+        payload=payload,
+        observed_at="2026-01-05T10:00:00+00:00",
+    )
+
+    rows = temp_store.execute(
+        """
+        SELECT field_id, value_text, value_num, value_date, value_bool
+        FROM profile_and_fees
+        WHERE conid = '100'
+        ORDER BY field_id
+        """
+    ).fetchall()
+    by_field = {row["field_id"]: row for row in rows}
+
+    assert by_field["theme_name"]["value_text"] == "Index Tracking"
+    assert by_field["morningstar_stylebox"]["value_text"] == "growth_multi"
+    assert by_field["morningstar_stylebox_x"]["value_text"] == "Growth"
+    assert by_field["morningstar_stylebox_y"]["value_text"] == "Multi"
+    assert by_field["morningstar_stylebox_x_index"]["value_num"] == pytest.approx(2.0)
+    assert by_field["morningstar_stylebox_y_index"]["value_num"] == pytest.approx(1.0)
+    assert by_field["report_annual_report_as_of_date"]["value_date"] == "2025-09-30"
+    assert by_field["report_annual_report_total_expense"]["value_num"] == pytest.approx(
+        0.000893
+    )
+    assert by_field["report_annual_report_management_fees"][
+        "value_num"
+    ] == pytest.approx(0.000469)
+
+
 def test_write_holdings_snapshot_persists_tall_factor_rows(
     temp_store,
     sample_holdings_payload: dict[str, object],

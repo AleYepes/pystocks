@@ -11,11 +11,11 @@ repos:
         entry: ./venv/bin/python -m ruff format
         language: system
         types: [python]
-      # - id: pyright
-      #   name: pyright
-      #   entry: ./venv/bin/python -m pyright
-      #   language: system
-      #   pass_filenames: false
+      - id: pyright
+        name: pyright
+        entry: ./venv/bin/python -m pyright
+        language: system
+        pass_filenames: false
       - id: pytest
         name: pytest
         entry: ./venv/bin/python -m pytest -q
