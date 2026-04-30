@@ -6,6 +6,7 @@ from collections.abc import Mapping
 import httpx
 
 from pystocks_next.collection.products import (
+    _normalize_products,
     fetch_product_page,
     refresh_product_universe,
 )
@@ -99,6 +100,65 @@ def test_refresh_product_universe_filters_malformed_and_dedupes(
     assert result.products_upserted == 1
     assert result.page_count == 1
     assert [(item.conid, item.symbol) for item in instruments] == [("100", "AAA2")]
+
+
+def test_normalize_products_handles_ibkr_catalog_field_names() -> None:
+    instruments = _normalize_products(
+        [
+            {
+                "conid": "756733",
+                "symbol": "SPY",
+                "exchangeId": "BEX",
+                "localSymbol": "SPY",
+                "isin": "US78462F1030",
+                "cusip": "78462F103",
+                "currency": "USD",
+                "country": "US",
+                "description": "SS SPDR S&P 500 ETF TRUST-US",
+                "type": "ETF",
+                "underConid": None,
+                "isPrimeExchId": "T",
+                "isNewPdt": "F",
+                "assocEntityId": None,
+                "fcConid": 1,
+            },
+            {
+                "conid": "nan",
+                "symbol": "BAD",
+                "exchangeId": "BAD",
+            },
+            {
+                "conid": "45540646",
+                "symbol": "SPYM",
+                "name": "nan",
+                "description": "STE STR SPDR PT S&P 500 ETF",
+                "exchange": "DRCTEDGE",
+                "exchangeId": "IGNORED",
+                "currency": float("nan"),
+                "productType": "ETF",
+            },
+        ]
+    )
+
+    assert instruments[0].conid == "756733"
+    assert instruments[0].symbol == "SPY"
+    assert instruments[0].local_symbol == "SPY"
+    assert instruments[0].exchange == "BEX"
+    assert instruments[0].isin == "US78462F1030"
+    assert instruments[0].cusip == "78462F103"
+    assert instruments[0].currency == "USD"
+    assert instruments[0].country == "US"
+    assert instruments[0].name == "SS SPDR S&P 500 ETF TRUST-US"
+    assert instruments[0].product_type == "ETF"
+    assert instruments[0].under_conid is None
+    assert instruments[0].is_prime_exch_id == "T"
+    assert instruments[0].is_new_pdt == "F"
+    assert instruments[0].assoc_entity_id is None
+    assert instruments[0].fc_conid == "1"
+    assert instruments[1].conid == "45540646"
+    assert instruments[1].name == "STE STR SPDR PT S&P 500 ETF"
+    assert instruments[1].exchange == "DRCTEDGE"
+    assert instruments[1].currency is None
 
 
 def test_refresh_product_universe_reports_progress(temp_store) -> None:

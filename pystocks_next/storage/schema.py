@@ -599,6 +599,44 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=12,
+        description="retain full IBKR product catalog fields",
+        statements=(
+            """
+            ALTER TABLE universe_instruments
+            ADD COLUMN local_symbol TEXT
+            """,
+            """
+            ALTER TABLE universe_instruments
+            ADD COLUMN cusip TEXT
+            """,
+            """
+            ALTER TABLE universe_instruments
+            ADD COLUMN country TEXT
+            """,
+            """
+            ALTER TABLE universe_instruments
+            ADD COLUMN under_conid TEXT
+            """,
+            """
+            ALTER TABLE universe_instruments
+            ADD COLUMN is_prime_exch_id TEXT
+            """,
+            """
+            ALTER TABLE universe_instruments
+            ADD COLUMN is_new_pdt TEXT
+            """,
+            """
+            ALTER TABLE universe_instruments
+            ADD COLUMN assoc_entity_id TEXT
+            """,
+            """
+            ALTER TABLE universe_instruments
+            ADD COLUMN fc_conid TEXT
+            """,
+        ),
+    ),
 )
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import sqlite3
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -70,22 +71,54 @@ def _normalize_products(
 ) -> list[UniverseInstrument]:
     deduped: dict[str, UniverseInstrument] = {}
     for product in products:
-        conid = str(product.get("conid") or "").strip()
+        conid = _clean_product_text(product.get("conid"))
         if not conid:
             continue
         deduped[conid] = UniverseInstrument(
             conid=conid,
-            symbol=str(product.get("symbol") or "").strip() or None,
-            name=str(product.get("name") or "").strip() or None,
-            exchange=str(product.get("exchange") or "").strip() or None,
-            isin=str(product.get("isin") or "").strip() or None,
-            currency=str(product.get("currency") or "").strip() or None,
-            product_type=str(
-                product.get("productType") or product.get("product_type") or ""
-            ).strip()
-            or None,
+            symbol=_first_product_text(product, "symbol"),
+            local_symbol=_first_product_text(product, "localSymbol", "local_symbol"),
+            name=_first_product_text(product, "name", "description"),
+            exchange=_first_product_text(product, "exchange", "exchangeId"),
+            isin=_first_product_text(product, "isin"),
+            cusip=_first_product_text(product, "cusip"),
+            currency=_first_product_text(product, "currency"),
+            country=_first_product_text(product, "country"),
+            product_type=_first_product_text(
+                product, "type", "productType", "product_type"
+            )
+            or "ETF",
+            under_conid=_first_product_text(product, "underConid", "under_conid"),
+            is_prime_exch_id=_first_product_text(
+                product, "isPrimeExchId", "is_prime_exch_id"
+            ),
+            is_new_pdt=_first_product_text(product, "isNewPdt", "is_new_pdt"),
+            assoc_entity_id=_first_product_text(
+                product, "assocEntityId", "assoc_entity_id"
+            ),
+            fc_conid=_first_product_text(product, "fcConid", "fc_conid"),
         )
     return list(deduped.values())
+
+
+def _clean_product_text(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null"}:
+        return None
+    return text
+
+
+def _first_product_text(product: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        text = _clean_product_text(product.get(key))
+        if text is not None:
+            return text
+    return None
 
 
 async def fetch_product_page(
@@ -152,7 +185,7 @@ async def refresh_product_universe(
     all_products: list[Mapping[str, Any]] = []
     page_count = 0
     try:
-        page_number = 1
+        page_number = 0
         while True:
             page = await fetch_product_page(
                 client_obj,
