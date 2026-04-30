@@ -529,7 +529,7 @@ def test_write_morningstar_snapshot_persists_tall_summary_rows(
 
     rows = temp_store.execute(
         """
-        SELECT metric_id, value_text, value_num
+        SELECT metric_id, title, derived_quantitatively, publish_date, value_text, value_num
         FROM morningstar_summary
         WHERE conid = '100'
         ORDER BY metric_id
@@ -539,7 +539,12 @@ def test_write_morningstar_snapshot_persists_tall_summary_rows(
 
     assert result.effective_at == "2026-01-31"
     assert by_metric["medalist_rating"]["value_text"] == "Silver"
-    assert by_metric["process"]["value_text"] == "High"
+    assert by_metric["process"]["value_text"] == "Average"
+    assert by_metric["process"]["title"] == "Process"
+    assert by_metric["process"]["derived_quantitatively"] == 1
+    assert by_metric["process"]["publish_date"] == "2026-01-28"
+    assert by_metric["people"]["value_text"] == "Average"
+    assert by_metric["parent"]["value_text"] == "Average"
     assert by_metric["morningstar_rating"]["value_num"] == pytest.approx(4.0)
 
 

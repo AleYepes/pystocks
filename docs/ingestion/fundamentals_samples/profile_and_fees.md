@@ -1,7 +1,7 @@
 ## Profile and Fees
 
 Header:
-https://www.interactivebrokers.ie/tws.proxy/fundamentals/mf_profile_and_fees/756733?sustainability=UK&lang=en
+https://www.interactivebrokers.ie/tws.proxy/fundamentals/mf_profile_and_fees/756733?lang=en
 
 Response:
 ```

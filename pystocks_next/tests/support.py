@@ -198,6 +198,9 @@ def build_sample_snapshot_tables() -> dict[str, pd.DataFrame]:
                 "conid": "200",
                 "effective_at": "2026-01-03",
                 "metric_id": "medalist_rating",
+                "title": "Medalist Rating",
+                "derived_quantitatively": 0,
+                "publish_date": "2026-01-03",
                 "value_text": "Silver",
                 "value_num": None,
             }
@@ -436,9 +439,27 @@ def build_sample_morningstar_payload() -> dict[str, object]:
         "q_full_report_id": "report_123",
         "summary": [
             {"id": "medalist_rating", "value": "Silver", "publish_date": "20260128"},
-            {"id": "process", "value": "High", "publish_date": "20260128"},
-            {"id": "people", "value": "Above_Average", "publish_date": "20260128"},
-            {"id": "parent", "value": "Above_Average", "publish_date": "20250716"},
+            {
+                "id": "q_process",
+                "title": "Process",
+                "value": "Average",
+                "q": True,
+                "publish_date": "20260128",
+            },
+            {
+                "id": "q_people",
+                "title": "People",
+                "value": "Average",
+                "q": True,
+                "publish_date": "20260128",
+            },
+            {
+                "id": "q_parent",
+                "title": "Parent",
+                "value": "Average",
+                "q": True,
+                "publish_date": "20260128",
+            },
             {"id": "morningstar_rating", "value": "4", "publish_date": "20260131"},
             {
                 "id": "sustainability_rating",

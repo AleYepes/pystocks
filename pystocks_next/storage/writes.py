@@ -556,18 +556,6 @@ def _extract_profile_stylebox_fields(
     }
 
 
-_MORNINGSTAR_SUMMARY_ID_TO_COLUMN = {
-    "medalist_rating": "medalist_rating",
-    "process": "process",
-    "people": "people",
-    "parent": "parent",
-    "morningstar_rating": "morningstar_rating",
-    "sustainability_rating": "sustainability_rating",
-    "category": "category",
-    "category_index": "category_index",
-}
-
-
 def _extract_profile_and_fees_row(
     conid: str,
     effective_at: str,
@@ -1182,6 +1170,14 @@ def _extract_dividends_industry_metric_rows(
     return rows
 
 
+def _normalize_morningstar_summary_metric_id(item: Mapping[str, object]) -> str:
+    metric_id = _sanitize_segment(item.get("id") or item.get("title") or "metric")
+    derived_quantitatively = item.get("q") is True
+    if derived_quantitatively and metric_id.startswith("q_"):
+        return metric_id[2:]
+    return metric_id
+
+
 def _extract_morningstar_summary_rows(
     conid: str,
     effective_at: str,
@@ -1197,21 +1193,23 @@ def _extract_morningstar_summary_rows(
     for item in summary:
         if not isinstance(item, dict):
             continue
-        metric_id = _sanitize_segment(item.get("id") or item.get("title") or "metric")
-        canonical_metric_id = _MORNINGSTAR_SUMMARY_ID_TO_COLUMN.get(metric_id)
-        if canonical_metric_id is None:
-            continue
+        metric_id = _normalize_morningstar_summary_metric_id(item)
         value = item.get("value")
         rows.append(
             {
                 "conid": conid,
                 "effective_at": effective_at,
-                "metric_id": canonical_metric_id,
+                "metric_id": metric_id,
+                "title": str(item["title"]) if item.get("title") is not None else None,
+                "derived_quantitatively": 1 if item.get("q") is True else 0,
+                "publish_date": to_iso_date(
+                    item.get("publish_date") or item.get("publishDate")
+                ),
                 "value_text": None
-                if canonical_metric_id == "morningstar_rating"
+                if metric_id == "morningstar_rating"
                 else (str(value) if value is not None else None),
                 "value_num": _parse_number(value)
-                if canonical_metric_id == "morningstar_rating"
+                if metric_id == "morningstar_rating"
                 else None,
             }
         )
@@ -2132,10 +2130,16 @@ def write_morningstar_snapshot(
                 conid,
                 effective_at,
                 metric_id,
+                title,
+                derived_quantitatively,
+                publish_date,
                 value_text,
                 value_num
-            ) VALUES (?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(conid, effective_at, metric_id) DO UPDATE SET
+                title = excluded.title,
+                derived_quantitatively = excluded.derived_quantitatively,
+                publish_date = excluded.publish_date,
                 value_text = excluded.value_text,
                 value_num = excluded.value_num
             """,
@@ -2143,6 +2147,9 @@ def write_morningstar_snapshot(
                 row["conid"],
                 row["effective_at"],
                 row["metric_id"],
+                row["title"],
+                row["derived_quantitatively"],
+                row["publish_date"],
                 row["value_text"],
                 row["value_num"],
             ),

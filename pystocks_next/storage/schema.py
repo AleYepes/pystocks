@@ -637,6 +637,34 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=13,
+        description="preserve morningstar summary metadata",
+        statements=(
+            """
+            ALTER TABLE morningstar_summary
+            ADD COLUMN title TEXT
+            """,
+            """
+            ALTER TABLE morningstar_summary
+            ADD COLUMN is_quantitative INTEGER
+            """,
+            """
+            ALTER TABLE morningstar_summary
+            ADD COLUMN publish_date TEXT
+            """,
+        ),
+    ),
+    Migration(
+        version=14,
+        description="rename morningstar summary is_quantitative to derived_quantitatively",
+        statements=(
+            """
+            ALTER TABLE morningstar_summary
+            RENAME COLUMN is_quantitative TO derived_quantitatively
+            """,
+        ),
+    ),
 )
 
 

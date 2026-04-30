@@ -177,6 +177,9 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "conid",
         "effective_at",
         "metric_id",
+        "title",
+        "derived_quantitatively",
+        "publish_date",
         "value_text",
         "value_num",
     ),
@@ -209,7 +212,7 @@ SNAPSHOT_TABLE_DATE_COLUMNS: dict[str, tuple[str, ...]] = {
     "ratios_dividend": ("effective_at",),
     "ratios_zscore": ("effective_at",),
     "dividends_industry_metrics": ("effective_at",),
-    "morningstar_summary": ("effective_at",),
+    "morningstar_summary": ("effective_at", "publish_date"),
     "lipper_ratings": ("effective_at", "universe_as_of_date"),
 }
 
@@ -230,7 +233,7 @@ SNAPSHOT_TABLE_NUMERIC_COLUMNS: dict[str, tuple[str, ...]] = {
     "ratios_dividend": ("value_num", "vs_peers"),
     "ratios_zscore": ("value_num", "vs_peers"),
     "dividends_industry_metrics": ("value_num",),
-    "morningstar_summary": ("value_num",),
+    "morningstar_summary": ("derived_quantitatively", "value_num"),
     "lipper_ratings": ("value_num",),
 }
 
@@ -251,7 +254,7 @@ SNAPSHOT_TABLE_STRING_COLUMNS: dict[str, tuple[str, ...]] = {
     "ratios_dividend": ("conid", "metric_id"),
     "ratios_zscore": ("conid", "metric_id"),
     "dividends_industry_metrics": ("conid", "metric_id", "currency"),
-    "morningstar_summary": ("conid", "metric_id", "value_text"),
+    "morningstar_summary": ("conid", "metric_id", "title", "value_text"),
     "lipper_ratings": (
         "conid",
         "period",
@@ -916,6 +919,9 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 conid,
                 effective_at,
                 metric_id,
+                title,
+                derived_quantitatively,
+                publish_date,
                 value_text,
                 value_num
             FROM morningstar_summary
