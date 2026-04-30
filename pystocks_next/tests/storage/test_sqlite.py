@@ -16,11 +16,11 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     first_version = initialize_operational_store(db_path)
     second_version = initialize_operational_store(db_path)
 
-    assert first_version == 10
-    assert second_version == 10
+    assert first_version == 11
+    assert second_version == 11
 
     with connect_sqlite(db_path, read_only=True) as conn:
-        assert current_schema_version(conn) == 10
+        assert current_schema_version(conn) == 11
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
         columns = {
@@ -70,7 +70,9 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     assert "ticker" in holdings_top10_columns
     assert "rank" in holdings_top10_columns
     assert "conids_json" in holdings_top10_columns
-    assert "vs_num" in ratios_columns
+    assert "vs_peers" in holdings_columns
+    assert "vs_peers" in holdings_top10_columns
+    assert "vs_peers" in ratios_columns
     assert "metric_id" in dividends_columns
     assert "metric_id" in morningstar_columns
     assert "universe_name" in lipper_columns
@@ -139,8 +141,8 @@ def test_apply_migrations_marks_partial_legacy_store_with_canonical_schema(
         )
 
     with connect_sqlite(db_path) as conn:
-        assert apply_migrations(conn) == [9, 10]
-        assert current_schema_version(conn) == 10
+        assert apply_migrations(conn) == [9, 10, 11]
+        assert current_schema_version(conn) == 11
         row = conn.execute(
             """
             SELECT source_as_of_date, capture_batch_id

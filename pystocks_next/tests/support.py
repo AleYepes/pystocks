@@ -133,6 +133,7 @@ def build_sample_snapshot_tables() -> dict[str, pd.DataFrame]:
                 "effective_at": "2026-01-03",
                 "bucket_id": "equity",
                 "value_num": "0.85",
+                "vs_peers": "0.90",
             }
         ]
     )
@@ -143,6 +144,7 @@ def build_sample_snapshot_tables() -> dict[str, pd.DataFrame]:
                 "effective_at": "2026-01-03",
                 "bucket_id": "quality_aa",
                 "value_num": "0.15",
+                "vs_peers": None,
             }
         ]
     )
@@ -153,6 +155,7 @@ def build_sample_snapshot_tables() -> dict[str, pd.DataFrame]:
                 "effective_at": "2026-01-03",
                 "bucket_id": "maturity_1_to_3_years",
                 "value_num": "0.125",
+                "vs_peers": None,
             }
         ]
     )
@@ -163,6 +166,7 @@ def build_sample_snapshot_tables() -> dict[str, pd.DataFrame]:
                 "effective_at": "2026-01-03",
                 "industry": "Technology",
                 "value_num": "0.44",
+                "vs_peers": "0.40",
             }
         ]
     )
@@ -173,7 +177,7 @@ def build_sample_snapshot_tables() -> dict[str, pd.DataFrame]:
                 "effective_at": "2026-01-03",
                 "metric_id": "price_sales",
                 "value_num": "3.63",
-                "vs_num": "0.0146",
+                "vs_peers": "0.0146",
             }
         ]
     )
@@ -318,21 +322,26 @@ def build_sample_holdings_payload() -> dict[str, object]:
     return {
         "as_of_date": "2026-01-03",
         "allocation_self": [
-            {"name": "Equity", "weight": "85%"},
+            {"name": "Equity", "weight": "85%", "vs": 90.0},
             {"name": "Cash", "assets_pct": "10%"},
             {"name": "Fixed Income", "formatted_weight": "5%"},
         ],
         "industry": [
-            {"name": "Technology", "weight": 44.8681},
+            {"name": "Technology", "weight": 44.8681, "vs": 40.0},
         ],
         "currency": [
-            {"name": "US Dollar", "weight": 99.9604, "code": "USD"},
+            {"name": "US Dollar", "weight": 99.9604, "code": "USD", "vs": 98.5},
         ],
         "investor_country": [
-            {"name": "United States", "weight": 97.3418, "country_code": "US"},
+            {
+                "name": "United States",
+                "weight": 97.3418,
+                "country_code": "US",
+                "vs": 96.0,
+            },
         ],
         "debt_type": [
-            {"name": "Sovereign Bond", "weight": "20%"},
+            {"name": "Sovereign Bond", "weight": "20%", "vs": "25%"},
         ],
         "debtor": [
             {"name": "% Quality/AA", "weight": "15%"},

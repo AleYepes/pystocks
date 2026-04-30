@@ -537,6 +537,68 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=11,
+        description="standardize peer comparison columns",
+        statements=(
+            """
+            ALTER TABLE holdings_asset_type
+            ADD COLUMN vs_peers REAL
+            """,
+            """
+            ALTER TABLE holdings_debtor_quality
+            ADD COLUMN vs_peers REAL
+            """,
+            """
+            ALTER TABLE holdings_maturity
+            ADD COLUMN vs_peers REAL
+            """,
+            """
+            ALTER TABLE holdings_industry
+            ADD COLUMN vs_peers REAL
+            """,
+            """
+            ALTER TABLE holdings_currency
+            ADD COLUMN vs_peers REAL
+            """,
+            """
+            ALTER TABLE holdings_investor_country
+            ADD COLUMN vs_peers REAL
+            """,
+            """
+            ALTER TABLE holdings_geographic_weights
+            ADD COLUMN vs_peers REAL
+            """,
+            """
+            ALTER TABLE holdings_debt_type
+            ADD COLUMN vs_peers REAL
+            """,
+            """
+            ALTER TABLE holdings_top10
+            ADD COLUMN vs_peers REAL
+            """,
+            """
+            ALTER TABLE ratios_key_ratios
+            RENAME COLUMN vs_num TO vs_peers
+            """,
+            """
+            ALTER TABLE ratios_financials
+            RENAME COLUMN vs_num TO vs_peers
+            """,
+            """
+            ALTER TABLE ratios_fixed_income
+            RENAME COLUMN vs_num TO vs_peers
+            """,
+            """
+            ALTER TABLE ratios_dividend
+            RENAME COLUMN vs_num TO vs_peers
+            """,
+            """
+            ALTER TABLE ratios_zscore
+            RENAME COLUMN vs_num TO vs_peers
+            """,
+        ),
+    ),
 )
 
 

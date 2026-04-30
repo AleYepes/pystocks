@@ -150,8 +150,10 @@ def _pivot_metric_values(
         value_column="value_num",
         prefix=prefix,
     )
-    if "vs_num" in work.columns:
-        vs_work = _select_frame(work, ("conid", "effective_at", "pivot_key", "vs_num"))
+    if "vs_peers" in work.columns:
+        vs_work = _select_frame(
+            work, ("conid", "effective_at", "pivot_key", "vs_peers")
+        )
         vs_work.columns = ["conid", "effective_at", "pivot_key", "value_num"]
         vs_pivot = _pivot_keyed_values(
             vs_work,

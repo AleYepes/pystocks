@@ -225,6 +225,12 @@ def _parse_holdings_weight(item: Mapping[str, object]) -> float | None:
     return _to_fraction_weight(fallback)
 
 
+def _parse_holdings_vs_peers(item: Mapping[str, object]) -> float | None:
+    raw_vs = item.get("vs")
+    parsed = _parse_number(raw_vs)
+    return parsed / 100.0 if parsed is not None else None
+
+
 _TOTAL_NET_ASSETS_DATE_BLOCK_RE = re.compile(
     r"\(\s*\d{4}[/-]\d{2}[/-]\d{2}\s*[\)\.]?\s*"
 )
@@ -845,6 +851,7 @@ def _extract_holdings_asset_type_row(
         parsed_weight = _parse_holdings_weight(item)
         if parsed_weight is None:
             continue
+        parsed_vs = _parse_holdings_vs_peers(item)
         current_value = row[column]
         row[column] = (
             parsed_weight
@@ -853,6 +860,16 @@ def _extract_holdings_asset_type_row(
                 float(current_value) + parsed_weight
                 if isinstance(current_value, (int, float))
                 else parsed_weight
+            )
+        )
+        current_vs = row.get(f"{column}_vs_peers")
+        row[f"{column}_vs_peers"] = (
+            parsed_vs
+            if current_vs is None
+            else (
+                float(current_vs) + parsed_vs
+                if parsed_vs is not None and isinstance(current_vs, (int, float))
+                else current_vs
             )
         )
     return row
@@ -885,6 +902,7 @@ def _extract_holdings_bucket_rows(
             "effective_at": effective_at,
             name_column: str(name),
             "value_num": _parse_holdings_weight(item),
+            "vs_peers": _parse_holdings_vs_peers(item),
         }
         if extra_column is not None:
             extra_value = item.get(extra_column)
@@ -922,6 +940,7 @@ def _extract_holdings_debtor_quality_row(
         if column is None:
             continue
         row[column] = _parse_holdings_weight(item)
+        row[f"{column}_vs_peers"] = _parse_holdings_vs_peers(item)
 
     has_values = any(
         row[column] is not None
@@ -958,6 +977,7 @@ def _extract_holdings_maturity_row(
         if column is None:
             continue
         row[column] = _parse_holdings_weight(item)
+        row[f"{column}_vs_peers"] = _parse_holdings_vs_peers(item)
 
     maturity_columns = tuple(
         {
@@ -996,6 +1016,7 @@ def _extract_holdings_geographic_rows(
                 "effective_at": effective_at,
                 "region": _sanitize_segment(key),
                 "value_num": _to_fraction_weight(value),
+                "vs_peers": None,
             }
         )
     return rows
@@ -1027,6 +1048,7 @@ def _extract_holdings_top10_rows(
                 "ticker": str(item["ticker"]).strip() if item.get("ticker") else None,
                 "rank": _parse_int(item.get("rank")),
                 "holding_weight_num": _to_fraction_weight(item.get("assets_pct")),
+                "vs_peers": _parse_holdings_vs_peers(item),
                 "conids_json": json.dumps(item.get("conids"))
                 if isinstance(item.get("conids"), list)
                 else None,
@@ -1058,6 +1080,7 @@ def _wide_bucket_row_to_factor_rows(
                 "effective_at": effective_at,
                 "bucket_id": bucket_id,
                 "value_num": numeric_value,
+                "vs_peers": _parse_float(row.get(f"{bucket_id}_vs_peers")),
             }
         )
     return rows
@@ -1089,7 +1112,7 @@ def _extract_ratios_metric_rows(
                 "effective_at": effective_at,
                 "metric_id": metric_id,
                 "value_num": _parse_number(item.get("value")),
-                "vs_num": _parse_number(item.get("vs")),
+                "vs_peers": _parse_number(item.get("vs")),
             }
         )
     return rows
@@ -1612,10 +1635,17 @@ def write_holdings_snapshot(
                 conid,
                 effective_at,
                 bucket_id,
-                value_num
-            ) VALUES (?, ?, ?, ?)
+                value_num,
+                vs_peers
+            ) VALUES (?, ?, ?, ?, ?)
             """,
-            (row["conid"], row["effective_at"], row["bucket_id"], row["value_num"]),
+            (
+                row["conid"],
+                row["effective_at"],
+                row["bucket_id"],
+                row["value_num"],
+                row["vs_peers"],
+            ),
         )
     debtor_quality_row = _extract_holdings_debtor_quality_row(
         conid, effective_at, payload
@@ -1643,14 +1673,16 @@ def write_holdings_snapshot(
                 conid,
                 effective_at,
                 bucket_id,
-                value_num
-            ) VALUES (?, ?, ?, ?)
+                value_num,
+                vs_peers
+            ) VALUES (?, ?, ?, ?, ?)
             """,
             (
                 row["conid"],
                 row["effective_at"],
                 row["bucket_id"],
                 row["value_num"],
+                row["vs_peers"],
             ),
         )
 
@@ -1674,14 +1706,16 @@ def write_holdings_snapshot(
                 conid,
                 effective_at,
                 bucket_id,
-                value_num
-            ) VALUES (?, ?, ?, ?)
+                value_num,
+                vs_peers
+            ) VALUES (?, ?, ?, ?, ?)
             """,
             (
                 row["conid"],
                 row["effective_at"],
                 row["bucket_id"],
                 row["value_num"],
+                row["vs_peers"],
             ),
         )
 
@@ -1698,10 +1732,17 @@ def write_holdings_snapshot(
                 conid,
                 effective_at,
                 industry,
-                value_num
-            ) VALUES (?, ?, ?, ?)
+                value_num,
+                vs_peers
+            ) VALUES (?, ?, ?, ?, ?)
             """,
-            (row["conid"], row["effective_at"], row["industry"], row["value_num"]),
+            (
+                row["conid"],
+                row["effective_at"],
+                row["industry"],
+                row["value_num"],
+                row["vs_peers"],
+            ),
         )
     for row in _extract_holdings_bucket_rows(
         conid,
@@ -1718,8 +1759,9 @@ def write_holdings_snapshot(
                 effective_at,
                 code,
                 currency,
-                value_num
-            ) VALUES (?, ?, ?, ?, ?)
+                value_num,
+                vs_peers
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 row["conid"],
@@ -1727,6 +1769,7 @@ def write_holdings_snapshot(
                 row["code"],
                 row["currency"],
                 row["value_num"],
+                row["vs_peers"],
             ),
         )
     for row in _extract_holdings_bucket_rows(
@@ -1744,8 +1787,9 @@ def write_holdings_snapshot(
                 effective_at,
                 country_code,
                 country,
-                value_num
-            ) VALUES (?, ?, ?, ?, ?)
+                value_num,
+                vs_peers
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 row["conid"],
@@ -1753,6 +1797,7 @@ def write_holdings_snapshot(
                 row["country_code"],
                 row["country"],
                 row["value_num"],
+                row["vs_peers"],
             ),
         )
     for row in _extract_holdings_bucket_rows(
@@ -1768,10 +1813,17 @@ def write_holdings_snapshot(
                 conid,
                 effective_at,
                 debt_type,
-                value_num
-            ) VALUES (?, ?, ?, ?)
+                value_num,
+                vs_peers
+            ) VALUES (?, ?, ?, ?, ?)
             """,
-            (row["conid"], row["effective_at"], row["debt_type"], row["value_num"]),
+            (
+                row["conid"],
+                row["effective_at"],
+                row["debt_type"],
+                row["value_num"],
+                row["vs_peers"],
+            ),
         )
     for row in _extract_holdings_geographic_rows(conid, effective_at, payload):
         conn.execute(
@@ -1780,10 +1832,17 @@ def write_holdings_snapshot(
                 conid,
                 effective_at,
                 region,
-                value_num
-            ) VALUES (?, ?, ?, ?)
+                value_num,
+                vs_peers
+            ) VALUES (?, ?, ?, ?, ?)
             """,
-            (row["conid"], row["effective_at"], row["region"], row["value_num"]),
+            (
+                row["conid"],
+                row["effective_at"],
+                row["region"],
+                row["value_num"],
+                row["vs_peers"],
+            ),
         )
     for row in _extract_holdings_top10_rows(conid, effective_at, payload):
         conn.execute(
@@ -1795,8 +1854,9 @@ def write_holdings_snapshot(
                 ticker,
                 rank,
                 holding_weight_num,
+                vs_peers,
                 conids_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["conid"],
@@ -1805,6 +1865,7 @@ def write_holdings_snapshot(
                 row["ticker"],
                 row["rank"],
                 row["holding_weight_num"],
+                row["vs_peers"],
                 row["conids_json"],
             ),
         )
@@ -1891,18 +1952,18 @@ def write_ratios_snapshot(
                     effective_at,
                     metric_id,
                     value_num,
-                    vs_num
+                    vs_peers
                 ) VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(conid, effective_at, metric_id) DO UPDATE SET
                     value_num = excluded.value_num,
-                    vs_num = excluded.vs_num
+                    vs_peers = excluded.vs_peers
                 """,
                 (
                     row["conid"],
                     row["effective_at"],
                     row["metric_id"],
                     row["value_num"],
-                    row["vs_num"],
+                    row["vs_peers"],
                 ),
             )
     return SnapshotWriteResult(

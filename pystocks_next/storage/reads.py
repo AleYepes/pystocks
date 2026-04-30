@@ -63,26 +63,41 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "value_date",
         "value_bool",
     ),
-    "holdings_asset_type": ("conid", "effective_at", "bucket_id", "value_num"),
+    "holdings_asset_type": (
+        "conid",
+        "effective_at",
+        "bucket_id",
+        "value_num",
+        "vs_peers",
+    ),
     "holdings_debtor_quality": (
         "conid",
         "effective_at",
         "bucket_id",
         "value_num",
+        "vs_peers",
     ),
     "holdings_maturity": (
         "conid",
         "effective_at",
         "bucket_id",
         "value_num",
+        "vs_peers",
     ),
-    "holdings_industry": ("conid", "effective_at", "industry", "value_num"),
+    "holdings_industry": (
+        "conid",
+        "effective_at",
+        "industry",
+        "value_num",
+        "vs_peers",
+    ),
     "holdings_currency": (
         "conid",
         "effective_at",
         "code",
         "currency",
         "value_num",
+        "vs_peers",
     ),
     "holdings_investor_country": (
         "conid",
@@ -90,9 +105,22 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "country_code",
         "country",
         "value_num",
+        "vs_peers",
     ),
-    "holdings_geographic_weights": ("conid", "effective_at", "region", "value_num"),
-    "holdings_debt_type": ("conid", "effective_at", "debt_type", "value_num"),
+    "holdings_geographic_weights": (
+        "conid",
+        "effective_at",
+        "region",
+        "value_num",
+        "vs_peers",
+    ),
+    "holdings_debt_type": (
+        "conid",
+        "effective_at",
+        "debt_type",
+        "value_num",
+        "vs_peers",
+    ),
     "holdings_top10": (
         "conid",
         "effective_at",
@@ -100,6 +128,7 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "ticker",
         "rank",
         "holding_weight_num",
+        "vs_peers",
         "conids_json",
     ),
     "ratios_key_ratios": (
@@ -107,35 +136,35 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "effective_at",
         "metric_id",
         "value_num",
-        "vs_num",
+        "vs_peers",
     ),
     "ratios_financials": (
         "conid",
         "effective_at",
         "metric_id",
         "value_num",
-        "vs_num",
+        "vs_peers",
     ),
     "ratios_fixed_income": (
         "conid",
         "effective_at",
         "metric_id",
         "value_num",
-        "vs_num",
+        "vs_peers",
     ),
     "ratios_dividend": (
         "conid",
         "effective_at",
         "metric_id",
         "value_num",
-        "vs_num",
+        "vs_peers",
     ),
     "ratios_zscore": (
         "conid",
         "effective_at",
         "metric_id",
         "value_num",
-        "vs_num",
+        "vs_peers",
     ),
     "dividends_industry_metrics": (
         "conid",
@@ -186,20 +215,20 @@ SNAPSHOT_TABLE_DATE_COLUMNS: dict[str, tuple[str, ...]] = {
 
 SNAPSHOT_TABLE_NUMERIC_COLUMNS: dict[str, tuple[str, ...]] = {
     "profile_and_fees": ("value_num", "value_bool"),
-    "holdings_asset_type": ("value_num",),
-    "holdings_debtor_quality": ("value_num",),
-    "holdings_maturity": ("value_num",),
-    "holdings_industry": ("value_num",),
-    "holdings_currency": ("value_num",),
-    "holdings_investor_country": ("value_num",),
-    "holdings_geographic_weights": ("value_num",),
-    "holdings_debt_type": ("value_num",),
-    "holdings_top10": ("rank", "holding_weight_num"),
-    "ratios_key_ratios": ("value_num", "vs_num"),
-    "ratios_financials": ("value_num", "vs_num"),
-    "ratios_fixed_income": ("value_num", "vs_num"),
-    "ratios_dividend": ("value_num", "vs_num"),
-    "ratios_zscore": ("value_num", "vs_num"),
+    "holdings_asset_type": ("value_num", "vs_peers"),
+    "holdings_debtor_quality": ("value_num", "vs_peers"),
+    "holdings_maturity": ("value_num", "vs_peers"),
+    "holdings_industry": ("value_num", "vs_peers"),
+    "holdings_currency": ("value_num", "vs_peers"),
+    "holdings_investor_country": ("value_num", "vs_peers"),
+    "holdings_geographic_weights": ("value_num", "vs_peers"),
+    "holdings_debt_type": ("value_num", "vs_peers"),
+    "holdings_top10": ("rank", "holding_weight_num", "vs_peers"),
+    "ratios_key_ratios": ("value_num", "vs_peers"),
+    "ratios_financials": ("value_num", "vs_peers"),
+    "ratios_fixed_income": ("value_num", "vs_peers"),
+    "ratios_dividend": ("value_num", "vs_peers"),
+    "ratios_zscore": ("value_num", "vs_peers"),
     "dividends_industry_metrics": ("value_num",),
     "morningstar_summary": ("value_num",),
     "lipper_ratings": ("value_num",),
@@ -672,7 +701,8 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 conid,
                 effective_at,
                 bucket_id,
-                value_num
+                value_num,
+                vs_peers
             FROM holdings_asset_type
             ORDER BY conid, effective_at, bucket_id
             """,
@@ -685,7 +715,8 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 conid,
                 effective_at,
                 bucket_id,
-                value_num
+                value_num,
+                vs_peers
             FROM holdings_debtor_quality
             ORDER BY conid, effective_at, bucket_id
             """,
@@ -698,7 +729,8 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 conid,
                 effective_at,
                 bucket_id,
-                value_num
+                value_num,
+                vs_peers
             FROM holdings_maturity
             ORDER BY conid, effective_at, bucket_id
             """,
@@ -711,7 +743,8 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 conid,
                 effective_at,
                 industry,
-                value_num
+                value_num,
+                vs_peers
             FROM holdings_industry
             ORDER BY conid, effective_at, industry
             """,
@@ -725,7 +758,8 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 effective_at,
                 COALESCE(code, currency) AS code,
                 currency,
-                value_num
+                value_num,
+                vs_peers
             FROM holdings_currency
             ORDER BY conid, effective_at, code, currency
             """,
@@ -739,7 +773,8 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 effective_at,
                 COALESCE(country_code, country) AS country_code,
                 country,
-                value_num
+                value_num,
+                vs_peers
             FROM holdings_investor_country
             ORDER BY conid, effective_at, country_code, country
             """,
@@ -752,7 +787,8 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 conid,
                 effective_at,
                 region,
-                value_num
+                value_num,
+                vs_peers
             FROM holdings_geographic_weights
             ORDER BY conid, effective_at, region
             """,
@@ -765,7 +801,8 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 conid,
                 effective_at,
                 debt_type,
-                value_num
+                value_num,
+                vs_peers
             FROM holdings_debt_type
             ORDER BY conid, effective_at, debt_type
             """,
@@ -781,6 +818,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 ticker,
                 rank,
                 holding_weight_num,
+                vs_peers,
                 conids_json
             FROM holdings_top10
             ORDER BY conid, effective_at, rank, name
@@ -795,7 +833,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 effective_at,
                 metric_id,
                 value_num,
-                vs_num
+                vs_peers
             FROM ratios_key_ratios
             ORDER BY conid, effective_at, metric_id
             """,
@@ -809,7 +847,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 effective_at,
                 metric_id,
                 value_num,
-                vs_num
+                vs_peers
             FROM ratios_financials
             ORDER BY conid, effective_at, metric_id
             """,
@@ -823,7 +861,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 effective_at,
                 metric_id,
                 value_num,
-                vs_num
+                vs_peers
             FROM ratios_fixed_income
             ORDER BY conid, effective_at, metric_id
             """,
@@ -837,7 +875,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 effective_at,
                 metric_id,
                 value_num,
-                vs_num
+                vs_peers
             FROM ratios_dividend
             ORDER BY conid, effective_at, metric_id
             """,
@@ -851,7 +889,7 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 effective_at,
                 metric_id,
                 value_num,
-                vs_num
+                vs_peers
             FROM ratios_zscore
             ORDER BY conid, effective_at, metric_id
             """,

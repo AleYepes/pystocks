@@ -144,7 +144,7 @@ def test_write_holdings_snapshot_persists_tall_factor_rows(
     ).fetchone()
     asset_type_rows = temp_store.execute(
         """
-        SELECT bucket_id, value_num
+        SELECT bucket_id, value_num, vs_peers
         FROM holdings_asset_type
         WHERE conid = '100'
         ORDER BY bucket_id
@@ -177,6 +177,7 @@ def test_write_holdings_snapshot_persists_tall_factor_rows(
     assert asset_by_bucket["equity"] == pytest.approx(0.85)
     assert asset_by_bucket["cash"] == pytest.approx(0.10)
     assert asset_by_bucket["fixed_income"] == pytest.approx(0.05)
+    assert asset_type_rows[1]["vs_peers"] == pytest.approx(0.90)
     assert "other" not in asset_by_bucket
     assert debtor_by_bucket["quality_aa"] == pytest.approx(0.15)
     assert debtor_by_bucket["quality_bbb"] == pytest.approx(0.08)
@@ -200,21 +201,21 @@ def test_write_holdings_snapshot_persists_supported_long_child_tables(
 
     industry_row = temp_store.execute(
         """
-        SELECT industry, value_num
+        SELECT industry, value_num, vs_peers
         FROM holdings_industry
         WHERE conid = '100'
         """
     ).fetchone()
     currency_row = temp_store.execute(
         """
-        SELECT code, currency, value_num
+        SELECT code, currency, value_num, vs_peers
         FROM holdings_currency
         WHERE conid = '100'
         """
     ).fetchone()
     country_row = temp_store.execute(
         """
-        SELECT country_code, country, value_num
+        SELECT country_code, country, value_num, vs_peers
         FROM holdings_investor_country
         WHERE conid = '100'
         """
@@ -229,7 +230,7 @@ def test_write_holdings_snapshot_persists_supported_long_child_tables(
     ).fetchall()
     debt_type_row = temp_store.execute(
         """
-        SELECT debt_type, value_num
+        SELECT debt_type, value_num, vs_peers
         FROM holdings_debt_type
         WHERE conid = '100'
         """
@@ -244,18 +245,22 @@ def test_write_holdings_snapshot_persists_supported_long_child_tables(
 
     assert industry_row["industry"] == "Technology"
     assert industry_row["value_num"] == pytest.approx(0.448681)
+    assert industry_row["vs_peers"] == pytest.approx(0.40)
     assert currency_row["code"] == "USD"
     assert currency_row["currency"] == "US Dollar"
     assert currency_row["value_num"] == pytest.approx(0.999604)
+    assert currency_row["vs_peers"] == pytest.approx(0.985)
     assert country_row["country_code"] == "US"
     assert country_row["country"] == "United States"
     assert country_row["value_num"] == pytest.approx(0.973418)
+    assert country_row["vs_peers"] == pytest.approx(0.96)
     assert [(row["region"], row["value_num"]) for row in geographic_rows] == [
         ("eu", pytest.approx(0.0189)),
         ("us", pytest.approx(0.9734)),
     ]
     assert debt_type_row["debt_type"] == "Sovereign Bond"
     assert debt_type_row["value_num"] == pytest.approx(0.20)
+    assert debt_type_row["vs_peers"] == pytest.approx(0.25)
     assert top10_row["name"] == "NVIDIA CORPORATION"
     assert top10_row["holding_weight_num"] == pytest.approx(0.0783)
 
@@ -297,6 +302,7 @@ def test_write_holdings_snapshot_persists_documented_top10_identifiers(
                 "formatted_weight": "0.04%",
                 "weight": 0.0396,
                 "rank": 2,
+                "vs": 0.344733333333,
             }
         ],
         "investor_country": [
@@ -305,6 +311,7 @@ def test_write_holdings_snapshot_persists_documented_top10_identifiers(
                 "formatted_weight": "0.04%",
                 "weight": 0.0396,
                 "rank": 8,
+                "vs": 0.84064375,
             }
         ],
         "geographic": {
@@ -324,7 +331,7 @@ def test_write_holdings_snapshot_persists_documented_top10_identifiers(
 
     asset_rows = temp_store.execute(
         """
-        SELECT bucket_id, value_num
+        SELECT bucket_id, value_num, vs_peers
         FROM holdings_asset_type
         WHERE conid = '100'
         ORDER BY bucket_id
@@ -332,21 +339,21 @@ def test_write_holdings_snapshot_persists_documented_top10_identifiers(
     ).fetchall()
     top10_row = temp_store.execute(
         """
-        SELECT name, ticker, rank, holding_weight_num, conids_json
+        SELECT name, ticker, rank, holding_weight_num, vs_peers, conids_json
         FROM holdings_top10
         WHERE conid = '100'
         """
     ).fetchone()
     currency_row = temp_store.execute(
         """
-        SELECT code, currency, value_num
+        SELECT code, currency, value_num, vs_peers
         FROM holdings_currency
         WHERE conid = '100'
         """
     ).fetchone()
     country_row = temp_store.execute(
         """
-        SELECT country_code, country, value_num
+        SELECT country_code, country, value_num, vs_peers
         FROM holdings_investor_country
         WHERE conid = '100'
         """
@@ -356,17 +363,23 @@ def test_write_holdings_snapshot_persists_documented_top10_identifiers(
     assert result.effective_at == "2026-01-31"
     assert asset_by_bucket["equity"] == pytest.approx(0.999088)
     assert asset_by_bucket["other"] == pytest.approx(0.000396)
+    asset_vs_by_bucket = {row["bucket_id"]: row["vs_peers"] for row in asset_rows}
+    assert asset_vs_by_bucket["equity"] == pytest.approx(1.07198704166667)
+    assert asset_vs_by_bucket["other"] == pytest.approx(0.0045558125)
     assert top10_row["name"] == "NVIDIA CORPORATION"
     assert top10_row["ticker"] == "NVDA"
     assert top10_row["rank"] == 1
     assert top10_row["holding_weight_num"] == pytest.approx(0.0783)
+    assert top10_row["vs_peers"] is None
     assert top10_row["conids_json"] == "[4815747, 13104788]"
     assert currency_row["code"] is None
     assert currency_row["currency"] == "<No Currency>"
     assert currency_row["value_num"] == pytest.approx(0.000396)
+    assert currency_row["vs_peers"] == pytest.approx(0.00344733333333)
     assert country_row["country_code"] is None
     assert country_row["country"] == "Unidentified"
     assert country_row["value_num"] == pytest.approx(0.000396)
+    assert country_row["vs_peers"] == pytest.approx(0.0084064375)
 
 
 def test_write_holdings_snapshot_raises_when_weight_fields_disagree(
@@ -416,35 +429,35 @@ def test_write_ratios_snapshot_persists_supported_sections(
     ).fetchone()
     ratios_row = temp_store.execute(
         """
-        SELECT metric_id, value_num, vs_num
+        SELECT metric_id, value_num, vs_peers
         FROM ratios_key_ratios
         WHERE conid = '100'
         """
     ).fetchone()
     financials_row = temp_store.execute(
         """
-        SELECT metric_id, value_num, vs_num
+        SELECT metric_id, value_num, vs_peers
         FROM ratios_financials
         WHERE conid = '100'
         """
     ).fetchone()
     fixed_income_row = temp_store.execute(
         """
-        SELECT metric_id, value_num, vs_num
+        SELECT metric_id, value_num, vs_peers
         FROM ratios_fixed_income
         WHERE conid = '100'
         """
     ).fetchone()
     dividend_row = temp_store.execute(
         """
-        SELECT metric_id, value_num, vs_num
+        SELECT metric_id, value_num, vs_peers
         FROM ratios_dividend
         WHERE conid = '100'
         """
     ).fetchone()
     zscore_row = temp_store.execute(
         """
-        SELECT metric_id, value_num, vs_num
+        SELECT metric_id, value_num, vs_peers
         FROM ratios_zscore
         WHERE conid = '100'
         """
@@ -455,19 +468,19 @@ def test_write_ratios_snapshot_persists_supported_sections(
     assert snapshot_row["capture_batch_id"] == "batch-ratios-001"
     assert ratios_row["metric_id"] == "price_sales"
     assert ratios_row["value_num"] == pytest.approx(3.63)
-    assert ratios_row["vs_num"] == pytest.approx(0.0146)
+    assert ratios_row["vs_peers"] == pytest.approx(0.0146)
     assert financials_row["metric_id"] == "sales_growth_1_year"
     assert financials_row["value_num"] == pytest.approx(5.04)
-    assert financials_row["vs_num"] == pytest.approx(-0.15)
+    assert financials_row["vs_peers"] == pytest.approx(-0.15)
     assert fixed_income_row["metric_id"] == "current_yield"
     assert fixed_income_row["value_num"] == pytest.approx(3.17)
-    assert fixed_income_row["vs_num"] == pytest.approx(0.05)
+    assert fixed_income_row["vs_peers"] == pytest.approx(0.05)
     assert dividend_row["metric_id"] == "dividend_yield"
     assert dividend_row["value_num"] == pytest.approx(2.35)
-    assert dividend_row["vs_num"] == pytest.approx(-0.08)
+    assert dividend_row["vs_peers"] == pytest.approx(-0.08)
     assert zscore_row["metric_id"] == "1_month"
     assert zscore_row["value_num"] == pytest.approx(-0.04)
-    assert zscore_row["vs_num"] is None
+    assert zscore_row["vs_peers"] is None
 
 
 def test_write_dividends_snapshot_persists_tall_metric_rows(
