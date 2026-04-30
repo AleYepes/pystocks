@@ -260,6 +260,139 @@ def test_write_holdings_snapshot_persists_supported_long_child_tables(
     assert top10_row["holding_weight_num"] == pytest.approx(0.0783)
 
 
+def test_write_holdings_snapshot_persists_documented_top10_identifiers(
+    temp_store,
+) -> None:
+    upsert_instruments(temp_store, [UniverseInstrument(conid="100", symbol="AAA")])
+    payload = {
+        "as_of_date": 1769835600000,
+        "allocation_self": [
+            {
+                "name": "Equity",
+                "formatted_weight": "99.91%",
+                "weight": 99.9088,
+                "rank": 1,
+                "vs": 107.198704166667,
+            },
+            {
+                "name": "Other",
+                "formatted_weight": "0.04%",
+                "weight": 0.0396,
+                "rank": 3,
+                "vs": 0.45558125,
+            },
+        ],
+        "top_10": [
+            {
+                "name": "NVIDIA CORPORATION",
+                "ticker": "NVDA",
+                "rank": 1,
+                "assets_pct": "7.83%",
+                "conids": [4815747, 13104788],
+            }
+        ],
+        "currency": [
+            {
+                "name": "<No Currency>",
+                "formatted_weight": "0.04%",
+                "weight": 0.0396,
+                "rank": 2,
+            }
+        ],
+        "investor_country": [
+            {
+                "name": "Unidentified",
+                "formatted_weight": "0.04%",
+                "weight": 0.0396,
+                "rank": 8,
+            }
+        ],
+        "geographic": {
+            "eu": "1.89%",
+            "uk": "0.46%",
+            "us": "97.34%",
+            "others": "0.04%",
+        },
+    }
+
+    result = write_holdings_snapshot(
+        temp_store,
+        conid="100",
+        payload=payload,
+        observed_at="2026-02-01T10:00:00+00:00",
+    )
+
+    asset_rows = temp_store.execute(
+        """
+        SELECT bucket_id, value_num
+        FROM holdings_asset_type
+        WHERE conid = '100'
+        ORDER BY bucket_id
+        """
+    ).fetchall()
+    top10_row = temp_store.execute(
+        """
+        SELECT name, ticker, rank, holding_weight_num, conids_json
+        FROM holdings_top10
+        WHERE conid = '100'
+        """
+    ).fetchone()
+    currency_row = temp_store.execute(
+        """
+        SELECT code, currency, value_num
+        FROM holdings_currency
+        WHERE conid = '100'
+        """
+    ).fetchone()
+    country_row = temp_store.execute(
+        """
+        SELECT country_code, country, value_num
+        FROM holdings_investor_country
+        WHERE conid = '100'
+        """
+    ).fetchone()
+
+    asset_by_bucket = {row["bucket_id"]: row["value_num"] for row in asset_rows}
+    assert result.effective_at == "2026-01-31"
+    assert asset_by_bucket["equity"] == pytest.approx(0.999088)
+    assert asset_by_bucket["other"] == pytest.approx(0.000396)
+    assert top10_row["name"] == "NVIDIA CORPORATION"
+    assert top10_row["ticker"] == "NVDA"
+    assert top10_row["rank"] == 1
+    assert top10_row["holding_weight_num"] == pytest.approx(0.0783)
+    assert top10_row["conids_json"] == "[4815747, 13104788]"
+    assert currency_row["code"] is None
+    assert currency_row["currency"] == "<No Currency>"
+    assert currency_row["value_num"] == pytest.approx(0.000396)
+    assert country_row["country_code"] is None
+    assert country_row["country"] == "Unidentified"
+    assert country_row["value_num"] == pytest.approx(0.000396)
+
+
+def test_write_holdings_snapshot_raises_when_weight_fields_disagree(
+    temp_store,
+) -> None:
+    upsert_instruments(temp_store, [UniverseInstrument(conid="100", symbol="AAA")])
+    payload = {
+        "as_of_date": "2026-01-31",
+        "allocation_self": [
+            {
+                "name": "Equity",
+                "formatted_weight": "99.91%",
+                "weight": 99.0,
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="holdings weight mismatch"):
+        write_holdings_snapshot(
+            temp_store,
+            conid="100",
+            payload=payload,
+            observed_at="2026-02-01T10:00:00+00:00",
+        )
+
+
 def test_write_ratios_snapshot_persists_supported_sections(
     temp_store,
     sample_ratios_payload: dict[str, object],

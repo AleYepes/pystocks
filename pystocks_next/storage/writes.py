@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 import sqlite3
@@ -199,6 +200,29 @@ def _to_fraction_weight(value: object) -> float | None:
     if parsed is None:
         return None
     return parsed / 100.0 if abs(parsed) > 1.0 else parsed
+
+
+def _parse_holdings_weight(item: Mapping[str, object]) -> float | None:
+    raw_weight = item.get("weight")
+    raw_formatted = item.get("formatted_weight")
+    if raw_weight is not None:
+        weight_percent = _parse_number(raw_weight)
+        if weight_percent is None:
+            return None
+        if raw_formatted is not None:
+            formatted_fraction = _to_fraction_weight(raw_formatted)
+            if formatted_fraction is not None and round(weight_percent, 2) != round(
+                formatted_fraction * 100.0, 2
+            ):
+                msg = (
+                    "holdings weight mismatch: "
+                    f"weight={raw_weight!r}, formatted_weight={raw_formatted!r}"
+                )
+                raise ValueError(msg)
+        return weight_percent / 100.0
+
+    fallback = _pick_first_present(item, "assets_pct", "formatted_weight")
+    return _to_fraction_weight(fallback)
 
 
 _TOTAL_NET_ASSETS_DATE_BLOCK_RE = re.compile(
@@ -818,13 +842,7 @@ def _extract_holdings_asset_type_row(
             continue
         key = _sanitize_segment(name)
         column = _HOLDINGS_ASSET_TYPE_MAP.get(key, "other")
-        weight_value = _pick_first_present(
-            item,
-            "weight",
-            "assets_pct",
-            "formatted_weight",
-        )
-        parsed_weight = _to_fraction_weight(weight_value)
+        parsed_weight = _parse_holdings_weight(item)
         if parsed_weight is None:
             continue
         current_value = row[column]
@@ -862,14 +880,11 @@ def _extract_holdings_bucket_rows(
         name = item.get("name") or item.get("type")
         if name is None:
             continue
-        weight_value = _pick_first_present(
-            item, "weight", "assets_pct", "formatted_weight"
-        )
         row: dict[str, object] = {
             "conid": conid,
             "effective_at": effective_at,
             name_column: str(name),
-            "value_num": _to_fraction_weight(weight_value),
+            "value_num": _parse_holdings_weight(item),
         }
         if extra_column is not None:
             extra_value = item.get(extra_column)
@@ -906,10 +921,7 @@ def _extract_holdings_debtor_quality_row(
         column = _HOLDINGS_DEBTOR_QUALITY_SOURCE_TO_COLUMN.get(_sanitize_segment(name))
         if column is None:
             continue
-        weight_value = _pick_first_present(
-            item, "weight", "assets_pct", "formatted_weight"
-        )
-        row[column] = _to_fraction_weight(weight_value)
+        row[column] = _parse_holdings_weight(item)
 
     has_values = any(
         row[column] is not None
@@ -945,10 +957,7 @@ def _extract_holdings_maturity_row(
         column = _HOLDINGS_MATURITY_SOURCE_TO_COLUMN.get(_sanitize_segment(name))
         if column is None:
             continue
-        weight_value = _pick_first_present(
-            item, "weight", "assets_pct", "formatted_weight"
-        )
-        row[column] = _to_fraction_weight(weight_value)
+        row[column] = _parse_holdings_weight(item)
 
     maturity_columns = tuple(
         {
@@ -1015,7 +1024,12 @@ def _extract_holdings_top10_rows(
                 "conid": conid,
                 "effective_at": effective_at,
                 "name": str(name),
+                "ticker": str(item["ticker"]).strip() if item.get("ticker") else None,
+                "rank": _parse_int(item.get("rank")),
                 "holding_weight_num": _to_fraction_weight(item.get("assets_pct")),
+                "conids_json": json.dumps(item.get("conids"))
+                if isinstance(item.get("conids"), list)
+                else None,
             }
         )
     return rows
@@ -1778,10 +1792,21 @@ def write_holdings_snapshot(
                 conid,
                 effective_at,
                 name,
-                holding_weight_num
-            ) VALUES (?, ?, ?, ?)
+                ticker,
+                rank,
+                holding_weight_num,
+                conids_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (row["conid"], row["effective_at"], row["name"], row["holding_weight_num"]),
+            (
+                row["conid"],
+                row["effective_at"],
+                row["name"],
+                row["ticker"],
+                row["rank"],
+                row["holding_weight_num"],
+                row["conids_json"],
+            ),
         )
     return SnapshotWriteResult(
         payload_hash=capture.payload_hash,

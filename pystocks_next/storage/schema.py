@@ -519,6 +519,24 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=10,
+        description="add stable top-10 holdings identifiers",
+        statements=(
+            """
+            ALTER TABLE holdings_top10
+            ADD COLUMN ticker TEXT
+            """,
+            """
+            ALTER TABLE holdings_top10
+            ADD COLUMN rank INTEGER
+            """,
+            """
+            ALTER TABLE holdings_top10
+            ADD COLUMN conids_json TEXT
+            """,
+        ),
+    ),
 )
 
 

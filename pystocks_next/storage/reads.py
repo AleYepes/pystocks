@@ -93,7 +93,15 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "holdings_geographic_weights": ("conid", "effective_at", "region", "value_num"),
     "holdings_debt_type": ("conid", "effective_at", "debt_type", "value_num"),
-    "holdings_top10": ("conid", "effective_at", "name", "holding_weight_num"),
+    "holdings_top10": (
+        "conid",
+        "effective_at",
+        "name",
+        "ticker",
+        "rank",
+        "holding_weight_num",
+        "conids_json",
+    ),
     "ratios_key_ratios": (
         "conid",
         "effective_at",
@@ -186,7 +194,7 @@ SNAPSHOT_TABLE_NUMERIC_COLUMNS: dict[str, tuple[str, ...]] = {
     "holdings_investor_country": ("value_num",),
     "holdings_geographic_weights": ("value_num",),
     "holdings_debt_type": ("value_num",),
-    "holdings_top10": ("holding_weight_num",),
+    "holdings_top10": ("rank", "holding_weight_num"),
     "ratios_key_ratios": ("value_num", "vs_num"),
     "ratios_financials": ("value_num", "vs_num"),
     "ratios_fixed_income": ("value_num", "vs_num"),
@@ -207,7 +215,7 @@ SNAPSHOT_TABLE_STRING_COLUMNS: dict[str, tuple[str, ...]] = {
     "holdings_investor_country": ("conid", "country_code", "country"),
     "holdings_geographic_weights": ("conid", "region"),
     "holdings_debt_type": ("conid", "debt_type"),
-    "holdings_top10": ("conid", "name"),
+    "holdings_top10": ("conid", "name", "ticker", "conids_json"),
     "ratios_key_ratios": ("conid", "metric_id"),
     "ratios_financials": ("conid", "metric_id"),
     "ratios_fixed_income": ("conid", "metric_id"),
@@ -234,7 +242,7 @@ SNAPSHOT_TABLE_SORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "holdings_investor_country": ("conid", "effective_at", "country_code", "country"),
     "holdings_geographic_weights": ("conid", "effective_at", "region"),
     "holdings_debt_type": ("conid", "effective_at", "debt_type"),
-    "holdings_top10": ("conid", "effective_at", "name"),
+    "holdings_top10": ("conid", "effective_at", "rank", "name"),
     "ratios_key_ratios": ("conid", "effective_at", "metric_id"),
     "ratios_financials": ("conid", "effective_at", "metric_id"),
     "ratios_fixed_income": ("conid", "effective_at", "metric_id"),
@@ -770,9 +778,12 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 conid,
                 effective_at,
                 name,
-                holding_weight_num
+                ticker,
+                rank,
+                holding_weight_num,
+                conids_json
             FROM holdings_top10
-            ORDER BY conid, effective_at, name
+            ORDER BY conid, effective_at, rank, name
             """,
             name="holdings_top10",
         ),

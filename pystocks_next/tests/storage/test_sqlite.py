@@ -16,11 +16,11 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     first_version = initialize_operational_store(db_path)
     second_version = initialize_operational_store(db_path)
 
-    assert first_version == 9
-    assert second_version == 9
+    assert first_version == 10
+    assert second_version == 10
 
     with connect_sqlite(db_path, read_only=True) as conn:
-        assert current_schema_version(conn) == 9
+        assert current_schema_version(conn) == 10
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
         columns = {
@@ -41,6 +41,9 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
         }
         holdings_quality_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(holdings_debtor_quality)")
+        }
+        holdings_top10_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(holdings_top10)")
         }
         ratios_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(ratios_key_ratios)")
@@ -64,6 +67,9 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     assert "field_id" in profile_columns
     assert "bucket_id" in holdings_columns
     assert "bucket_id" in holdings_quality_columns
+    assert "ticker" in holdings_top10_columns
+    assert "rank" in holdings_top10_columns
+    assert "conids_json" in holdings_top10_columns
     assert "vs_num" in ratios_columns
     assert "metric_id" in dividends_columns
     assert "metric_id" in morningstar_columns
@@ -133,8 +139,8 @@ def test_apply_migrations_marks_partial_legacy_store_with_canonical_schema(
         )
 
     with connect_sqlite(db_path) as conn:
-        assert apply_migrations(conn) == [9]
-        assert current_schema_version(conn) == 9
+        assert apply_migrations(conn) == [9, 10]
+        assert current_schema_version(conn) == 10
         row = conn.execute(
             """
             SELECT source_as_of_date, capture_batch_id

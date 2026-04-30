@@ -22,7 +22,6 @@ Before starting implementation work, read these documents in order:
 2. [architecture_design.md](/Users/alex/Documents/pystocks/docs/architecture_design.md)
 3. [data_contracts_and_time_semantics.md](/Users/alex/Documents/pystocks/docs/data_contracts_and_time_semantics.md)
 4. [proposed_concern_map.md](/Users/alex/Documents/pystocks/docs/proposed_concern_map.md)
-5. [capability_inventory.md](/Users/alex/Documents/pystocks/docs/capability_inventory.md)
 
 Use the current `pystocks/` package as the behavioral reference. Do not assume its package boundaries are the target design.
 
