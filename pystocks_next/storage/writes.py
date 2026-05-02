@@ -873,12 +873,6 @@ def _extract_profile_field_rows(
                 "conid": conid,
                 "effective_at": effective_at,
                 "field_id": field_id,
-                "field_name": str(field_name) if field_name is not None else None,
-                "name_tag": str(name_tag) if name_tag is not None else None,
-                "value_tag": str(item.get("value_tag"))
-                if item.get("value_tag") is not None
-                else None,
-                "source_order": source_order,
                 **typed,
             }
         )
@@ -913,9 +907,7 @@ def _extract_profile_report_rows(
                 "conid": conid,
                 "effective_at": effective_at,
                 "report_id": report_id,
-                "report_name": str(report_name) if report_name is not None else None,
                 "report_as_of_date": report_as_of_date,
-                "source_order": report_order,
             }
         )
 
@@ -923,7 +915,7 @@ def _extract_profile_report_rows(
         if not isinstance(fields, list):
             continue
         seen_fields: dict[str, int] = {}
-        for field_order, field in enumerate(fields):
+        for field in fields:
             if not isinstance(field, dict):
                 continue
             field_name = field.get("name")
@@ -937,9 +929,7 @@ def _extract_profile_report_rows(
                     "effective_at": effective_at,
                     "report_id": report_id,
                     "field_id": field_id,
-                    "field_name": str(field_name),
                     "is_summary": _to_int_bool(field.get("is_summary")),
-                    "source_order": field_order,
                     **typed,
                 }
             )
@@ -959,7 +949,7 @@ def _extract_profile_theme_rows(
 
     rows: list[dict[str, object]] = []
     seen: dict[str, int] = {}
-    for source_order, item in enumerate(themes):
+    for item in themes:
         if isinstance(item, str):
             theme_name = item.strip()
         elif isinstance(item, dict):
@@ -975,8 +965,6 @@ def _extract_profile_theme_rows(
                 "conid": conid,
                 "effective_at": effective_at,
                 "theme_id": theme_id,
-                "theme_name": theme_name,
-                "source_order": source_order,
             }
         )
     return rows
@@ -995,7 +983,7 @@ def _extract_profile_expense_allocation_rows(
 
     rows: list[dict[str, object]] = []
     seen: dict[str, int] = {}
-    for source_order, item in enumerate(values):
+    for item in values:
         if not isinstance(item, dict):
             continue
         name = item.get("name")
@@ -1010,10 +998,8 @@ def _extract_profile_expense_allocation_rows(
                 "conid": conid,
                 "effective_at": effective_at,
                 "expense_id": expense_id,
-                "expense_name": str(name),
                 "value_text": str(item.get("value")) if item.get("value") else None,
                 "ratio": ratio,
-                "source_order": source_order,
             }
         )
     return rows
@@ -1829,28 +1815,18 @@ def write_profile_and_fees_snapshot(
                 conid,
                 effective_at,
                 field_id,
-                field_name,
-                name_tag,
-                value_tag,
                 value_text,
                 value_num,
-                value_date,
-                value_bool,
-                source_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                value_date
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 row["conid"],
                 row["effective_at"],
                 row["field_id"],
-                row["field_name"],
-                row["name_tag"],
-                row["value_tag"],
                 row["value_text"],
                 row["value_num"],
                 row["value_date"],
-                row["value_bool"],
-                row["source_order"],
             ),
         )
     for row in report_rows:
@@ -1860,18 +1836,14 @@ def write_profile_and_fees_snapshot(
                 conid,
                 effective_at,
                 report_id,
-                report_name,
-                report_as_of_date,
-                source_order
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                report_as_of_date
+            ) VALUES (?, ?, ?, ?)
             """,
             (
                 row["conid"],
                 row["effective_at"],
                 row["report_id"],
-                row["report_name"],
                 row["report_as_of_date"],
-                row["source_order"],
             ),
         )
     for row in report_field_rows:
@@ -1882,27 +1854,21 @@ def write_profile_and_fees_snapshot(
                 effective_at,
                 report_id,
                 field_id,
-                field_name,
                 value_text,
                 value_num,
                 value_date,
-                value_bool,
-                is_summary,
-                source_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                is_summary
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["conid"],
                 row["effective_at"],
                 row["report_id"],
                 row["field_id"],
-                row["field_name"],
                 row["value_text"],
                 row["value_num"],
                 row["value_date"],
-                row["value_bool"],
                 row["is_summary"],
-                row["source_order"],
             ),
         )
     for row in theme_rows:
@@ -1911,17 +1877,13 @@ def write_profile_and_fees_snapshot(
             INSERT INTO profile_themes (
                 conid,
                 effective_at,
-                theme_id,
-                theme_name,
-                source_order
-            ) VALUES (?, ?, ?, ?, ?)
+                theme_id
+            ) VALUES (?, ?, ?)
             """,
             (
                 row["conid"],
                 row["effective_at"],
                 row["theme_id"],
-                row["theme_name"],
-                row["source_order"],
             ),
         )
     for row in expense_rows:
@@ -1931,20 +1893,16 @@ def write_profile_and_fees_snapshot(
                 conid,
                 effective_at,
                 expense_id,
-                expense_name,
                 value_text,
-                ratio,
-                source_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ratio
+            ) VALUES (?, ?, ?, ?, ?)
             """,
             (
                 row["conid"],
                 row["effective_at"],
                 row["expense_id"],
-                row["expense_name"],
                 row["value_text"],
                 row["ratio"],
-                row["source_order"],
             ),
         )
     for row in stylebox_rows:

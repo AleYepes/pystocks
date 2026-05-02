@@ -206,21 +206,6 @@ def _build_profile_features(
                 prefix="profile_theme",
             )
         )
-        theme_names = pd.DataFrame(
-            themes.sort_values(["conid", "effective_at", "source_order"])
-            .groupby(["conid", "effective_at"], as_index=False)
-            .agg(theme_name=("theme_name", lambda values: " | ".join(values)))
-        )
-        theme_names["field_id"] = "theme_name"
-        theme_names = theme_names.rename(columns={"theme_name": "value"})
-        frames.append(
-            _pivot_keyed_values(
-                theme_names,
-                key_column="field_id",
-                value_column="value",
-                prefix="profile",
-            )
-        )
 
     expenses = snapshot_tables["profile_expense_allocations"].copy()
     if not expenses.empty:

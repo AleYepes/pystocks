@@ -119,14 +119,9 @@ def build_sample_snapshot_tables() -> dict[str, pd.DataFrame]:
                 "conid": "200",
                 "effective_at": "2026-01-03",
                 "field_id": "asset_type",
-                "field_name": "Asset Type",
-                "name_tag": "Asset_Type",
-                "value_tag": None,
                 "value_text": "Equity",
                 "value_num": None,
                 "value_date": None,
-                "value_bool": None,
-                "source_order": 0,
             }
         ]
     )

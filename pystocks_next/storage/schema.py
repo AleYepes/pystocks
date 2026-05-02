@@ -701,14 +701,9 @@ MIGRATIONS: tuple[Migration, ...] = (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
                 field_id TEXT NOT NULL,
-                field_name TEXT,
-                name_tag TEXT,
-                value_tag TEXT,
                 value_text TEXT,
                 value_num REAL,
                 value_date TEXT,
-                value_bool INTEGER,
-                source_order INTEGER NOT NULL,
                 PRIMARY KEY (conid, effective_at, field_id)
             )
             """,
@@ -717,9 +712,7 @@ MIGRATIONS: tuple[Migration, ...] = (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
                 report_id TEXT NOT NULL,
-                report_name TEXT,
                 report_as_of_date TEXT,
-                source_order INTEGER NOT NULL,
                 PRIMARY KEY (conid, effective_at, report_id)
             )
             """,
@@ -729,13 +722,10 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 report_id TEXT NOT NULL,
                 field_id TEXT NOT NULL,
-                field_name TEXT,
                 value_text TEXT,
                 value_num REAL,
                 value_date TEXT,
-                value_bool INTEGER,
                 is_summary INTEGER,
-                source_order INTEGER NOT NULL,
                 PRIMARY KEY (conid, effective_at, report_id, field_id)
             )
             """,
@@ -744,8 +734,6 @@ MIGRATIONS: tuple[Migration, ...] = (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
                 theme_id TEXT NOT NULL,
-                theme_name TEXT,
-                source_order INTEGER NOT NULL,
                 PRIMARY KEY (conid, effective_at, theme_id)
             )
             """,
@@ -754,10 +742,8 @@ MIGRATIONS: tuple[Migration, ...] = (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
                 expense_id TEXT NOT NULL,
-                expense_name TEXT,
                 value_text TEXT,
                 ratio REAL,
-                source_order INTEGER NOT NULL,
                 PRIMARY KEY (conid, effective_at, expense_id)
             )
             """,
@@ -778,6 +764,116 @@ MIGRATIONS: tuple[Migration, ...] = (
             """
             CREATE INDEX IF NOT EXISTS idx_profile_snapshots_observed_at
             ON profile_snapshots(observed_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_profile_fields_effective_at
+            ON profile_fields(effective_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_profile_report_fields_effective_at
+            ON profile_report_fields(effective_at, conid)
+            """,
+        ),
+    ),
+    Migration(
+        version=16,
+        description="trim redundant profile child-table columns",
+        statements=(
+            """
+            DROP TABLE IF EXISTS profile_overview
+            """,
+            """
+            DROP TABLE IF EXISTS profile_fields
+            """,
+            """
+            DROP TABLE IF EXISTS profile_reports
+            """,
+            """
+            DROP TABLE IF EXISTS profile_report_fields
+            """,
+            """
+            DROP TABLE IF EXISTS profile_themes
+            """,
+            """
+            DROP TABLE IF EXISTS profile_expense_allocations
+            """,
+            """
+            DROP TABLE IF EXISTS profile_stylebox
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS profile_overview (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                symbol TEXT,
+                objective TEXT,
+                jap_fund_warning INTEGER,
+                PRIMARY KEY (conid, effective_at)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS profile_fields (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                field_id TEXT NOT NULL,
+                value_text TEXT,
+                value_num REAL,
+                value_date TEXT,
+                PRIMARY KEY (conid, effective_at, field_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS profile_reports (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                report_id TEXT NOT NULL,
+                report_as_of_date TEXT,
+                PRIMARY KEY (conid, effective_at, report_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS profile_report_fields (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                report_id TEXT NOT NULL,
+                field_id TEXT NOT NULL,
+                value_text TEXT,
+                value_num REAL,
+                value_date TEXT,
+                is_summary INTEGER,
+                PRIMARY KEY (conid, effective_at, report_id, field_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS profile_themes (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                theme_id TEXT NOT NULL,
+                PRIMARY KEY (conid, effective_at, theme_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS profile_expense_allocations (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                expense_id TEXT NOT NULL,
+                value_text TEXT,
+                ratio REAL,
+                PRIMARY KEY (conid, effective_at, expense_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS profile_stylebox (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                stylebox_id TEXT NOT NULL,
+                x_index INTEGER,
+                y_index INTEGER,
+                x_label TEXT,
+                y_label TEXT,
+                x_tag TEXT,
+                y_tag TEXT,
+                PRIMARY KEY (conid, effective_at, stylebox_id)
+            )
             """,
             """
             CREATE INDEX IF NOT EXISTS idx_profile_fields_effective_at

@@ -43,7 +43,7 @@ def test_write_profile_and_fees_snapshot_persists_source_shaped_profile_rows(
     ).fetchone()
     field_rows = temp_store.execute(
         """
-        SELECT field_id, field_name, value_text, value_num, value_date, value_bool
+        SELECT field_id, value_text, value_num, value_date
         FROM profile_fields
         WHERE conid = '100'
         ORDER BY field_id
@@ -112,7 +112,7 @@ def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
     ).fetchone()
     fields = temp_store.execute(
         """
-        SELECT field_id, value_text, value_num, value_date, value_bool
+        SELECT field_id, value_text, value_num, value_date
         FROM profile_fields
         WHERE conid = '100'
         ORDER BY field_id
@@ -123,7 +123,7 @@ def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
         SELECT report_id, report_as_of_date
         FROM profile_reports
         WHERE conid = '100'
-        ORDER BY source_order
+        ORDER BY report_id
         """
     ).fetchall()
     report_fields = temp_store.execute(
@@ -136,7 +136,7 @@ def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
     ).fetchall()
     themes = temp_store.execute(
         """
-        SELECT theme_id, theme_name
+        SELECT theme_id
         FROM profile_themes
         WHERE conid = '100'
         """
@@ -160,9 +160,7 @@ def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
     assert report_by_field["total_expense"]["value_num"] == pytest.approx(0.000893)
     assert report_by_field["total_expense"]["is_summary"] == 1
     assert report_by_field["management_fees"]["value_num"] == pytest.approx(0.000469)
-    assert [(row["theme_id"], row["theme_name"]) for row in themes] == [
-        ("index_tracking", "Index Tracking")
-    ]
+    assert [row["theme_id"] for row in themes] == ["index_tracking"]
     assert stylebox["stylebox_id"] == "growth_multi"
     assert stylebox["x_label"] == "Growth"
     assert stylebox["y_label"] == "Multi"

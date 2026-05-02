@@ -65,51 +65,37 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "conid",
         "effective_at",
         "field_id",
-        "field_name",
-        "name_tag",
-        "value_tag",
         "value_text",
         "value_num",
         "value_date",
-        "value_bool",
-        "source_order",
     ),
     "profile_reports": (
         "conid",
         "effective_at",
         "report_id",
-        "report_name",
         "report_as_of_date",
-        "source_order",
     ),
     "profile_report_fields": (
         "conid",
         "effective_at",
         "report_id",
         "field_id",
-        "field_name",
         "value_text",
         "value_num",
         "value_date",
-        "value_bool",
         "is_summary",
-        "source_order",
     ),
     "profile_themes": (
         "conid",
         "effective_at",
         "theme_id",
-        "theme_name",
-        "source_order",
     ),
     "profile_expense_allocations": (
         "conid",
         "effective_at",
         "expense_id",
-        "expense_name",
         "value_text",
         "ratio",
-        "source_order",
     ),
     "profile_stylebox": (
         "conid",
@@ -283,16 +269,14 @@ SNAPSHOT_TABLE_DATE_COLUMNS: dict[str, tuple[str, ...]] = {
 
 SNAPSHOT_TABLE_NUMERIC_COLUMNS: dict[str, tuple[str, ...]] = {
     "profile_overview": ("jap_fund_warning",),
-    "profile_fields": ("value_num", "value_bool", "source_order"),
-    "profile_reports": ("source_order",),
+    "profile_fields": ("value_num",),
+    "profile_reports": (),
     "profile_report_fields": (
         "value_num",
-        "value_bool",
         "is_summary",
-        "source_order",
     ),
-    "profile_themes": ("source_order",),
-    "profile_expense_allocations": ("ratio", "source_order"),
+    "profile_themes": (),
+    "profile_expense_allocations": ("ratio",),
     "profile_stylebox": ("x_index", "y_index"),
     "holdings_asset_type": ("value_num", "vs_peers"),
     "holdings_debtor_quality": ("value_num", "vs_peers"),
@@ -318,24 +302,19 @@ SNAPSHOT_TABLE_STRING_COLUMNS: dict[str, tuple[str, ...]] = {
     "profile_fields": (
         "conid",
         "field_id",
-        "field_name",
-        "name_tag",
-        "value_tag",
         "value_text",
     ),
-    "profile_reports": ("conid", "report_id", "report_name"),
+    "profile_reports": ("conid", "report_id"),
     "profile_report_fields": (
         "conid",
         "report_id",
         "field_id",
-        "field_name",
         "value_text",
     ),
-    "profile_themes": ("conid", "theme_id", "theme_name"),
+    "profile_themes": ("conid", "theme_id"),
     "profile_expense_allocations": (
         "conid",
         "expense_id",
-        "expense_name",
         "value_text",
     ),
     "profile_stylebox": (
@@ -373,20 +352,18 @@ SNAPSHOT_TABLE_STRING_COLUMNS: dict[str, tuple[str, ...]] = {
 
 SNAPSHOT_TABLE_SORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "profile_overview": ("conid", "effective_at"),
-    "profile_fields": ("conid", "effective_at", "source_order", "field_id"),
-    "profile_reports": ("conid", "effective_at", "source_order", "report_id"),
+    "profile_fields": ("conid", "effective_at", "field_id"),
+    "profile_reports": ("conid", "effective_at", "report_id"),
     "profile_report_fields": (
         "conid",
         "effective_at",
         "report_id",
-        "source_order",
         "field_id",
     ),
-    "profile_themes": ("conid", "effective_at", "source_order", "theme_id"),
+    "profile_themes": ("conid", "effective_at", "theme_id"),
     "profile_expense_allocations": (
         "conid",
         "effective_at",
-        "source_order",
         "expense_id",
     ),
     "profile_stylebox": ("conid", "effective_at", "stylebox_id"),
@@ -826,16 +803,11 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 conid,
                 effective_at,
                 field_id,
-                field_name,
-                name_tag,
-                value_tag,
                 value_text,
                 value_num,
-                value_date,
-                value_bool,
-                source_order
+                value_date
             FROM profile_fields
-            ORDER BY conid, effective_at, source_order, field_id
+            ORDER BY conid, effective_at, field_id
             """,
             name="profile_fields",
         ),
@@ -846,11 +818,9 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 conid,
                 effective_at,
                 report_id,
-                report_name,
-                report_as_of_date,
-                source_order
+                report_as_of_date
             FROM profile_reports
-            ORDER BY conid, effective_at, source_order, report_id
+            ORDER BY conid, effective_at, report_id
             """,
             name="profile_reports",
         ),
@@ -862,15 +832,12 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 effective_at,
                 report_id,
                 field_id,
-                field_name,
                 value_text,
                 value_num,
                 value_date,
-                value_bool,
-                is_summary,
-                source_order
+                is_summary
             FROM profile_report_fields
-            ORDER BY conid, effective_at, report_id, source_order, field_id
+            ORDER BY conid, effective_at, report_id, field_id
             """,
             name="profile_report_fields",
         ),
@@ -880,11 +847,9 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
             SELECT
                 conid,
                 effective_at,
-                theme_id,
-                theme_name,
-                source_order
+                theme_id
             FROM profile_themes
-            ORDER BY conid, effective_at, source_order, theme_id
+            ORDER BY conid, effective_at, theme_id
             """,
             name="profile_themes",
         ),
@@ -895,12 +860,10 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
                 conid,
                 effective_at,
                 expense_id,
-                expense_name,
                 value_text,
-                ratio,
-                source_order
+                ratio
             FROM profile_expense_allocations
-            ORDER BY conid, effective_at, source_order, expense_id
+            ORDER BY conid, effective_at, expense_id
             """,
             name="profile_expense_allocations",
         ),

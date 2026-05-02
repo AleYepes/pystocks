@@ -53,7 +53,7 @@ The rebuilt architecture should not:
 
 ## Top-Level Concern Map
 
-The rebuilt system should have nine concern families.
+The rebuilt system should at least have the following nine concern families:
 
 ### 1. Universe
 
