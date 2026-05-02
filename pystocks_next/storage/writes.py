@@ -881,7 +881,6 @@ def _extract_profile_field_rows(
 
 def _extract_profile_report_rows(
     conid: str,
-    effective_at: str,
     payload: JsonValue | bytes,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     if isinstance(payload, bytes) or not isinstance(payload, dict):
@@ -890,30 +889,32 @@ def _extract_profile_report_rows(
     if not isinstance(reports, list):
         return [], []
 
-    report_rows: list[dict[str, object]] = []
-    field_rows: list[dict[str, object]] = []
-    seen_reports: dict[str, int] = {}
-    for report_order, report in enumerate(reports):
+    annual_rows: list[dict[str, object]] = []
+    prospectus_rows: list[dict[str, object]] = []
+
+    for report in reports:
         if not isinstance(report, dict):
             continue
-        report_name = report.get("name")
-        base_report_id = _sanitize_segment(report_name or f"report_{report_order + 1}")
-        report_id = _source_ordered_id(base_report_id, seen_reports)
+        report_name = str(report.get("name") or "").strip().lower()
         report_as_of_date = to_iso_date(
             report.get("as_of_date") or report.get("asOfDate")
         )
-        report_rows.append(
-            {
-                "conid": conid,
-                "effective_at": effective_at,
-                "report_id": report_id,
-                "report_as_of_date": report_as_of_date,
-            }
-        )
+        if not report_as_of_date:
+            continue
 
         fields = report.get("fields", [])
-        if not isinstance(fields, list):
+        if not isinstance(fields, list) or not fields:
             continue
+
+        target_list = None
+        if "annual" in report_name:
+            target_list = annual_rows
+        elif "prospectus" in report_name:
+            target_list = prospectus_rows
+
+        if target_list is None:
+            continue
+
         seen_fields: dict[str, int] = {}
         for field in fields:
             if not isinstance(field, dict):
@@ -923,17 +924,16 @@ def _extract_profile_report_rows(
                 continue
             field_id = _source_ordered_id(_sanitize_segment(field_name), seen_fields)
             typed = _typed_profile_value(field.get("value"))
-            field_rows.append(
+            target_list.append(
                 {
                     "conid": conid,
-                    "effective_at": effective_at,
-                    "report_id": report_id,
+                    "effective_at": report_as_of_date,
                     "field_id": field_id,
                     "is_summary": _to_int_bool(field.get("is_summary")),
-                    **typed,
+                    "value_num": typed.get("value_num"),
                 }
             )
-    return report_rows, field_rows
+    return annual_rows, prospectus_rows
 
 
 def _extract_profile_theme_rows(
@@ -1750,9 +1750,7 @@ def write_profile_and_fees_snapshot(
 
     overview_row = _extract_profile_overview_row(conid, effective_at, payload)
     field_rows = _extract_profile_field_rows(conid, effective_at, payload)
-    report_rows, report_field_rows = _extract_profile_report_rows(
-        conid, effective_at, payload
-    )
+    annual_rows, prospectus_rows = _extract_profile_report_rows(conid, payload)
     theme_rows = _extract_profile_theme_rows(conid, effective_at, payload)
     expense_rows = _extract_profile_expense_allocation_rows(
         conid, effective_at, payload
@@ -1781,8 +1779,6 @@ def write_profile_and_fees_snapshot(
         tables=(
             "profile_overview",
             "profile_fields",
-            "profile_reports",
-            "profile_report_fields",
             "profile_themes",
             "profile_expense_allocations",
             "profile_stylebox",
@@ -1829,45 +1825,47 @@ def write_profile_and_fees_snapshot(
                 row["value_date"],
             ),
         )
-    for row in report_rows:
+    for row in annual_rows:
         conn.execute(
             """
-            INSERT INTO profile_reports (
+            INSERT INTO profile_annual_report (
                 conid,
                 effective_at,
-                report_id,
-                report_as_of_date
-            ) VALUES (?, ?, ?, ?)
+                field_id,
+                value_num,
+                is_summary
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(conid, effective_at, field_id) DO UPDATE SET
+                value_num = excluded.value_num,
+                is_summary = excluded.is_summary
             """,
             (
                 row["conid"],
                 row["effective_at"],
-                row["report_id"],
-                row["report_as_of_date"],
+                row["field_id"],
+                row["value_num"],
+                row["is_summary"],
             ),
         )
-    for row in report_field_rows:
+    for row in prospectus_rows:
         conn.execute(
             """
-            INSERT INTO profile_report_fields (
+            INSERT INTO profile_prospectus_report (
                 conid,
                 effective_at,
-                report_id,
                 field_id,
-                value_text,
                 value_num,
-                value_date,
                 is_summary
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(conid, effective_at, field_id) DO UPDATE SET
+                value_num = excluded.value_num,
+                is_summary = excluded.is_summary
             """,
             (
                 row["conid"],
                 row["effective_at"],
-                row["report_id"],
                 row["field_id"],
-                row["value_text"],
                 row["value_num"],
-                row["value_date"],
                 row["is_summary"],
             ),
         )

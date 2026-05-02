@@ -100,73 +100,6 @@ MIGRATIONS: tuple[Migration, ...] = (
             )
             """,
             """
-            CREATE TABLE IF NOT EXISTS supplementary_fetch_log (
-                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                dataset TEXT NOT NULL,
-                observed_at TEXT NOT NULL,
-                status TEXT NOT NULL,
-                record_count INTEGER NOT NULL,
-                min_key TEXT,
-                max_key TEXT,
-                notes TEXT
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS supplementary_risk_free_sources (
-                series_id TEXT NOT NULL,
-                source_name TEXT NOT NULL,
-                economy_code TEXT,
-                trade_date TEXT NOT NULL,
-                nominal_rate REAL,
-                observed_at TEXT NOT NULL,
-                PRIMARY KEY (series_id, trade_date)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS supplementary_world_bank_raw (
-                economy_code TEXT NOT NULL,
-                indicator_id TEXT NOT NULL,
-                year INTEGER NOT NULL,
-                value REAL,
-                observed_at TEXT NOT NULL,
-                PRIMARY KEY (economy_code, indicator_id, year)
-            )
-            """,
-            """
-            DROP TABLE IF EXISTS profile_and_fees
-            """,
-            """
-            DROP TABLE IF EXISTS holdings_asset_type
-            """,
-            """
-            DROP TABLE IF EXISTS holdings_debtor_quality
-            """,
-            """
-            DROP TABLE IF EXISTS holdings_maturity
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS profile_and_fees_snapshots (
-                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
-                effective_at TEXT NOT NULL,
-                observed_at TEXT NOT NULL,
-                payload_hash TEXT NOT NULL REFERENCES raw_payload_blobs(payload_hash),
-                capture_batch_id TEXT,
-                PRIMARY KEY (conid, effective_at)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS profile_and_fees (
-                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
-                effective_at TEXT NOT NULL,
-                field_id TEXT NOT NULL,
-                value_text TEXT,
-                value_num REAL,
-                value_date TEXT,
-                value_bool INTEGER,
-                PRIMARY KEY (conid, effective_at, field_id)
-            )
-            """,
-            """
             CREATE TABLE IF NOT EXISTS holdings_snapshots (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
@@ -183,6 +116,7 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 bucket_id TEXT NOT NULL,
                 value_num REAL,
+                vs_peers REAL,
                 PRIMARY KEY (conid, effective_at, bucket_id)
             )
             """,
@@ -192,6 +126,7 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 bucket_id TEXT NOT NULL,
                 value_num REAL,
+                vs_peers REAL,
                 PRIMARY KEY (conid, effective_at, bucket_id)
             )
             """,
@@ -201,6 +136,7 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 bucket_id TEXT NOT NULL,
                 value_num REAL,
+                vs_peers REAL,
                 PRIMARY KEY (conid, effective_at, bucket_id)
             )
             """,
@@ -209,7 +145,9 @@ MIGRATIONS: tuple[Migration, ...] = (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
                 industry TEXT NOT NULL,
-                value_num REAL
+                value_num REAL,
+                vs_peers REAL,
+                PRIMARY KEY (conid, effective_at, industry)
             )
             """,
             """
@@ -218,7 +156,9 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 code TEXT,
                 currency TEXT,
-                value_num REAL
+                value_num REAL,
+                vs_peers REAL,
+                PRIMARY KEY (conid, effective_at, code, currency)
             )
             """,
             """
@@ -227,7 +167,9 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 country_code TEXT,
                 country TEXT,
-                value_num REAL
+                value_num REAL,
+                vs_peers REAL,
+                PRIMARY KEY (conid, effective_at, country_code, country)
             )
             """,
             """
@@ -235,7 +177,9 @@ MIGRATIONS: tuple[Migration, ...] = (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
                 region TEXT NOT NULL,
-                value_num REAL
+                value_num REAL,
+                vs_peers REAL,
+                PRIMARY KEY (conid, effective_at, region)
             )
             """,
             """
@@ -243,7 +187,9 @@ MIGRATIONS: tuple[Migration, ...] = (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
                 debt_type TEXT NOT NULL,
-                value_num REAL
+                value_num REAL,
+                vs_peers REAL,
+                PRIMARY KEY (conid, effective_at, debt_type)
             )
             """,
             """
@@ -251,7 +197,11 @@ MIGRATIONS: tuple[Migration, ...] = (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
                 name TEXT NOT NULL,
-                holding_weight_num REAL
+                ticker TEXT,
+                rank INTEGER,
+                holding_weight_num REAL,
+                vs_peers REAL,
+                conids_json TEXT
             )
             """,
             """
@@ -271,7 +221,7 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 metric_id TEXT NOT NULL,
                 value_num REAL,
-                vs_num REAL,
+                vs_peers REAL,
                 PRIMARY KEY (conid, effective_at, metric_id)
             )
             """,
@@ -281,7 +231,7 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 metric_id TEXT NOT NULL,
                 value_num REAL,
-                vs_num REAL,
+                vs_peers REAL,
                 PRIMARY KEY (conid, effective_at, metric_id)
             )
             """,
@@ -291,7 +241,7 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 metric_id TEXT NOT NULL,
                 value_num REAL,
-                vs_num REAL,
+                vs_peers REAL,
                 PRIMARY KEY (conid, effective_at, metric_id)
             )
             """,
@@ -301,7 +251,7 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 metric_id TEXT NOT NULL,
                 value_num REAL,
-                vs_num REAL,
+                vs_peers REAL,
                 PRIMARY KEY (conid, effective_at, metric_id)
             )
             """,
@@ -311,7 +261,7 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 metric_id TEXT NOT NULL,
                 value_num REAL,
-                vs_num REAL,
+                vs_peers REAL,
                 PRIMARY KEY (conid, effective_at, metric_id)
             )
             """,
@@ -332,7 +282,6 @@ MIGRATIONS: tuple[Migration, ...] = (
                 effective_at TEXT NOT NULL,
                 metric_id TEXT NOT NULL,
                 value_num REAL,
-                currency TEXT,
                 PRIMARY KEY (conid, effective_at, metric_id)
             )
             """,
@@ -344,7 +293,6 @@ MIGRATIONS: tuple[Migration, ...] = (
                 payload_hash TEXT NOT NULL REFERENCES raw_payload_blobs(payload_hash),
                 capture_batch_id TEXT,
                 as_of_date TEXT,
-                q_full_report_id TEXT,
                 PRIMARY KEY (conid, effective_at)
             )
             """,
@@ -403,6 +351,65 @@ MIGRATIONS: tuple[Migration, ...] = (
             ON dividends_events_series(effective_at, conid)
             """,
             """
+            CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_observed_at
+            ON holdings_snapshots(observed_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_ratios_snapshots_observed_at
+            ON ratios_snapshots(observed_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_dividends_snapshots_observed_at
+            ON dividends_snapshots(observed_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_morningstar_snapshots_observed_at
+            ON morningstar_snapshots(observed_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_lipper_ratings_snapshots_observed_at
+            ON lipper_ratings_snapshots(observed_at, conid)
+            """,
+        ),
+    ),
+    Migration(
+        version=10,
+        description="add supplementary source tables",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS supplementary_fetch_log (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dataset TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                record_count INTEGER NOT NULL,
+                min_key TEXT,
+                max_key TEXT,
+                notes TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS supplementary_risk_free_sources (
+                series_id TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                economy_code TEXT,
+                trade_date TEXT NOT NULL,
+                nominal_rate REAL,
+                observed_at TEXT NOT NULL,
+                PRIMARY KEY (series_id, trade_date)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS supplementary_world_bank_raw (
+                economy_code TEXT NOT NULL,
+                indicator_id TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                value REAL,
+                observed_at TEXT NOT NULL,
+                PRIMARY KEY (economy_code, indicator_id, year)
+            )
+            """,
+            """
             CREATE INDEX IF NOT EXISTS idx_supplementary_fetch_log_dataset
             ON supplementary_fetch_log(dataset, observed_at)
             """,
@@ -414,188 +421,33 @@ MIGRATIONS: tuple[Migration, ...] = (
             CREATE INDEX IF NOT EXISTS idx_supplementary_world_bank_raw_year
             ON supplementary_world_bank_raw(year, economy_code)
             """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_profile_and_fees_snapshots_observed_at
-            ON profile_and_fees_snapshots(observed_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_profile_and_fees_effective_at
-            ON profile_and_fees(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_observed_at
-            ON holdings_snapshots(observed_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_holdings_asset_type_effective_at
-            ON holdings_asset_type(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_holdings_debtor_quality_effective_at
-            ON holdings_debtor_quality(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_holdings_maturity_effective_at
-            ON holdings_maturity(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_holdings_industry_effective_at
-            ON holdings_industry(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_holdings_currency_effective_at
-            ON holdings_currency(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_holdings_investor_country_effective_at
-            ON holdings_investor_country(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_holdings_geographic_weights_effective_at
-            ON holdings_geographic_weights(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_holdings_debt_type_effective_at
-            ON holdings_debt_type(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_holdings_top10_effective_at
-            ON holdings_top10(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_ratios_snapshots_observed_at
-            ON ratios_snapshots(observed_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_dividends_snapshots_observed_at
-            ON dividends_snapshots(observed_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_dividends_industry_metrics_effective_at
-            ON dividends_industry_metrics(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_morningstar_snapshots_observed_at
-            ON morningstar_snapshots(observed_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_morningstar_summary_effective_at
-            ON morningstar_summary(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_lipper_ratings_snapshots_observed_at
-            ON lipper_ratings_snapshots(observed_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_lipper_ratings_effective_at
-            ON lipper_ratings(effective_at, conid)
-            """,
-            """
-            DROP INDEX IF EXISTS idx_supplementary_world_bank_country_features_effective_at
-            """,
-            """
-            DROP TABLE IF EXISTS supplementary_risk_free_daily
-            """,
-            """
-            DROP TABLE IF EXISTS supplementary_world_bank_country_features
-            """,
-            """
-            DROP TABLE IF EXISTS profile_and_fees_factors
-            """,
-            """
-            DROP TABLE IF EXISTS holdings_asset_type_factors
-            """,
-            """
-            DROP TABLE IF EXISTS holdings_debtor_quality_factors
-            """,
-            """
-            DROP TABLE IF EXISTS holdings_maturity_factors
-            """,
-            """
-            DROP TABLE IF EXISTS dividends_industry_metrics_factors
-            """,
-            """
-            DROP TABLE IF EXISTS morningstar_summary_factors
-            """,
-        ),
-    ),
-    Migration(
-        version=10,
-        description="add stable top-10 holdings identifiers",
-        statements=(
-            """
-            ALTER TABLE holdings_top10
-            ADD COLUMN ticker TEXT
-            """,
-            """
-            ALTER TABLE holdings_top10
-            ADD COLUMN rank INTEGER
-            """,
-            """
-            ALTER TABLE holdings_top10
-            ADD COLUMN conids_json TEXT
-            """,
         ),
     ),
     Migration(
         version=11,
-        description="standardize peer comparison columns",
+        description="add profile and fees snapshot capture",
         statements=(
             """
-            ALTER TABLE holdings_asset_type
-            ADD COLUMN vs_peers REAL
+            CREATE TABLE IF NOT EXISTS profile_and_fees_snapshots (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                payload_hash TEXT NOT NULL REFERENCES raw_payload_blobs(payload_hash),
+                capture_batch_id TEXT,
+                PRIMARY KEY (conid, effective_at)
+            )
             """,
             """
-            ALTER TABLE holdings_debtor_quality
-            ADD COLUMN vs_peers REAL
+            CREATE TABLE IF NOT EXISTS profile_and_fees (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                profile_json TEXT,
+                PRIMARY KEY (conid, effective_at)
+            )
             """,
             """
-            ALTER TABLE holdings_maturity
-            ADD COLUMN vs_peers REAL
-            """,
-            """
-            ALTER TABLE holdings_industry
-            ADD COLUMN vs_peers REAL
-            """,
-            """
-            ALTER TABLE holdings_currency
-            ADD COLUMN vs_peers REAL
-            """,
-            """
-            ALTER TABLE holdings_investor_country
-            ADD COLUMN vs_peers REAL
-            """,
-            """
-            ALTER TABLE holdings_geographic_weights
-            ADD COLUMN vs_peers REAL
-            """,
-            """
-            ALTER TABLE holdings_debt_type
-            ADD COLUMN vs_peers REAL
-            """,
-            """
-            ALTER TABLE holdings_top10
-            ADD COLUMN vs_peers REAL
-            """,
-            """
-            ALTER TABLE ratios_key_ratios
-            RENAME COLUMN vs_num TO vs_peers
-            """,
-            """
-            ALTER TABLE ratios_financials
-            RENAME COLUMN vs_num TO vs_peers
-            """,
-            """
-            ALTER TABLE ratios_fixed_income
-            RENAME COLUMN vs_num TO vs_peers
-            """,
-            """
-            ALTER TABLE ratios_dividend
-            RENAME COLUMN vs_num TO vs_peers
-            """,
-            """
-            ALTER TABLE ratios_zscore
-            RENAME COLUMN vs_num TO vs_peers
+            CREATE INDEX IF NOT EXISTS idx_profile_and_fees_snapshots_observed_at
+            ON profile_and_fees_snapshots(observed_at, conid)
             """,
         ),
     ),
@@ -606,6 +458,10 @@ MIGRATIONS: tuple[Migration, ...] = (
             """
             ALTER TABLE universe_instruments
             ADD COLUMN local_symbol TEXT
+            """,
+            """
+            ALTER TABLE universe_instruments
+            ADD COLUMN primary_listing_exchange TEXT
             """,
             """
             ALTER TABLE universe_instruments
@@ -708,25 +564,23 @@ MIGRATIONS: tuple[Migration, ...] = (
             )
             """,
             """
-            CREATE TABLE IF NOT EXISTS profile_reports (
+            CREATE TABLE IF NOT EXISTS profile_annual_report (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
-                report_id TEXT NOT NULL,
-                report_as_of_date TEXT,
-                PRIMARY KEY (conid, effective_at, report_id)
+                field_id TEXT NOT NULL,
+                value_num REAL,
+                is_summary INTEGER,
+                PRIMARY KEY (conid, effective_at, field_id)
             )
             """,
             """
-            CREATE TABLE IF NOT EXISTS profile_report_fields (
+            CREATE TABLE IF NOT EXISTS profile_prospectus_report (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
-                report_id TEXT NOT NULL,
                 field_id TEXT NOT NULL,
-                value_text TEXT,
                 value_num REAL,
-                value_date TEXT,
                 is_summary INTEGER,
-                PRIMARY KEY (conid, effective_at, report_id, field_id)
+                PRIMARY KEY (conid, effective_at, field_id)
             )
             """,
             """
@@ -770,118 +624,40 @@ MIGRATIONS: tuple[Migration, ...] = (
             ON profile_fields(effective_at, conid)
             """,
             """
-            CREATE INDEX IF NOT EXISTS idx_profile_report_fields_effective_at
-            ON profile_report_fields(effective_at, conid)
+            CREATE INDEX IF NOT EXISTS idx_profile_annual_report_effective_at
+            ON profile_annual_report(effective_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_profile_prospectus_report_effective_at
+            ON profile_prospectus_report(effective_at, conid)
             """,
         ),
     ),
     Migration(
         version=16,
-        description="trim redundant profile child-table columns",
+        description="finalize profile report split",
         statements=(
             """
-            DROP TABLE IF EXISTS profile_overview
+            ALTER TABLE morningstar_snapshots ADD COLUMN q_full_report_id TEXT
             """,
             """
-            DROP TABLE IF EXISTS profile_fields
+            ALTER TABLE dividends_industry_metrics ADD COLUMN currency TEXT
             """,
             """
-            DROP TABLE IF EXISTS profile_reports
+            DROP TABLE IF EXISTS lipper_ratings
             """,
             """
-            DROP TABLE IF EXISTS profile_report_fields
-            """,
-            """
-            DROP TABLE IF EXISTS profile_themes
-            """,
-            """
-            DROP TABLE IF EXISTS profile_expense_allocations
-            """,
-            """
-            DROP TABLE IF EXISTS profile_stylebox
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS profile_overview (
+            CREATE TABLE IF NOT EXISTS lipper_ratings (
                 conid TEXT NOT NULL REFERENCES universe_instruments(conid),
                 effective_at TEXT NOT NULL,
-                symbol TEXT,
-                objective TEXT,
-                jap_fund_warning INTEGER,
-                PRIMARY KEY (conid, effective_at)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS profile_fields (
-                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
-                effective_at TEXT NOT NULL,
-                field_id TEXT NOT NULL,
-                value_text TEXT,
+                period TEXT NOT NULL,
+                metric_id TEXT NOT NULL,
                 value_num REAL,
-                value_date TEXT,
-                PRIMARY KEY (conid, effective_at, field_id)
+                rating_label TEXT,
+                universe_name TEXT,
+                universe_as_of_date TEXT,
+                PRIMARY KEY (conid, effective_at, universe_name, period, metric_id)
             )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS profile_reports (
-                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
-                effective_at TEXT NOT NULL,
-                report_id TEXT NOT NULL,
-                report_as_of_date TEXT,
-                PRIMARY KEY (conid, effective_at, report_id)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS profile_report_fields (
-                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
-                effective_at TEXT NOT NULL,
-                report_id TEXT NOT NULL,
-                field_id TEXT NOT NULL,
-                value_text TEXT,
-                value_num REAL,
-                value_date TEXT,
-                is_summary INTEGER,
-                PRIMARY KEY (conid, effective_at, report_id, field_id)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS profile_themes (
-                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
-                effective_at TEXT NOT NULL,
-                theme_id TEXT NOT NULL,
-                PRIMARY KEY (conid, effective_at, theme_id)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS profile_expense_allocations (
-                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
-                effective_at TEXT NOT NULL,
-                expense_id TEXT NOT NULL,
-                value_text TEXT,
-                ratio REAL,
-                PRIMARY KEY (conid, effective_at, expense_id)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS profile_stylebox (
-                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
-                effective_at TEXT NOT NULL,
-                stylebox_id TEXT NOT NULL,
-                x_index INTEGER,
-                y_index INTEGER,
-                x_label TEXT,
-                y_label TEXT,
-                x_tag TEXT,
-                y_tag TEXT,
-                PRIMARY KEY (conid, effective_at, stylebox_id)
-            )
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_profile_fields_effective_at
-            ON profile_fields(effective_at, conid)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_profile_report_fields_effective_at
-            ON profile_report_fields(effective_at, conid)
             """,
         ),
     ),

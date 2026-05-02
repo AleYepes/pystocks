@@ -39,8 +39,12 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
         profile_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(profile_fields)")
         }
-        profile_report_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(profile_report_fields)")
+        profile_annual_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(profile_annual_report)")
+        }
+        profile_prospectus_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(profile_prospectus_report)")
         }
         profile_stylebox_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(profile_stylebox)")
@@ -82,7 +86,8 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     assert "observed_at" in price_columns
     assert "event_signature" in dividend_columns
     assert "field_id" in profile_columns
-    assert "report_id" in profile_report_columns
+    assert "field_id" in profile_annual_columns
+    assert "field_id" in profile_prospectus_columns
     assert "stylebox_id" in profile_stylebox_columns
     assert "bucket_id" in holdings_columns
     assert "bucket_id" in holdings_quality_columns
@@ -190,7 +195,7 @@ def test_apply_migrations_marks_partial_legacy_store_with_canonical_schema(
     assert "supplementary_risk_free_daily" not in table_names
     assert "supplementary_world_bank_country_features" not in table_names
     assert "profile_fields" in table_names
-    assert "profile_report_fields" in table_names
+    assert "profile_annual_report" in table_names
     assert "profile_stylebox" in table_names
     assert "holdings_asset_type" in table_names
     assert "holdings_debtor_quality" in table_names

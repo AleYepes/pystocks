@@ -69,20 +69,18 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "value_num",
         "value_date",
     ),
-    "profile_reports": (
+    "profile_annual_report": (
         "conid",
         "effective_at",
-        "report_id",
-        "report_as_of_date",
-    ),
-    "profile_report_fields": (
-        "conid",
-        "effective_at",
-        "report_id",
         "field_id",
-        "value_text",
         "value_num",
-        "value_date",
+        "is_summary",
+    ),
+    "profile_prospectus_report": (
+        "conid",
+        "effective_at",
+        "field_id",
+        "value_num",
         "is_summary",
     ),
     "profile_themes": (
@@ -243,8 +241,8 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 SNAPSHOT_TABLE_DATE_COLUMNS: dict[str, tuple[str, ...]] = {
     "profile_overview": ("effective_at",),
     "profile_fields": ("effective_at", "value_date"),
-    "profile_reports": ("effective_at", "report_as_of_date"),
-    "profile_report_fields": ("effective_at", "value_date"),
+    "profile_annual_report": ("effective_at",),
+    "profile_prospectus_report": ("effective_at",),
     "profile_themes": ("effective_at",),
     "profile_expense_allocations": ("effective_at",),
     "profile_stylebox": ("effective_at",),
@@ -270,8 +268,11 @@ SNAPSHOT_TABLE_DATE_COLUMNS: dict[str, tuple[str, ...]] = {
 SNAPSHOT_TABLE_NUMERIC_COLUMNS: dict[str, tuple[str, ...]] = {
     "profile_overview": ("jap_fund_warning",),
     "profile_fields": ("value_num",),
-    "profile_reports": (),
-    "profile_report_fields": (
+    "profile_annual_report": (
+        "value_num",
+        "is_summary",
+    ),
+    "profile_prospectus_report": (
         "value_num",
         "is_summary",
     ),
@@ -304,12 +305,13 @@ SNAPSHOT_TABLE_STRING_COLUMNS: dict[str, tuple[str, ...]] = {
         "field_id",
         "value_text",
     ),
-    "profile_reports": ("conid", "report_id"),
-    "profile_report_fields": (
+    "profile_annual_report": (
         "conid",
-        "report_id",
         "field_id",
-        "value_text",
+    ),
+    "profile_prospectus_report": (
+        "conid",
+        "field_id",
     ),
     "profile_themes": ("conid", "theme_id"),
     "profile_expense_allocations": (
@@ -353,13 +355,8 @@ SNAPSHOT_TABLE_STRING_COLUMNS: dict[str, tuple[str, ...]] = {
 SNAPSHOT_TABLE_SORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "profile_overview": ("conid", "effective_at"),
     "profile_fields": ("conid", "effective_at", "field_id"),
-    "profile_reports": ("conid", "effective_at", "report_id"),
-    "profile_report_fields": (
-        "conid",
-        "effective_at",
-        "report_id",
-        "field_id",
-    ),
+    "profile_annual_report": ("conid", "effective_at", "field_id"),
+    "profile_prospectus_report": ("conid", "effective_at", "field_id"),
     "profile_themes": ("conid", "effective_at", "theme_id"),
     "profile_expense_allocations": (
         "conid",
@@ -811,35 +808,33 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
             """,
             name="profile_fields",
         ),
-        "profile_reports": _load_snapshot_frame_from_db(
+        "profile_annual_report": _load_snapshot_frame_from_db(
             conn,
             """
             SELECT
                 conid,
                 effective_at,
-                report_id,
-                report_as_of_date
-            FROM profile_reports
-            ORDER BY conid, effective_at, report_id
-            """,
-            name="profile_reports",
-        ),
-        "profile_report_fields": _load_snapshot_frame_from_db(
-            conn,
-            """
-            SELECT
-                conid,
-                effective_at,
-                report_id,
                 field_id,
-                value_text,
                 value_num,
-                value_date,
                 is_summary
-            FROM profile_report_fields
-            ORDER BY conid, effective_at, report_id, field_id
+            FROM profile_annual_report
+            ORDER BY conid, effective_at, field_id
             """,
-            name="profile_report_fields",
+            name="profile_annual_report",
+        ),
+        "profile_prospectus_report": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                field_id,
+                value_num,
+                is_summary
+            FROM profile_prospectus_report
+            ORDER BY conid, effective_at, field_id
+            """,
+            name="profile_prospectus_report",
         ),
         "profile_themes": _load_snapshot_frame_from_db(
             conn,

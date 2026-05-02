@@ -225,6 +225,8 @@ def test_load_snapshot_feature_tables_reads_supported_snapshot_tables(
         "total_expense_ratio",
         "total_net_assets_month_end",
     ]
+    assert result["profile_annual_report"].empty
+    assert result["profile_prospectus_report"].empty
     assert result["profile_themes"]["theme_id"].tolist() == ["core"]
     assert result["holdings_asset_type"]["bucket_id"].tolist() == [
         "cash",

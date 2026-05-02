@@ -177,22 +177,21 @@ def _build_profile_features(
             net_asset_dates["value_num"] = None
             frames.append(_profile_value_rows(net_asset_dates, id_column="feature_id"))
 
-    reports = snapshot_tables["profile_reports"].copy()
-    if not reports.empty:
-        report_dates = reports.loc[reports["report_as_of_date"].notna()].copy()
-        if not report_dates.empty:
-            report_dates["field_id"] = (
-                "report_" + report_dates["report_id"] + "_as_of_date"
+    for report_type in ("annual", "prospectus"):
+        table_name = f"profile_{report_type}_report"
+        report_data = snapshot_tables[table_name].copy()
+        if not report_data.empty:
+            report_data["feature_id"] = (
+                f"report_{report_type}_" + report_data["field_id"]
             )
-            report_dates["value_date"] = report_dates["report_as_of_date"]
-            frames.append(_profile_value_rows(report_dates, id_column="field_id"))
+            frames.append(_profile_value_rows(report_data, id_column="feature_id"))
 
-    report_fields = snapshot_tables["profile_report_fields"].copy()
-    if not report_fields.empty:
-        report_fields["feature_id"] = (
-            "report_" + report_fields["report_id"] + "_" + report_fields["field_id"]
-        )
-        frames.append(_profile_value_rows(report_fields, id_column="feature_id"))
+            report_dates = (
+                report_data.loc[:, ["conid", "effective_at"]].drop_duplicates().copy()
+            )
+            report_dates["feature_id"] = f"report_{report_type}_as_of_date"
+            report_dates["value_date"] = report_dates["effective_at"]
+            frames.append(_profile_value_rows(report_dates, id_column="feature_id"))
 
     themes = snapshot_tables["profile_themes"].copy()
     if not themes.empty:

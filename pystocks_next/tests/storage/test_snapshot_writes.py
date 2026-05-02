@@ -118,20 +118,20 @@ def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
         ORDER BY field_id
         """
     ).fetchall()
-    reports = temp_store.execute(
+    annual_reports = temp_store.execute(
         """
-        SELECT report_id, report_as_of_date
-        FROM profile_reports
+        SELECT effective_at, field_id, value_num, is_summary
+        FROM profile_annual_report
         WHERE conid = '100'
-        ORDER BY report_id
+        ORDER BY effective_at, field_id
         """
     ).fetchall()
-    report_fields = temp_store.execute(
+    prospectus_reports = temp_store.execute(
         """
-        SELECT report_id, field_id, value_num, is_summary
-        FROM profile_report_fields
+        SELECT effective_at, field_id, value_num, is_summary
+        FROM profile_prospectus_report
         WHERE conid = '100'
-        ORDER BY report_id, field_id
+        ORDER BY effective_at, field_id
         """
     ).fetchall()
     themes = temp_store.execute(
@@ -149,17 +149,17 @@ def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
         """
     ).fetchone()
     by_field = {row["field_id"]: row for row in fields}
-    report_by_field = {row["field_id"]: row for row in report_fields}
+    annual_by_field = {row["field_id"]: row for row in annual_reports}
 
     assert overview["symbol"] == "SPY"
     assert overview["jap_fund_warning"] == 0
     assert by_field["total_net_assets_month_end"]["value_text"] == "$708.92B"
     assert by_field["total_net_assets_month_end"]["value_date"] == "2026-01-30"
-    assert reports[0]["report_id"] == "annual_report"
-    assert reports[0]["report_as_of_date"] == "2025-09-30"
-    assert report_by_field["total_expense"]["value_num"] == pytest.approx(0.000893)
-    assert report_by_field["total_expense"]["is_summary"] == 1
-    assert report_by_field["management_fees"]["value_num"] == pytest.approx(0.000469)
+    assert annual_reports[0]["effective_at"] == "2025-09-30"
+    assert annual_by_field["total_expense"]["value_num"] == pytest.approx(0.000893)
+    assert annual_by_field["total_expense"]["is_summary"] == 1
+    assert annual_by_field["management_fees"]["value_num"] == pytest.approx(0.000469)
+    assert len(prospectus_reports) == 0
     assert [row["theme_id"] for row in themes] == ["index_tracking"]
     assert stylebox["stylebox_id"] == "growth_multi"
     assert stylebox["x_label"] == "Growth"
