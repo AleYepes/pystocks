@@ -210,7 +210,7 @@ def test_run_persists_first_slice_end_to_end(
     assert result.latest_telemetry_path is not None
     assert price_history["conid"].tolist().count("100") == 2
     assert dividend_events["conid"].tolist() == ["100", "100"]
-    assert not snapshot_tables["profile_and_fees"].empty
+    assert not snapshot_tables["profile_fields"].empty
     assert not snapshot_tables["holdings_asset_type"].empty
     assert not snapshot_tables["ratios_key_ratios"].empty
 

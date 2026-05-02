@@ -68,6 +68,14 @@ def _parse_scaled_number(value: object) -> float | None:
     return -parsed if negative else parsed
 
 
+def _is_missing_scalar(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, pd.Series | pd.DataFrame):
+        return False
+    return bool(pd.isna(value))
+
+
 def _factor_values(frame: pd.DataFrame) -> pd.Series:
     out = pd.Series(index=frame.index, dtype="object")
     if "value_num" in frame.columns:
@@ -97,6 +105,185 @@ def _factor_values(frame: pd.DataFrame) -> pd.Series:
         bool_mask = out.isna() & bool_values.notna()
         out.loc[bool_mask] = bool_values.loc[bool_mask]
     return out
+
+
+def _profile_value_rows(
+    frame: pd.DataFrame,
+    *,
+    id_column: str,
+    prefix: str = "profile",
+) -> pd.DataFrame:
+    if frame.empty:
+        return _empty_frame(("conid", "effective_at"))
+    work = frame.copy()
+    work["value"] = _factor_values(work)
+    return _pivot_keyed_values(
+        _select_frame(work, ("conid", "effective_at", id_column, "value")),
+        key_column=id_column,
+        value_column="value",
+        prefix=prefix,
+    )
+
+
+def _build_profile_features(
+    snapshot_tables: dict[str, pd.DataFrame],
+) -> list[pd.DataFrame]:
+    frames: list[pd.DataFrame] = []
+
+    overview = snapshot_tables["profile_overview"].copy()
+    if not overview.empty:
+        overview_rows: list[dict[str, object]] = []
+        for _, row in overview.iterrows():
+            for field_id in ("symbol", "objective", "jap_fund_warning"):
+                value = row.get(field_id)
+                if _is_missing_scalar(value):
+                    continue
+                overview_rows.append(
+                    {
+                        "conid": row["conid"],
+                        "effective_at": row["effective_at"],
+                        "field_id": field_id,
+                        "value": value,
+                    }
+                )
+        if overview_rows:
+            frames.append(
+                _pivot_keyed_values(
+                    pd.DataFrame(overview_rows),
+                    key_column="field_id",
+                    value_column="value",
+                    prefix="profile",
+                )
+            )
+
+    profile_fields = snapshot_tables["profile_fields"].copy()
+    if not profile_fields.empty:
+        field_rows = profile_fields.copy()
+        field_rows["feature_id"] = field_rows["field_id"].replace(
+            {
+                "launch_opening_price": "inception_date",
+                "total_net_assets_month_end": "total_net_assets_value",
+            }
+        )
+        frames.append(_profile_value_rows(field_rows, id_column="feature_id"))
+
+        net_asset_dates = field_rows.loc[
+            field_rows["field_id"].eq("total_net_assets_month_end")
+            & field_rows["value_date"].notna()
+        ].copy()
+        if not net_asset_dates.empty:
+            net_asset_dates["feature_id"] = "total_net_assets_date"
+            net_asset_dates["value_text"] = None
+            net_asset_dates["value_num"] = None
+            frames.append(_profile_value_rows(net_asset_dates, id_column="feature_id"))
+
+    reports = snapshot_tables["profile_reports"].copy()
+    if not reports.empty:
+        report_dates = reports.loc[reports["report_as_of_date"].notna()].copy()
+        if not report_dates.empty:
+            report_dates["field_id"] = (
+                "report_" + report_dates["report_id"] + "_as_of_date"
+            )
+            report_dates["value_date"] = report_dates["report_as_of_date"]
+            frames.append(_profile_value_rows(report_dates, id_column="field_id"))
+
+    report_fields = snapshot_tables["profile_report_fields"].copy()
+    if not report_fields.empty:
+        report_fields["feature_id"] = (
+            "report_" + report_fields["report_id"] + "_" + report_fields["field_id"]
+        )
+        frames.append(_profile_value_rows(report_fields, id_column="feature_id"))
+
+    themes = snapshot_tables["profile_themes"].copy()
+    if not themes.empty:
+        theme_flags = themes.loc[:, ["conid", "effective_at", "theme_id"]].copy()
+        theme_flags["value_num"] = 1.0
+        frames.append(
+            _pivot_keyed_values(
+                theme_flags,
+                key_column="theme_id",
+                value_column="value_num",
+                prefix="profile_theme",
+            )
+        )
+        theme_names = pd.DataFrame(
+            themes.sort_values(["conid", "effective_at", "source_order"])
+            .groupby(["conid", "effective_at"], as_index=False)
+            .agg(theme_name=("theme_name", lambda values: " | ".join(values)))
+        )
+        theme_names["field_id"] = "theme_name"
+        theme_names = theme_names.rename(columns={"theme_name": "value"})
+        frames.append(
+            _pivot_keyed_values(
+                theme_names,
+                key_column="field_id",
+                value_column="value",
+                prefix="profile",
+            )
+        )
+
+    expenses = snapshot_tables["profile_expense_allocations"].copy()
+    if not expenses.empty:
+        frames.append(
+            _pivot_keyed_values(
+                _select_frame(
+                    expenses,
+                    ("conid", "effective_at", "expense_id", "ratio"),
+                ),
+                key_column="expense_id",
+                value_column="ratio",
+                prefix="profile_expense",
+            )
+        )
+
+    stylebox = snapshot_tables["profile_stylebox"].copy()
+    if not stylebox.empty:
+        style_flags = stylebox.loc[:, ["conid", "effective_at", "stylebox_id"]].copy()
+        style_flags["value_num"] = 1.0
+        frames.append(
+            _pivot_keyed_values(
+                style_flags,
+                key_column="stylebox_id",
+                value_column="value_num",
+                prefix="profile_stylebox",
+            )
+        )
+        style_rows: list[dict[str, object]] = []
+        for _, row in stylebox.iterrows():
+            for field_id, source_column in (
+                ("morningstar_stylebox", "stylebox_id"),
+                ("morningstar_stylebox_x", "x_label"),
+                ("morningstar_stylebox_y", "y_label"),
+                ("morningstar_stylebox_x_index", "x_index"),
+                ("morningstar_stylebox_y_index", "y_index"),
+            ):
+                value = row.get(source_column)
+                if _is_missing_scalar(value):
+                    continue
+                style_rows.append(
+                    {
+                        "conid": row["conid"],
+                        "effective_at": row["effective_at"],
+                        "field_id": field_id,
+                        "value": value,
+                    }
+                )
+        if style_rows:
+            frames.append(
+                _pivot_keyed_values(
+                    pd.DataFrame(style_rows),
+                    key_column="field_id",
+                    value_column="value",
+                    prefix="profile",
+                )
+            )
+
+    for frame in frames:
+        if "profile__total_net_assets_value" in frame.columns:
+            frame["profile__total_net_assets_num"] = frame[
+                "profile__total_net_assets_value"
+            ].map(_parse_scaled_number)
+    return frames
 
 
 def _pivot_keyed_values(
@@ -393,20 +580,7 @@ def build_snapshot_input_bundle(
         for table_name, frame in snapshot_tables.items()
     ]
 
-    profile = snapshot_tables["profile_and_fees"].copy()
-    if not profile.empty:
-        profile["value"] = _factor_values(profile)
-        profile_features = _pivot_keyed_values(
-            _select_frame(profile, ("conid", "effective_at", "field_id", "value")),
-            key_column="field_id",
-            value_column="value",
-            prefix="profile",
-        )
-        if "profile__total_net_assets_value" in profile_features.columns:
-            profile_features["profile__total_net_assets_num"] = profile_features[
-                "profile__total_net_assets_value"
-            ].map(_parse_scaled_number)
-        frames.append(profile_features)
+    frames.extend(_build_profile_features(snapshot_tables))
 
     holdings_specs = [
         ("holdings_asset_type", "bucket_id", "value_num", "holding_asset"),

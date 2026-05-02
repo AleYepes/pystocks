@@ -57,14 +57,14 @@ def test_snapshot_feature_tables_read_normalizes_known_tables(
 
     assert set(result) == set(SNAPSHOT_TABLE_COLUMNS)
     assert (
-        tuple(result["profile_and_fees"].columns)
-        == SNAPSHOT_TABLE_COLUMNS["profile_and_fees"]
+        tuple(result["profile_fields"].columns)
+        == SNAPSHOT_TABLE_COLUMNS["profile_fields"]
     )
     assert pd.api.types.is_datetime64_any_dtype(
-        result["profile_and_fees"]["effective_at"]
+        result["profile_fields"]["effective_at"]
     )
     assert pd.api.types.is_float_dtype(result["holdings_asset_type"]["value_num"])
-    assert result["profile_and_fees"]["field_id"].tolist() == ["asset_type"]
+    assert result["profile_fields"]["field_id"].tolist() == ["asset_type"]
     assert result["holdings_top10"].empty
 
 
@@ -200,9 +200,10 @@ def test_load_snapshot_feature_tables_reads_supported_snapshot_tables(
 
     result = load_snapshot_feature_tables(temp_store).tables
 
-    assert result["profile_and_fees"]["conid"].nunique() == 1
-    assert result["profile_and_fees"]["conid"].iloc[0] == "100"
-    assert result["profile_and_fees"]["field_id"].tolist() == [
+    assert result["profile_fields"]["conid"].nunique() == 1
+    assert result["profile_fields"]["conid"].iloc[0] == "100"
+    assert bool(result["profile_overview"]["objective"].notna().all())
+    assert result["profile_fields"]["field_id"].tolist() == [
         "asset_type",
         "classification",
         "distribution_details",
@@ -213,21 +214,18 @@ def test_load_snapshot_feature_tables_reads_supported_snapshot_tables(
         "fund_market_cap_focus",
         "geographical_focus",
         "inception_date",
-        "jap_fund_warning",
         "management_approach",
         "management_expenses",
         "manager_tenure",
-        "objective",
         "objective_type",
         "portfolio_manager",
         "redemption_charge_actual",
         "redemption_charge_max",
         "scheme",
-        "theme_name",
         "total_expense_ratio",
-        "total_net_assets_date",
-        "total_net_assets_value",
+        "total_net_assets_month_end",
     ]
+    assert result["profile_themes"]["theme_id"].tolist() == ["core"]
     assert result["holdings_asset_type"]["bucket_id"].tolist() == [
         "cash",
         "equity",

@@ -7,6 +7,7 @@ import re
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
@@ -779,6 +780,273 @@ def _extract_profile_and_fees_factor_rows(
     return rows
 
 
+def _typed_profile_value(
+    value: object,
+    *,
+    value_type: str | None = None,
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "value_text": str(value).strip() if value is not None else None,
+        "value_num": None,
+        "value_date": None,
+        "value_bool": _to_int_bool(value),
+    }
+    if value_type == "date":
+        row["value_date"] = _profile_date_value(value)
+    elif value_type == "percent":
+        row["value_num"] = _parse_percent_fraction(value)
+    else:
+        row["value_date"] = _profile_date_value(value)
+        row["value_num"] = _parse_number(value, percent_as_fraction=True)
+    return row
+
+
+def _profile_date_value(value: object) -> str | None:
+    if isinstance(value, date | datetime | int | float | str | Mapping):
+        return to_iso_date(value)
+    return None
+
+
+def _source_ordered_id(base_id: str, seen: dict[str, int]) -> str:
+    count = seen.get(base_id, 0) + 1
+    seen[base_id] = count
+    return base_id if count == 1 else f"{base_id}_{count}"
+
+
+def _extract_profile_overview_row(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "conid": conid,
+        "effective_at": effective_at,
+        "symbol": None,
+        "objective": None,
+        "jap_fund_warning": None,
+    }
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return row
+    row["symbol"] = str(payload.get("symbol")) if payload.get("symbol") else None
+    row["objective"] = (
+        str(payload.get("objective")) if payload.get("objective") is not None else None
+    )
+    row["jap_fund_warning"] = _to_int_bool(payload.get("jap_fund_warning"))
+    return row
+
+
+def _extract_profile_field_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+    values = payload.get("fund_and_profile", [])
+    if not isinstance(values, list):
+        return []
+
+    rows: list[dict[str, object]] = []
+    seen: dict[str, int] = {}
+    for source_order, item in enumerate(values):
+        if not isinstance(item, dict):
+            continue
+        field_name = item.get("name")
+        name_tag = item.get("name_tag")
+        base_id = _sanitize_segment(name_tag or field_name)
+        field_id = _source_ordered_id(base_id, seen)
+        raw_value = item.get("value")
+        mapped = _PROFILE_FIELD_MAP.get(str(field_name))
+        value_type = mapped[1] if mapped is not None else None
+        typed = _typed_profile_value(raw_value, value_type=value_type)
+
+        if str(field_name) == "Total Net Assets (Month End)":
+            clean_value, date_value = _split_total_net_assets_value(raw_value)
+            typed["value_text"] = clean_value
+            typed["value_date"] = date_value
+            typed["value_num"] = _parse_number(clean_value)
+        elif str(field_name) == "Launch Opening Price":
+            typed["value_date"] = _profile_date_value(raw_value)
+
+        rows.append(
+            {
+                "conid": conid,
+                "effective_at": effective_at,
+                "field_id": field_id,
+                "field_name": str(field_name) if field_name is not None else None,
+                "name_tag": str(name_tag) if name_tag is not None else None,
+                "value_tag": str(item.get("value_tag"))
+                if item.get("value_tag") is not None
+                else None,
+                "source_order": source_order,
+                **typed,
+            }
+        )
+    return rows
+
+
+def _extract_profile_report_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return [], []
+    reports = payload.get("reports", [])
+    if not isinstance(reports, list):
+        return [], []
+
+    report_rows: list[dict[str, object]] = []
+    field_rows: list[dict[str, object]] = []
+    seen_reports: dict[str, int] = {}
+    for report_order, report in enumerate(reports):
+        if not isinstance(report, dict):
+            continue
+        report_name = report.get("name")
+        base_report_id = _sanitize_segment(report_name or f"report_{report_order + 1}")
+        report_id = _source_ordered_id(base_report_id, seen_reports)
+        report_as_of_date = to_iso_date(
+            report.get("as_of_date") or report.get("asOfDate")
+        )
+        report_rows.append(
+            {
+                "conid": conid,
+                "effective_at": effective_at,
+                "report_id": report_id,
+                "report_name": str(report_name) if report_name is not None else None,
+                "report_as_of_date": report_as_of_date,
+                "source_order": report_order,
+            }
+        )
+
+        fields = report.get("fields", [])
+        if not isinstance(fields, list):
+            continue
+        seen_fields: dict[str, int] = {}
+        for field_order, field in enumerate(fields):
+            if not isinstance(field, dict):
+                continue
+            field_name = field.get("name")
+            if field_name is None:
+                continue
+            field_id = _source_ordered_id(_sanitize_segment(field_name), seen_fields)
+            typed = _typed_profile_value(field.get("value"))
+            field_rows.append(
+                {
+                    "conid": conid,
+                    "effective_at": effective_at,
+                    "report_id": report_id,
+                    "field_id": field_id,
+                    "field_name": str(field_name),
+                    "is_summary": _to_int_bool(field.get("is_summary")),
+                    "source_order": field_order,
+                    **typed,
+                }
+            )
+    return report_rows, field_rows
+
+
+def _extract_profile_theme_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+    themes = payload.get("themes", [])
+    if not isinstance(themes, list):
+        return []
+
+    rows: list[dict[str, object]] = []
+    seen: dict[str, int] = {}
+    for source_order, item in enumerate(themes):
+        if isinstance(item, str):
+            theme_name = item.strip()
+        elif isinstance(item, dict):
+            raw_name = item.get("theme_name") or item.get("name") or item.get("title")
+            theme_name = str(raw_name).strip() if raw_name is not None else ""
+        else:
+            theme_name = ""
+        if not theme_name:
+            continue
+        theme_id = _source_ordered_id(_sanitize_segment(theme_name), seen)
+        rows.append(
+            {
+                "conid": conid,
+                "effective_at": effective_at,
+                "theme_id": theme_id,
+                "theme_name": theme_name,
+                "source_order": source_order,
+            }
+        )
+    return rows
+
+
+def _extract_profile_expense_allocation_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+    values = payload.get("expenses_allocation", [])
+    if not isinstance(values, list):
+        return []
+
+    rows: list[dict[str, object]] = []
+    seen: dict[str, int] = {}
+    for source_order, item in enumerate(values):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if name is None:
+            continue
+        expense_id = _source_ordered_id(_sanitize_segment(name), seen)
+        ratio = _parse_float(item.get("ratio"))
+        if ratio is None:
+            ratio = _to_fraction_weight(item.get("value"))
+        rows.append(
+            {
+                "conid": conid,
+                "effective_at": effective_at,
+                "expense_id": expense_id,
+                "expense_name": str(name),
+                "value_text": str(item.get("value")) if item.get("value") else None,
+                "ratio": ratio,
+                "source_order": source_order,
+            }
+        )
+    return rows
+
+
+def _extract_profile_stylebox_rows(
+    conid: str,
+    effective_at: str,
+    payload: JsonValue | bytes,
+) -> list[dict[str, object]]:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return []
+    fields = _extract_profile_stylebox_fields(payload)
+    stylebox_id = fields.get("morningstar_stylebox")
+    if stylebox_id is None:
+        return []
+    return [
+        {
+            "conid": conid,
+            "effective_at": effective_at,
+            "stylebox_id": str(stylebox_id),
+            "x_index": _parse_int(fields.get("morningstar_stylebox_x_index")),
+            "y_index": _parse_int(fields.get("morningstar_stylebox_y_index")),
+            "x_label": fields.get("morningstar_stylebox_x"),
+            "y_label": fields.get("morningstar_stylebox_y"),
+            "x_tag": str(stylebox_id).split("_", 1)[0],
+            "y_tag": str(stylebox_id).split("_", 1)[1]
+            if "_" in str(stylebox_id)
+            else None,
+        }
+    ]
+
+
 _HOLDINGS_ASSET_TYPE_MAP = {
     "equity": "equity",
     "cash": "cash",
@@ -1494,53 +1762,216 @@ def write_profile_and_fees_snapshot(
         capture_batch_id=batch_id,
     )
 
-    factor_rows = _extract_profile_and_fees_factor_rows(conid, effective_at, payload)
+    overview_row = _extract_profile_overview_row(conid, effective_at, payload)
+    field_rows = _extract_profile_field_rows(conid, effective_at, payload)
+    report_rows, report_field_rows = _extract_profile_report_rows(
+        conid, effective_at, payload
+    )
+    theme_rows = _extract_profile_theme_rows(conid, effective_at, payload)
+    expense_rows = _extract_profile_expense_allocation_rows(
+        conid, effective_at, payload
+    )
+    stylebox_rows = _extract_profile_stylebox_rows(conid, effective_at, payload)
     conn.execute(
         """
-        INSERT INTO profile_and_fees_snapshots (
+        INSERT INTO profile_snapshots (
             conid,
             effective_at,
             observed_at,
             payload_hash,
-            capture_batch_id
-        ) VALUES (?, ?, ?, ?, ?)
+            capture_batch_id,
+            source_as_of_date
+        ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(conid, effective_at) DO UPDATE SET
             observed_at = excluded.observed_at,
             payload_hash = excluded.payload_hash,
-            capture_batch_id = excluded.capture_batch_id
+            capture_batch_id = excluded.capture_batch_id,
+            source_as_of_date = excluded.source_as_of_date
         """,
-        (conid, effective_at, observed_at, capture.payload_hash, batch_id),
+        (conid, effective_at, observed_at, capture.payload_hash, batch_id, None),
+    )
+    _delete_snapshot_child_rows(
+        conn,
+        tables=(
+            "profile_overview",
+            "profile_fields",
+            "profile_reports",
+            "profile_report_fields",
+            "profile_themes",
+            "profile_expense_allocations",
+            "profile_stylebox",
+        ),
+        conid=conid,
+        effective_at=effective_at,
     )
     conn.execute(
-        "DELETE FROM profile_and_fees WHERE conid = ? AND effective_at = ?",
-        (conid, effective_at),
+        """
+        INSERT INTO profile_overview (
+            conid,
+            effective_at,
+            symbol,
+            objective,
+            jap_fund_warning
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            overview_row["conid"],
+            overview_row["effective_at"],
+            overview_row["symbol"],
+            overview_row["objective"],
+            overview_row["jap_fund_warning"],
+        ),
     )
-    for row in factor_rows:
+    for row in field_rows:
         conn.execute(
             """
-            INSERT INTO profile_and_fees (
+            INSERT INTO profile_fields (
                 conid,
                 effective_at,
                 field_id,
+                field_name,
+                name_tag,
+                value_tag,
                 value_text,
                 value_num,
                 value_date,
-                value_bool
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(conid, effective_at, field_id) DO UPDATE SET
-                value_text = excluded.value_text,
-                value_num = excluded.value_num,
-                value_date = excluded.value_date,
-                value_bool = excluded.value_bool
+                value_bool,
+                source_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["conid"],
                 row["effective_at"],
-                row["factor_id"],
+                row["field_id"],
+                row["field_name"],
+                row["name_tag"],
+                row["value_tag"],
                 row["value_text"],
                 row["value_num"],
                 row["value_date"],
                 row["value_bool"],
+                row["source_order"],
+            ),
+        )
+    for row in report_rows:
+        conn.execute(
+            """
+            INSERT INTO profile_reports (
+                conid,
+                effective_at,
+                report_id,
+                report_name,
+                report_as_of_date,
+                source_order
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["report_id"],
+                row["report_name"],
+                row["report_as_of_date"],
+                row["source_order"],
+            ),
+        )
+    for row in report_field_rows:
+        conn.execute(
+            """
+            INSERT INTO profile_report_fields (
+                conid,
+                effective_at,
+                report_id,
+                field_id,
+                field_name,
+                value_text,
+                value_num,
+                value_date,
+                value_bool,
+                is_summary,
+                source_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["report_id"],
+                row["field_id"],
+                row["field_name"],
+                row["value_text"],
+                row["value_num"],
+                row["value_date"],
+                row["value_bool"],
+                row["is_summary"],
+                row["source_order"],
+            ),
+        )
+    for row in theme_rows:
+        conn.execute(
+            """
+            INSERT INTO profile_themes (
+                conid,
+                effective_at,
+                theme_id,
+                theme_name,
+                source_order
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["theme_id"],
+                row["theme_name"],
+                row["source_order"],
+            ),
+        )
+    for row in expense_rows:
+        conn.execute(
+            """
+            INSERT INTO profile_expense_allocations (
+                conid,
+                effective_at,
+                expense_id,
+                expense_name,
+                value_text,
+                ratio,
+                source_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["expense_id"],
+                row["expense_name"],
+                row["value_text"],
+                row["ratio"],
+                row["source_order"],
+            ),
+        )
+    for row in stylebox_rows:
+        conn.execute(
+            """
+            INSERT INTO profile_stylebox (
+                conid,
+                effective_at,
+                stylebox_id,
+                x_index,
+                y_index,
+                x_label,
+                y_label,
+                x_tag,
+                y_tag
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["conid"],
+                row["effective_at"],
+                row["stylebox_id"],
+                row["x_index"],
+                row["y_index"],
+                row["x_label"],
+                row["y_label"],
+                row["x_tag"],
+                row["y_tag"],
             ),
         )
     return SnapshotWriteResult(

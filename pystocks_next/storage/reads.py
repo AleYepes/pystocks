@@ -54,14 +54,73 @@ DIVIDEND_EVENTS_COLUMNS: tuple[str, ...] = (
 )
 
 SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "profile_and_fees": (
+    "profile_overview": (
+        "conid",
+        "effective_at",
+        "symbol",
+        "objective",
+        "jap_fund_warning",
+    ),
+    "profile_fields": (
         "conid",
         "effective_at",
         "field_id",
+        "field_name",
+        "name_tag",
+        "value_tag",
         "value_text",
         "value_num",
         "value_date",
         "value_bool",
+        "source_order",
+    ),
+    "profile_reports": (
+        "conid",
+        "effective_at",
+        "report_id",
+        "report_name",
+        "report_as_of_date",
+        "source_order",
+    ),
+    "profile_report_fields": (
+        "conid",
+        "effective_at",
+        "report_id",
+        "field_id",
+        "field_name",
+        "value_text",
+        "value_num",
+        "value_date",
+        "value_bool",
+        "is_summary",
+        "source_order",
+    ),
+    "profile_themes": (
+        "conid",
+        "effective_at",
+        "theme_id",
+        "theme_name",
+        "source_order",
+    ),
+    "profile_expense_allocations": (
+        "conid",
+        "effective_at",
+        "expense_id",
+        "expense_name",
+        "value_text",
+        "ratio",
+        "source_order",
+    ),
+    "profile_stylebox": (
+        "conid",
+        "effective_at",
+        "stylebox_id",
+        "x_index",
+        "y_index",
+        "x_label",
+        "y_label",
+        "x_tag",
+        "y_tag",
     ),
     "holdings_asset_type": (
         "conid",
@@ -196,7 +255,13 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 SNAPSHOT_TABLE_DATE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "profile_and_fees": ("effective_at", "value_date"),
+    "profile_overview": ("effective_at",),
+    "profile_fields": ("effective_at", "value_date"),
+    "profile_reports": ("effective_at", "report_as_of_date"),
+    "profile_report_fields": ("effective_at", "value_date"),
+    "profile_themes": ("effective_at",),
+    "profile_expense_allocations": ("effective_at",),
+    "profile_stylebox": ("effective_at",),
     "holdings_asset_type": ("effective_at",),
     "holdings_debtor_quality": ("effective_at",),
     "holdings_maturity": ("effective_at",),
@@ -217,7 +282,18 @@ SNAPSHOT_TABLE_DATE_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 SNAPSHOT_TABLE_NUMERIC_COLUMNS: dict[str, tuple[str, ...]] = {
-    "profile_and_fees": ("value_num", "value_bool"),
+    "profile_overview": ("jap_fund_warning",),
+    "profile_fields": ("value_num", "value_bool", "source_order"),
+    "profile_reports": ("source_order",),
+    "profile_report_fields": (
+        "value_num",
+        "value_bool",
+        "is_summary",
+        "source_order",
+    ),
+    "profile_themes": ("source_order",),
+    "profile_expense_allocations": ("ratio", "source_order"),
+    "profile_stylebox": ("x_index", "y_index"),
     "holdings_asset_type": ("value_num", "vs_peers"),
     "holdings_debtor_quality": ("value_num", "vs_peers"),
     "holdings_maturity": ("value_num", "vs_peers"),
@@ -238,7 +314,38 @@ SNAPSHOT_TABLE_NUMERIC_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 SNAPSHOT_TABLE_STRING_COLUMNS: dict[str, tuple[str, ...]] = {
-    "profile_and_fees": ("conid", "field_id", "value_text"),
+    "profile_overview": ("conid", "symbol", "objective"),
+    "profile_fields": (
+        "conid",
+        "field_id",
+        "field_name",
+        "name_tag",
+        "value_tag",
+        "value_text",
+    ),
+    "profile_reports": ("conid", "report_id", "report_name"),
+    "profile_report_fields": (
+        "conid",
+        "report_id",
+        "field_id",
+        "field_name",
+        "value_text",
+    ),
+    "profile_themes": ("conid", "theme_id", "theme_name"),
+    "profile_expense_allocations": (
+        "conid",
+        "expense_id",
+        "expense_name",
+        "value_text",
+    ),
+    "profile_stylebox": (
+        "conid",
+        "stylebox_id",
+        "x_label",
+        "y_label",
+        "x_tag",
+        "y_tag",
+    ),
     "holdings_asset_type": ("conid", "bucket_id"),
     "holdings_debtor_quality": ("conid", "bucket_id"),
     "holdings_maturity": ("conid", "bucket_id"),
@@ -265,7 +372,24 @@ SNAPSHOT_TABLE_STRING_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 SNAPSHOT_TABLE_SORT_COLUMNS: dict[str, tuple[str, ...]] = {
-    "profile_and_fees": ("conid", "effective_at", "field_id"),
+    "profile_overview": ("conid", "effective_at"),
+    "profile_fields": ("conid", "effective_at", "source_order", "field_id"),
+    "profile_reports": ("conid", "effective_at", "source_order", "report_id"),
+    "profile_report_fields": (
+        "conid",
+        "effective_at",
+        "report_id",
+        "source_order",
+        "field_id",
+    ),
+    "profile_themes": ("conid", "effective_at", "source_order", "theme_id"),
+    "profile_expense_allocations": (
+        "conid",
+        "effective_at",
+        "source_order",
+        "expense_id",
+    ),
+    "profile_stylebox": ("conid", "effective_at", "stylebox_id"),
     "holdings_asset_type": ("conid", "effective_at", "bucket_id"),
     "holdings_debtor_quality": ("conid", "effective_at", "bucket_id"),
     "holdings_maturity": ("conid", "effective_at", "bucket_id"),
@@ -681,21 +805,122 @@ def _load_snapshot_frame_from_db(
 
 def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTablesRead:
     tables: dict[str, pd.DataFrame] = {
-        "profile_and_fees": _load_snapshot_frame_from_db(
+        "profile_overview": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                symbol,
+                objective,
+                jap_fund_warning
+            FROM profile_overview
+            ORDER BY conid, effective_at
+            """,
+            name="profile_overview",
+        ),
+        "profile_fields": _load_snapshot_frame_from_db(
             conn,
             """
             SELECT
                 conid,
                 effective_at,
                 field_id,
+                field_name,
+                name_tag,
+                value_tag,
                 value_text,
                 value_num,
                 value_date,
-                value_bool
-            FROM profile_and_fees
-            ORDER BY conid, effective_at, field_id
+                value_bool,
+                source_order
+            FROM profile_fields
+            ORDER BY conid, effective_at, source_order, field_id
             """,
-            name="profile_and_fees",
+            name="profile_fields",
+        ),
+        "profile_reports": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                report_id,
+                report_name,
+                report_as_of_date,
+                source_order
+            FROM profile_reports
+            ORDER BY conid, effective_at, source_order, report_id
+            """,
+            name="profile_reports",
+        ),
+        "profile_report_fields": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                report_id,
+                field_id,
+                field_name,
+                value_text,
+                value_num,
+                value_date,
+                value_bool,
+                is_summary,
+                source_order
+            FROM profile_report_fields
+            ORDER BY conid, effective_at, report_id, source_order, field_id
+            """,
+            name="profile_report_fields",
+        ),
+        "profile_themes": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                theme_id,
+                theme_name,
+                source_order
+            FROM profile_themes
+            ORDER BY conid, effective_at, source_order, theme_id
+            """,
+            name="profile_themes",
+        ),
+        "profile_expense_allocations": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                expense_id,
+                expense_name,
+                value_text,
+                ratio,
+                source_order
+            FROM profile_expense_allocations
+            ORDER BY conid, effective_at, source_order, expense_id
+            """,
+            name="profile_expense_allocations",
+        ),
+        "profile_stylebox": _load_snapshot_frame_from_db(
+            conn,
+            """
+            SELECT
+                conid,
+                effective_at,
+                stylebox_id,
+                x_index,
+                y_index,
+                x_label,
+                y_label,
+                x_tag,
+                y_tag
+            FROM profile_stylebox
+            ORDER BY conid, effective_at, stylebox_id
+            """,
+            name="profile_stylebox",
         ),
         "holdings_asset_type": _load_snapshot_frame_from_db(
             conn,

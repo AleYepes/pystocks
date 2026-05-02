@@ -13,7 +13,7 @@ from pystocks_next.storage.writes import (
 from pystocks_next.universe.products import UniverseInstrument, upsert_instruments
 
 
-def test_write_profile_and_fees_snapshot_persists_tall_factor_rows(
+def test_write_profile_and_fees_snapshot_persists_source_shaped_profile_rows(
     temp_store,
     sample_profile_and_fees_payload: dict[str, object],
 ) -> None:
@@ -30,27 +30,34 @@ def test_write_profile_and_fees_snapshot_persists_tall_factor_rows(
     snapshot_row = temp_store.execute(
         """
         SELECT effective_at, capture_batch_id
-        FROM profile_and_fees_snapshots
+        FROM profile_snapshots
         WHERE conid = '100'
         """
     ).fetchone()
-    factor_rows = temp_store.execute(
+    overview_row = temp_store.execute(
         """
-        SELECT field_id, value_text, value_num, value_date, value_bool
-        FROM profile_and_fees
+        SELECT objective, jap_fund_warning
+        FROM profile_overview
+        WHERE conid = '100'
+        """
+    ).fetchone()
+    field_rows = temp_store.execute(
+        """
+        SELECT field_id, field_name, value_text, value_num, value_date, value_bool
+        FROM profile_fields
         WHERE conid = '100'
         ORDER BY field_id
         """
     ).fetchall()
-    by_field = {row["field_id"]: row for row in factor_rows}
+    by_field = {row["field_id"]: row for row in field_rows}
 
     assert result.effective_at == "2026-01-05"
     assert snapshot_row["capture_batch_id"] == "batch-profile-001"
+    assert overview_row["jap_fund_warning"] == 0
     assert by_field["asset_type"]["value_text"] == "Equity"
     assert by_field["management_expenses"]["value_num"] == pytest.approx(0.0012)
-    assert by_field["total_net_assets_value"]["value_text"] == "$1.2B"
-    assert by_field["total_net_assets_date"]["value_date"] == "2026-01-02"
-    assert by_field["jap_fund_warning"]["value_bool"] == 0
+    assert by_field["total_net_assets_month_end"]["value_text"] == "$1.2B"
+    assert by_field["total_net_assets_month_end"]["value_date"] == "2026-01-02"
 
 
 def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
@@ -96,29 +103,71 @@ def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
         observed_at="2026-01-05T10:00:00+00:00",
     )
 
-    rows = temp_store.execute(
+    overview = temp_store.execute(
+        """
+        SELECT symbol, objective, jap_fund_warning
+        FROM profile_overview
+        WHERE conid = '100'
+        """
+    ).fetchone()
+    fields = temp_store.execute(
         """
         SELECT field_id, value_text, value_num, value_date, value_bool
-        FROM profile_and_fees
+        FROM profile_fields
         WHERE conid = '100'
         ORDER BY field_id
         """
     ).fetchall()
-    by_field = {row["field_id"]: row for row in rows}
+    reports = temp_store.execute(
+        """
+        SELECT report_id, report_as_of_date
+        FROM profile_reports
+        WHERE conid = '100'
+        ORDER BY source_order
+        """
+    ).fetchall()
+    report_fields = temp_store.execute(
+        """
+        SELECT report_id, field_id, value_num, is_summary
+        FROM profile_report_fields
+        WHERE conid = '100'
+        ORDER BY report_id, field_id
+        """
+    ).fetchall()
+    themes = temp_store.execute(
+        """
+        SELECT theme_id, theme_name
+        FROM profile_themes
+        WHERE conid = '100'
+        """
+    ).fetchall()
+    stylebox = temp_store.execute(
+        """
+        SELECT stylebox_id, x_label, y_label, x_index, y_index
+        FROM profile_stylebox
+        WHERE conid = '100'
+        """
+    ).fetchone()
+    by_field = {row["field_id"]: row for row in fields}
+    report_by_field = {row["field_id"]: row for row in report_fields}
 
-    assert by_field["theme_name"]["value_text"] == "Index Tracking"
-    assert by_field["morningstar_stylebox"]["value_text"] == "growth_multi"
-    assert by_field["morningstar_stylebox_x"]["value_text"] == "Growth"
-    assert by_field["morningstar_stylebox_y"]["value_text"] == "Multi"
-    assert by_field["morningstar_stylebox_x_index"]["value_num"] == pytest.approx(2.0)
-    assert by_field["morningstar_stylebox_y_index"]["value_num"] == pytest.approx(1.0)
-    assert by_field["report_annual_report_as_of_date"]["value_date"] == "2025-09-30"
-    assert by_field["report_annual_report_total_expense"]["value_num"] == pytest.approx(
-        0.000893
-    )
-    assert by_field["report_annual_report_management_fees"][
-        "value_num"
-    ] == pytest.approx(0.000469)
+    assert overview["symbol"] == "SPY"
+    assert overview["jap_fund_warning"] == 0
+    assert by_field["total_net_assets_month_end"]["value_text"] == "$708.92B"
+    assert by_field["total_net_assets_month_end"]["value_date"] == "2026-01-30"
+    assert reports[0]["report_id"] == "annual_report"
+    assert reports[0]["report_as_of_date"] == "2025-09-30"
+    assert report_by_field["total_expense"]["value_num"] == pytest.approx(0.000893)
+    assert report_by_field["total_expense"]["is_summary"] == 1
+    assert report_by_field["management_fees"]["value_num"] == pytest.approx(0.000469)
+    assert [(row["theme_id"], row["theme_name"]) for row in themes] == [
+        ("index_tracking", "Index Tracking")
+    ]
+    assert stylebox["stylebox_id"] == "growth_multi"
+    assert stylebox["x_label"] == "Growth"
+    assert stylebox["y_label"] == "Multi"
+    assert stylebox["x_index"] == 2
+    assert stylebox["y_index"] == 1
 
 
 def test_write_holdings_snapshot_persists_tall_factor_rows(

@@ -124,7 +124,8 @@ def test_build_snapshot_input_bundle_builds_features_and_diagnostics(
     assert "holdings_top10" in holdings_tables
     assert "ratios_key_ratios" in ratio_tables
     assert "lipper_ratings" in ratio_tables
-    assert "profile_and_fees" in summary_tables
+    assert "profile_fields" in summary_tables
+    assert "profile_overview" in summary_tables
     assert "morningstar_summary" in summary_tables
 
 
