@@ -1125,6 +1125,7 @@ def _extract_holdings_bucket_rows(
     section: str,
     name_column: str,
     extra_column: str | None = None,
+    normalize_name: bool = False,
 ) -> list[dict[str, object]]:
     if isinstance(payload, bytes) or not isinstance(payload, dict):
         return []
@@ -1142,7 +1143,7 @@ def _extract_holdings_bucket_rows(
         row: dict[str, object] = {
             "conid": conid,
             "effective_at": effective_at,
-            name_column: str(name),
+            name_column: _sanitize_segment(name) if normalize_name else str(name),
             "value_num": _parse_holdings_weight(item),
             "vs_peers": _parse_holdings_vs_peers(item),
         }
@@ -1256,7 +1257,7 @@ def _extract_holdings_geographic_rows(
             {
                 "conid": conid,
                 "effective_at": effective_at,
-                "region": _sanitize_segment(key),
+                "region_id": _sanitize_segment(key),
                 "value_num": _to_fraction_weight(value),
                 "vs_peers": None,
             }
@@ -2109,14 +2110,15 @@ def write_holdings_snapshot(
         effective_at,
         payload,
         section="industry",
-        name_column="industry",
+        name_column="industry_id",
+        normalize_name=True,
     ):
         conn.execute(
             """
             INSERT INTO holdings_industry (
                 conid,
                 effective_at,
-                industry,
+                industry_id,
                 value_num,
                 vs_peers
             ) VALUES (?, ?, ?, ?, ?)
@@ -2124,7 +2126,7 @@ def write_holdings_snapshot(
             (
                 row["conid"],
                 row["effective_at"],
-                row["industry"],
+                row["industry_id"],
                 row["value_num"],
                 row["vs_peers"],
             ),
@@ -2134,7 +2136,7 @@ def write_holdings_snapshot(
         effective_at,
         payload,
         section="currency",
-        name_column="currency",
+        name_column="name",
         extra_column="code",
     ):
         conn.execute(
@@ -2143,7 +2145,7 @@ def write_holdings_snapshot(
                 conid,
                 effective_at,
                 code,
-                currency,
+                name,
                 value_num,
                 vs_peers
             ) VALUES (?, ?, ?, ?, ?, ?)
@@ -2152,7 +2154,7 @@ def write_holdings_snapshot(
                 row["conid"],
                 row["effective_at"],
                 row["code"],
-                row["currency"],
+                row["name"],
                 row["value_num"],
                 row["vs_peers"],
             ),
@@ -2162,7 +2164,7 @@ def write_holdings_snapshot(
         effective_at,
         payload,
         section="investor_country",
-        name_column="country",
+        name_column="name",
         extra_column="country_code",
     ):
         conn.execute(
@@ -2170,8 +2172,8 @@ def write_holdings_snapshot(
             INSERT INTO holdings_investor_country (
                 conid,
                 effective_at,
-                country_code,
-                country,
+                code,
+                name,
                 value_num,
                 vs_peers
             ) VALUES (?, ?, ?, ?, ?, ?)
@@ -2180,7 +2182,7 @@ def write_holdings_snapshot(
                 row["conid"],
                 row["effective_at"],
                 row["country_code"],
-                row["country"],
+                row["name"],
                 row["value_num"],
                 row["vs_peers"],
             ),
@@ -2190,14 +2192,15 @@ def write_holdings_snapshot(
         effective_at,
         payload,
         section="debt_type",
-        name_column="debt_type",
+        name_column="debt_type_id",
+        normalize_name=True,
     ):
         conn.execute(
             """
             INSERT INTO holdings_debt_type (
                 conid,
                 effective_at,
-                debt_type,
+                debt_type_id,
                 value_num,
                 vs_peers
             ) VALUES (?, ?, ?, ?, ?)
@@ -2205,7 +2208,7 @@ def write_holdings_snapshot(
             (
                 row["conid"],
                 row["effective_at"],
-                row["debt_type"],
+                row["debt_type_id"],
                 row["value_num"],
                 row["vs_peers"],
             ),
@@ -2216,7 +2219,7 @@ def write_holdings_snapshot(
             INSERT INTO holdings_geographic_weights (
                 conid,
                 effective_at,
-                region,
+                region_id,
                 value_num,
                 vs_peers
             ) VALUES (?, ?, ?, ?, ?)
@@ -2224,7 +2227,7 @@ def write_holdings_snapshot(
             (
                 row["conid"],
                 row["effective_at"],
-                row["region"],
+                row["region_id"],
                 row["value_num"],
                 row["vs_peers"],
             ),

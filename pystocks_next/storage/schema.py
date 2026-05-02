@@ -661,6 +661,274 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=17,
+        description="standardize holdings child-table identifiers",
+        statements=(
+            """
+            DROP INDEX IF EXISTS idx_holdings_industry_effective_at
+            """,
+            """
+            DROP INDEX IF EXISTS idx_holdings_currency_effective_at
+            """,
+            """
+            DROP INDEX IF EXISTS idx_holdings_investor_country_effective_at
+            """,
+            """
+            DROP INDEX IF EXISTS idx_holdings_geographic_weights_effective_at
+            """,
+            """
+            DROP INDEX IF EXISTS idx_holdings_debt_type_effective_at
+            """,
+            """
+            DROP INDEX IF EXISTS idx_holdings_top10_effective_at
+            """,
+            """
+            ALTER TABLE holdings_industry RENAME TO holdings_industry_v16
+            """,
+            """
+            ALTER TABLE holdings_currency RENAME TO holdings_currency_v16
+            """,
+            """
+            ALTER TABLE holdings_investor_country
+            RENAME TO holdings_investor_country_v16
+            """,
+            """
+            ALTER TABLE holdings_geographic_weights
+            RENAME TO holdings_geographic_weights_v16
+            """,
+            """
+            ALTER TABLE holdings_debt_type RENAME TO holdings_debt_type_v16
+            """,
+            """
+            ALTER TABLE holdings_top10 RENAME TO holdings_top10_v16
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS holdings_industry (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                industry_id TEXT NOT NULL,
+                value_num REAL,
+                vs_peers REAL,
+                PRIMARY KEY (conid, effective_at, industry_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS holdings_currency (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                code TEXT,
+                name TEXT NOT NULL,
+                value_num REAL,
+                vs_peers REAL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS holdings_investor_country (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                code TEXT,
+                name TEXT NOT NULL,
+                value_num REAL,
+                vs_peers REAL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS holdings_geographic_weights (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                region_id TEXT NOT NULL,
+                value_num REAL,
+                vs_peers REAL,
+                PRIMARY KEY (conid, effective_at, region_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS holdings_debt_type (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                debt_type_id TEXT NOT NULL,
+                value_num REAL,
+                vs_peers REAL,
+                PRIMARY KEY (conid, effective_at, debt_type_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS holdings_top10 (
+                conid TEXT NOT NULL REFERENCES universe_instruments(conid),
+                effective_at TEXT NOT NULL,
+                name TEXT NOT NULL,
+                ticker TEXT,
+                rank INTEGER,
+                holding_weight_num REAL,
+                vs_peers REAL,
+                conids_json TEXT
+            )
+            """,
+            """
+            INSERT INTO holdings_industry (
+                conid,
+                effective_at,
+                industry_id,
+                value_num,
+                vs_peers
+            )
+            SELECT
+                conid,
+                effective_at,
+                LOWER(
+                    REPLACE(
+                        REPLACE(REPLACE(TRIM(industry), ' ', '_'), '-', '_'),
+                        '/',
+                        '_'
+                    )
+                ),
+                value_num,
+                vs_peers
+            FROM holdings_industry_v16
+            """,
+            """
+            INSERT INTO holdings_currency (
+                conid,
+                effective_at,
+                code,
+                name,
+                value_num,
+                vs_peers
+            )
+            SELECT
+                conid,
+                effective_at,
+                code,
+                currency,
+                value_num,
+                vs_peers
+            FROM holdings_currency_v16
+            WHERE currency IS NOT NULL
+            """,
+            """
+            INSERT INTO holdings_investor_country (
+                conid,
+                effective_at,
+                code,
+                name,
+                value_num,
+                vs_peers
+            )
+            SELECT
+                conid,
+                effective_at,
+                country_code,
+                country,
+                value_num,
+                vs_peers
+            FROM holdings_investor_country_v16
+            WHERE country IS NOT NULL
+            """,
+            """
+            INSERT INTO holdings_geographic_weights (
+                conid,
+                effective_at,
+                region_id,
+                value_num,
+                vs_peers
+            )
+            SELECT
+                conid,
+                effective_at,
+                region,
+                value_num,
+                vs_peers
+            FROM holdings_geographic_weights_v16
+            """,
+            """
+            INSERT INTO holdings_debt_type (
+                conid,
+                effective_at,
+                debt_type_id,
+                value_num,
+                vs_peers
+            )
+            SELECT
+                conid,
+                effective_at,
+                LOWER(
+                    REPLACE(
+                        REPLACE(REPLACE(TRIM(debt_type), ' ', '_'), '-', '_'),
+                        '/',
+                        '_'
+                    )
+                ),
+                value_num,
+                vs_peers
+            FROM holdings_debt_type_v16
+            """,
+            """
+            INSERT INTO holdings_top10 (
+                conid,
+                effective_at,
+                name,
+                ticker,
+                rank,
+                holding_weight_num,
+                vs_peers,
+                conids_json
+            )
+            SELECT
+                conid,
+                effective_at,
+                name,
+                ticker,
+                rank,
+                holding_weight_num,
+                vs_peers,
+                conids_json
+            FROM holdings_top10_v16
+            """,
+            """
+            DROP TABLE IF EXISTS holdings_industry_v16
+            """,
+            """
+            DROP TABLE IF EXISTS holdings_currency_v16
+            """,
+            """
+            DROP TABLE IF EXISTS holdings_investor_country_v16
+            """,
+            """
+            DROP TABLE IF EXISTS holdings_geographic_weights_v16
+            """,
+            """
+            DROP TABLE IF EXISTS holdings_debt_type_v16
+            """,
+            """
+            DROP TABLE IF EXISTS holdings_top10_v16
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_holdings_industry_effective_at
+            ON holdings_industry(effective_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_holdings_currency_effective_at
+            ON holdings_currency(effective_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_holdings_investor_country_effective_at
+            ON holdings_investor_country(effective_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_holdings_geographic_weights_effective_at
+            ON holdings_geographic_weights(effective_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_holdings_debt_type_effective_at
+            ON holdings_debt_type(effective_at, conid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_holdings_top10_effective_at
+            ON holdings_top10(effective_at, conid)
+            """,
+        ),
+    ),
 )
 
 

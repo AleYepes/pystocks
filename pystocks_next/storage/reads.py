@@ -130,7 +130,7 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "holdings_industry": (
         "conid",
         "effective_at",
-        "industry",
+        "industry_id",
         "value_num",
         "vs_peers",
     ),
@@ -138,29 +138,29 @@ SNAPSHOT_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "conid",
         "effective_at",
         "code",
-        "currency",
+        "name",
         "value_num",
         "vs_peers",
     ),
     "holdings_investor_country": (
         "conid",
         "effective_at",
-        "country_code",
-        "country",
+        "code",
+        "name",
         "value_num",
         "vs_peers",
     ),
     "holdings_geographic_weights": (
         "conid",
         "effective_at",
-        "region",
+        "region_id",
         "value_num",
         "vs_peers",
     ),
     "holdings_debt_type": (
         "conid",
         "effective_at",
-        "debt_type",
+        "debt_type_id",
         "value_num",
         "vs_peers",
     ),
@@ -330,11 +330,11 @@ SNAPSHOT_TABLE_STRING_COLUMNS: dict[str, tuple[str, ...]] = {
     "holdings_asset_type": ("conid", "bucket_id"),
     "holdings_debtor_quality": ("conid", "bucket_id"),
     "holdings_maturity": ("conid", "bucket_id"),
-    "holdings_industry": ("conid", "industry"),
-    "holdings_currency": ("conid", "code", "currency"),
-    "holdings_investor_country": ("conid", "country_code", "country"),
-    "holdings_geographic_weights": ("conid", "region"),
-    "holdings_debt_type": ("conid", "debt_type"),
+    "holdings_industry": ("conid", "industry_id"),
+    "holdings_currency": ("conid", "code", "name"),
+    "holdings_investor_country": ("conid", "code", "name"),
+    "holdings_geographic_weights": ("conid", "region_id"),
+    "holdings_debt_type": ("conid", "debt_type_id"),
     "holdings_top10": ("conid", "name", "ticker", "conids_json"),
     "ratios_key_ratios": ("conid", "metric_id"),
     "ratios_financials": ("conid", "metric_id"),
@@ -367,11 +367,11 @@ SNAPSHOT_TABLE_SORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "holdings_asset_type": ("conid", "effective_at", "bucket_id"),
     "holdings_debtor_quality": ("conid", "effective_at", "bucket_id"),
     "holdings_maturity": ("conid", "effective_at", "bucket_id"),
-    "holdings_industry": ("conid", "effective_at", "industry"),
-    "holdings_currency": ("conid", "effective_at", "code", "currency"),
-    "holdings_investor_country": ("conid", "effective_at", "country_code", "country"),
-    "holdings_geographic_weights": ("conid", "effective_at", "region"),
-    "holdings_debt_type": ("conid", "effective_at", "debt_type"),
+    "holdings_industry": ("conid", "effective_at", "industry_id"),
+    "holdings_currency": ("conid", "effective_at", "code", "name"),
+    "holdings_investor_country": ("conid", "effective_at", "code", "name"),
+    "holdings_geographic_weights": ("conid", "effective_at", "region_id"),
+    "holdings_debt_type": ("conid", "effective_at", "debt_type_id"),
     "holdings_top10": ("conid", "effective_at", "rank", "name"),
     "ratios_key_ratios": ("conid", "effective_at", "metric_id"),
     "ratios_financials": ("conid", "effective_at", "metric_id"),
@@ -750,15 +750,15 @@ def load_latest_holdings_country_weights(
             GROUP BY conid
         )
         SELECT
-            UPPER(COALESCE(country_code, country)) AS economy_code,
+            UPPER(COALESCE(code, name)) AS economy_code,
             SUM(value_num) AS weight
         FROM holdings_investor_country AS h
         INNER JOIN latest_snapshot_by_conid AS latest
             ON latest.conid = h.conid
            AND latest.effective_at = h.effective_at
-        WHERE COALESCE(country_code, country) IS NOT NULL
-        GROUP BY UPPER(COALESCE(country_code, country))
-        ORDER BY UPPER(COALESCE(country_code, country))
+        WHERE COALESCE(code, name) IS NOT NULL
+        GROUP BY UPPER(COALESCE(code, name))
+        ORDER BY UPPER(COALESCE(code, name))
         """,
     )
     return HoldingsCountryWeightsRead.from_frame(frame)
@@ -928,11 +928,11 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
             SELECT
                 conid,
                 effective_at,
-                industry,
+                industry_id,
                 value_num,
                 vs_peers
             FROM holdings_industry
-            ORDER BY conid, effective_at, industry
+            ORDER BY conid, effective_at, industry_id
             """,
             name="holdings_industry",
         ),
@@ -942,12 +942,12 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
             SELECT
                 conid,
                 effective_at,
-                COALESCE(code, currency) AS code,
-                currency,
+                code,
+                name,
                 value_num,
                 vs_peers
             FROM holdings_currency
-            ORDER BY conid, effective_at, code, currency
+            ORDER BY conid, effective_at, code, name
             """,
             name="holdings_currency",
         ),
@@ -957,12 +957,12 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
             SELECT
                 conid,
                 effective_at,
-                COALESCE(country_code, country) AS country_code,
-                country,
+                code,
+                name,
                 value_num,
                 vs_peers
             FROM holdings_investor_country
-            ORDER BY conid, effective_at, country_code, country
+            ORDER BY conid, effective_at, code, name
             """,
             name="holdings_investor_country",
         ),
@@ -972,11 +972,11 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
             SELECT
                 conid,
                 effective_at,
-                region,
+                region_id,
                 value_num,
                 vs_peers
             FROM holdings_geographic_weights
-            ORDER BY conid, effective_at, region
+            ORDER BY conid, effective_at, region_id
             """,
             name="holdings_geographic_weights",
         ),
@@ -986,11 +986,11 @@ def load_snapshot_feature_tables(conn: sqlite3.Connection) -> SnapshotFeatureTab
             SELECT
                 conid,
                 effective_at,
-                debt_type,
+                debt_type_id,
                 value_num,
                 vs_peers
             FROM holdings_debt_type
-            ORDER BY conid, effective_at, debt_type
+            ORDER BY conid, effective_at, debt_type_id
             """,
             name="holdings_debt_type",
         ),

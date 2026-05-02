@@ -570,9 +570,9 @@ def build_snapshot_input_bundle(
         ("holdings_asset_type", "bucket_id", "value_num", "holding_asset"),
         ("holdings_debtor_quality", "bucket_id", "value_num", "holding_quality"),
         ("holdings_maturity", "bucket_id", "value_num", "holding_maturity"),
-        ("holdings_industry", "industry", "value_num", "industry"),
-        ("holdings_geographic_weights", "region", "value_num", "region"),
-        ("holdings_debt_type", "debt_type", "value_num", "debt_type"),
+        ("holdings_industry", "industry_id", "value_num", "industry"),
+        ("holdings_geographic_weights", "region_id", "value_num", "region"),
+        ("holdings_debt_type", "debt_type_id", "value_num", "debt_type"),
     ]
     for table_name, key_column, value_column, prefix in holdings_specs:
         frame = snapshot_tables[table_name].copy()
@@ -610,7 +610,7 @@ def build_snapshot_input_bundle(
             )
         )
         currency["currency_key"] = currency["code"].where(
-            currency["code"].notna(), currency["currency"]
+            currency["code"].notna(), currency["name"]
         )
         frames.append(
             _pivot_keyed_values(
@@ -630,13 +630,13 @@ def build_snapshot_input_bundle(
             _long_holdings_diagnostics(
                 country,
                 table_name="holdings_investor_country",
-                key_column="country_code",
+                key_column="code",
                 value_column="value_num",
                 config=config,
             )
         )
-        country["country_key"] = country["country_code"].where(
-            country["country_code"].notna(), country["country"]
+        country["country_key"] = country["code"].where(
+            country["code"].notna(), country["name"]
         )
         frames.append(
             _pivot_keyed_values(

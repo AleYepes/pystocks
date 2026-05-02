@@ -16,11 +16,11 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     first_version = initialize_operational_store(db_path)
     second_version = initialize_operational_store(db_path)
 
-    assert first_version == 16
-    assert second_version == 16
+    assert first_version == 17
+    assert second_version == 17
 
     with connect_sqlite(db_path, read_only=True) as conn:
-        assert current_schema_version(conn) == 16
+        assert current_schema_version(conn) == 17
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
         universe_columns = {
@@ -54,6 +54,13 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
         }
         holdings_quality_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(holdings_debtor_quality)")
+        }
+        holdings_industry_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(holdings_industry)")
+        }
+        holdings_country_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(holdings_investor_country)")
         }
         holdings_top10_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(holdings_top10)")
@@ -91,7 +98,11 @@ def test_initialize_operational_store_is_idempotent(tmp_path: Path) -> None:
     assert "stylebox_id" in profile_stylebox_columns
     assert "bucket_id" in holdings_columns
     assert "bucket_id" in holdings_quality_columns
+    assert "industry_id" in holdings_industry_columns
+    assert "code" in holdings_country_columns
+    assert "country_code" not in holdings_country_columns
     assert "ticker" in holdings_top10_columns
+    assert "name" in holdings_top10_columns
     assert "rank" in holdings_top10_columns
     assert "conids_json" in holdings_top10_columns
     assert "vs_peers" in holdings_columns
@@ -168,8 +179,8 @@ def test_apply_migrations_marks_partial_legacy_store_with_canonical_schema(
         )
 
     with connect_sqlite(db_path) as conn:
-        assert apply_migrations(conn) == [9, 10, 11, 12, 13, 14, 15, 16]
-        assert current_schema_version(conn) == 16
+        assert apply_migrations(conn) == [9, 10, 11, 12, 13, 14, 15, 16, 17]
+        assert current_schema_version(conn) == 17
         row = conn.execute(
             """
             SELECT source_as_of_date, capture_batch_id

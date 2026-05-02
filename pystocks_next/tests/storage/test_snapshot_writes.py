@@ -248,36 +248,36 @@ def test_write_holdings_snapshot_persists_supported_long_child_tables(
 
     industry_row = temp_store.execute(
         """
-        SELECT industry, value_num, vs_peers
+        SELECT industry_id, value_num, vs_peers
         FROM holdings_industry
         WHERE conid = '100'
         """
     ).fetchone()
     currency_row = temp_store.execute(
         """
-        SELECT code, currency, value_num, vs_peers
+        SELECT code, name, value_num, vs_peers
         FROM holdings_currency
         WHERE conid = '100'
         """
     ).fetchone()
     country_row = temp_store.execute(
         """
-        SELECT country_code, country, value_num, vs_peers
+        SELECT code, name, value_num, vs_peers
         FROM holdings_investor_country
         WHERE conid = '100'
         """
     ).fetchone()
     geographic_rows = temp_store.execute(
         """
-        SELECT region, value_num
+        SELECT region_id, value_num
         FROM holdings_geographic_weights
         WHERE conid = '100'
-        ORDER BY region
+        ORDER BY region_id
         """
     ).fetchall()
     debt_type_row = temp_store.execute(
         """
-        SELECT debt_type, value_num, vs_peers
+        SELECT debt_type_id, value_num, vs_peers
         FROM holdings_debt_type
         WHERE conid = '100'
         """
@@ -290,22 +290,22 @@ def test_write_holdings_snapshot_persists_supported_long_child_tables(
         """
     ).fetchone()
 
-    assert industry_row["industry"] == "Technology"
+    assert industry_row["industry_id"] == "technology"
     assert industry_row["value_num"] == pytest.approx(0.448681)
     assert industry_row["vs_peers"] == pytest.approx(0.40)
     assert currency_row["code"] == "USD"
-    assert currency_row["currency"] == "US Dollar"
+    assert currency_row["name"] == "US Dollar"
     assert currency_row["value_num"] == pytest.approx(0.999604)
     assert currency_row["vs_peers"] == pytest.approx(0.985)
-    assert country_row["country_code"] == "US"
-    assert country_row["country"] == "United States"
+    assert country_row["code"] == "US"
+    assert country_row["name"] == "United States"
     assert country_row["value_num"] == pytest.approx(0.973418)
     assert country_row["vs_peers"] == pytest.approx(0.96)
-    assert [(row["region"], row["value_num"]) for row in geographic_rows] == [
+    assert [(row["region_id"], row["value_num"]) for row in geographic_rows] == [
         ("eu", pytest.approx(0.0189)),
         ("us", pytest.approx(0.9734)),
     ]
-    assert debt_type_row["debt_type"] == "Sovereign Bond"
+    assert debt_type_row["debt_type_id"] == "sovereign_bond"
     assert debt_type_row["value_num"] == pytest.approx(0.20)
     assert debt_type_row["vs_peers"] == pytest.approx(0.25)
     assert top10_row["name"] == "NVIDIA CORPORATION"
@@ -393,14 +393,14 @@ def test_write_holdings_snapshot_persists_documented_top10_identifiers(
     ).fetchone()
     currency_row = temp_store.execute(
         """
-        SELECT code, currency, value_num, vs_peers
+        SELECT code, name, value_num, vs_peers
         FROM holdings_currency
         WHERE conid = '100'
         """
     ).fetchone()
     country_row = temp_store.execute(
         """
-        SELECT country_code, country, value_num, vs_peers
+        SELECT code, name, value_num, vs_peers
         FROM holdings_investor_country
         WHERE conid = '100'
         """
@@ -420,11 +420,11 @@ def test_write_holdings_snapshot_persists_documented_top10_identifiers(
     assert top10_row["vs_peers"] is None
     assert top10_row["conids_json"] == "[4815747, 13104788]"
     assert currency_row["code"] is None
-    assert currency_row["currency"] == "<No Currency>"
+    assert currency_row["name"] == "<No Currency>"
     assert currency_row["value_num"] == pytest.approx(0.000396)
     assert currency_row["vs_peers"] == pytest.approx(0.00344733333333)
-    assert country_row["country_code"] is None
-    assert country_row["country"] == "Unidentified"
+    assert country_row["code"] is None
+    assert country_row["name"] == "Unidentified"
     assert country_row["value_num"] == pytest.approx(0.000396)
     assert country_row["vs_peers"] == pytest.approx(0.0084064375)
 

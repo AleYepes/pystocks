@@ -163,7 +163,7 @@ def build_sample_snapshot_tables() -> dict[str, pd.DataFrame]:
             {
                 "conid": "200",
                 "effective_at": "2026-01-03",
-                "industry": "Technology",
+                "industry_id": "technology",
                 "value_num": "0.44",
                 "vs_peers": "0.40",
             }

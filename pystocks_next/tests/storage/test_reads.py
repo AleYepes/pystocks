@@ -234,7 +234,7 @@ def test_load_snapshot_feature_tables_reads_supported_snapshot_tables(
         "fixed_income",
     ]
     assert result["holdings_asset_type"]["value_num"].tolist() == [0.10, 0.85, 0.05]
-    assert result["holdings_industry"]["industry"].tolist() == ["Technology"]
+    assert result["holdings_industry"]["industry_id"].tolist() == ["technology"]
     assert result["holdings_currency"]["code"].tolist() == ["USD"]
     assert result["holdings_debtor_quality"]["bucket_id"].tolist() == [
         "quality_aa",
@@ -245,7 +245,7 @@ def test_load_snapshot_feature_tables_reads_supported_snapshot_tables(
         "maturity_1_to_3_years",
         "maturity_less_than_1_year",
     ]
-    assert result["holdings_geographic_weights"]["region"].tolist() == ["eu", "us"]
+    assert result["holdings_geographic_weights"]["region_id"].tolist() == ["eu", "us"]
     assert result["holdings_top10"]["name"].tolist() == ["NVIDIA CORPORATION"]
     assert result["ratios_key_ratios"]["metric_id"].tolist() == ["price_sales"]
     assert result["ratios_financials"]["metric_id"].tolist() == ["sales_growth_1_year"]
