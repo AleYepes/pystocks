@@ -93,7 +93,17 @@ def _result_payload(
     return result
 
 
-def _select_conids_to_scrape(limit, start_index, conids_file, force):
+def _select_conids_to_scrape(
+    limit: int | str | None = None,
+    start_index: int | str = 0,
+    conids_file: str | None = None,
+    force: bool = False,
+) -> tuple[list[str], dict[str, Any] | None]:
+    if limit is not None:
+        limit = int(limit)
+    if start_index is not None:
+        start_index = int(start_index)
+
     scraped_recently = [] if force else get_scraped_conids()
     logger.info(
         "Skipping %s instruments already scraped in the last 7 days.",
@@ -121,9 +131,11 @@ def _select_conids_to_scrape(limit, start_index, conids_file, force):
         ]
 
     if limit:
-        conids_to_scrape = conids_to_scrape[start_index : start_index + limit]
+        conids_to_scrape = conids_to_scrape[
+            int(start_index) : int(start_index) + int(limit)
+        ]
     else:
-        conids_to_scrape = conids_to_scrape[start_index:]
+        conids_to_scrape = conids_to_scrape[int(start_index) :]
 
     return conids_to_scrape, None
 
@@ -559,14 +571,14 @@ class FundamentalScraper:
 
 
 async def main(
-    limit=None,
-    start_index=0,
-    conids_file=None,
-    force=False,
-    max_auth_retries=2,
-    reauth_headless=False,
-    telemetry_output=None,
-    verbose=False,
+    limit: int | str | None = None,
+    start_index: int | str = 0,
+    conids_file: str | None = None,
+    force: bool = False,
+    max_auth_retries: int = 2,
+    reauth_headless: bool = False,
+    telemetry_output: str | None = None,
+    verbose: bool = False,
 ):
     _configure_logging(verbose)
     init_db()
