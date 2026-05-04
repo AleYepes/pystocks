@@ -31,6 +31,19 @@ class PersistenceFailureSummary:
     artifact_path: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class PersistenceSkipSummary:
+    conid: str
+    endpoint_name: str
+    endpoint_family: str
+    request_path: str
+    observed_at: str
+    status_code: int
+    is_useful: bool
+    skip_type: str
+    skip_reason: str
+
+
 @dataclass(slots=True)
 class CollectionTelemetry:
     run_started_at: str = field(
@@ -42,6 +55,7 @@ class CollectionTelemetry:
         default_factory=lambda: defaultdict(Counter)
     )
     persistence_failures: list[PersistenceFailureSummary] = field(default_factory=list)
+    persistence_skips: list[PersistenceSkipSummary] = field(default_factory=list)
 
     def record_call(self, endpoint_family: str, status_code: int) -> None:
         self.endpoint_calls[endpoint_family] += 1
@@ -79,6 +93,33 @@ class CollectionTelemetry:
             )
         )
 
+    def record_persistence_skip(
+        self,
+        *,
+        conid: str,
+        endpoint_name: str,
+        endpoint_family: str,
+        request_path: str,
+        observed_at: str,
+        status_code: int,
+        is_useful: bool,
+        skip_type: str,
+        skip_reason: str,
+    ) -> None:
+        self.persistence_skips.append(
+            PersistenceSkipSummary(
+                conid=conid,
+                endpoint_name=endpoint_name,
+                endpoint_family=endpoint_family,
+                request_path=request_path,
+                observed_at=observed_at,
+                status_code=status_code,
+                is_useful=is_useful,
+                skip_type=skip_type,
+                skip_reason=skip_reason,
+            )
+        )
+
     def build_endpoint_summary(self) -> list[EndpointTelemetrySummary]:
         endpoints = sorted(
             set(self.endpoint_calls)
@@ -109,6 +150,7 @@ class CollectionTelemetry:
             "run_stats": dict(run_stats),
             "endpoint_summary": [asdict(row) for row in self.build_endpoint_summary()],
             "persistence_failures": [asdict(row) for row in self.persistence_failures],
+            "persistence_skips": [asdict(row) for row in self.persistence_skips],
         }
 
     def write_report(

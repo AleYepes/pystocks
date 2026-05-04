@@ -111,6 +111,12 @@ Do not collapse:
 - `effective_at`
 - `join_date` or `rebalance_date`
 
+`effective_at` must always come from source payload contents according to the
+endpoint's explicit hierarchy. Never use `observed_at`, the collection date, or
+the current date as an `effective_at` fallback. If the hierarchy cannot resolve
+a valid source/payload date, the canonical write is unresolved and should be
+skipped or quarantined with telemetry.
+
 If a slice changes time behavior, it must include behavior-focused tests.
 
 ### 5. Prefer Vertical Proof Over Broad Porting

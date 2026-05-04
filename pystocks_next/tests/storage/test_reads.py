@@ -215,7 +215,6 @@ def test_load_snapshot_feature_tables_reads_supported_snapshot_tables(
         "geographical_focus",
         "inception_date",
         "management_approach",
-        "management_expenses",
         "manager_tenure",
         "objective_type",
         "portfolio_manager",

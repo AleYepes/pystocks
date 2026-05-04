@@ -189,7 +189,7 @@ Current storage behavior:
 
 Meaning:
 
-- the source-declared date the payload describes
+- the source-declared or payload-derived date the payload describes
 
 Current behavior:
 
@@ -200,9 +200,10 @@ Current behavior:
 
 Meaning:
 
-- the canonical date used to key stored facts for downstream joins
+- the canonical date used to key stored facts for downstream joins. It must be
+  derived from source payload contents and must never be collection time.
 
-Current behavior:
+Legacy current-package behavior:
 
 - for snapshot endpoints, the storage layer currently anchors all endpoints to `ratios.as_of_date`
 - this is encoded directly in `FundamentalsStore._resolve_effective_dates()`
@@ -210,6 +211,14 @@ Current behavior:
 - if `ratios.as_of_date` is missing, snapshot persistence is skipped entirely for the snapshot payload
 
 This is the single most important current time-semantic weakness.
+
+Rebuild rule:
+
+- each endpoint owns an explicit source/payload date hierarchy
+- `observed_at`, current date, and collection date are never valid
+  `effective_at` fallbacks
+- if no valid source/payload date can be resolved, the endpoint's canonical
+  write is unresolved and should be skipped or quarantined with telemetry
 
 ### Analysis Join / Rebalance Date
 
@@ -252,7 +261,7 @@ This means the current storage layer is already the authoritative owner of many 
 
 ### 1. Snapshot `effective_at` is globally anchored to ratios
 
-This is the most serious current semantic distortion.
+This is the most serious legacy semantic distortion.
 
 It collapses endpoint-specific dates into one shared anchor even when the source data may have different publication timing.
 

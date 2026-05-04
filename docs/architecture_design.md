@@ -398,37 +398,62 @@ Time semantics must be explicit and owned centrally.
 
 The architecture must preserve these four concepts:
 
-- `observed_at`: when the system fetched or observed the data
-- `source_as_of_date`: the source-declared date when available
-- `effective_at`: the canonical date used for storage and downstream joins
+- `observed_at`: when the system fetched or observed the data. This is collection
+  metadata only.
+- `source_as_of_date`: the source-declared or payload-derived business date that
+  describes the source facts when available.
+- `effective_at`: the canonical date used for storage and downstream joins. This
+  must be derived from source payload contents, never from collection time.
 - `join_date` or `rebalance_date`: the downstream analysis date
 
 ### Design Rules
 
 1. `observed_at` is never a substitute for `effective_at`.
 2. `source_as_of_date` is preserved when the source provides it.
-3. `effective_at` is resolved per endpoint family according to explicit rules.
+3. `effective_at` is resolved per endpoint family according to explicit rules,
+   using only source/payload dates.
 4. unrelated endpoint data must not be globally anchored to one endpoint's date.
 5. analysis joins use `effective_at <= join_date`, not source-specific ad hoc comparisons.
+6. payloads without a trustworthy source/payload date must be classified as
+   unresolved for persistence rather than stored at the collection date.
 
 ### High-Level `effective_at` Resolution Rules
 
-The architecture should adopt explicit fallback hierarchies per endpoint family.
+The architecture should adopt explicit payload-date hierarchies per endpoint
+family. These hierarchies may fall back from one source date in the same payload
+to another source date in that same payload, but they must never fall back to
+`observed_at`, the current date, or any other collection timestamp.
 
 For snapshot endpoints that provide a source date describing the payload:
 
 - first choice: the endpoint's own source `as_of_date`
 - fallback: another endpoint-specific source date from the same payload only if the source contract explicitly states they describe the same publication snapshot
-- final fallback: `observed_at` only when no reliable source date exists and the endpoint is still worth storing as an observed snapshot
+- if no reliable source/payload date exists: do not persist canonical snapshot
+  facts for that endpoint; record the unresolved outcome in collection telemetry
+  or diagnostics
 
 For series endpoints:
 
 - `effective_at` is the point-level event date or trade date carried by each series row
 - the enclosing snapshot's `observed_at` remains separate metadata and is never substituted for the row date
 
-For endpoints with neither a trustworthy source date nor a justified observed-date fallback:
+For endpoints with neither a trustworthy source date nor a payload-derived date:
 
 - the write path should classify the payload as unresolved rather than silently borrowing another endpoint's date
+
+### Profile And Fees Date Rule
+
+For `profile_and_fees`, `effective_at` is the profile snapshot business date
+derived from the endpoint payload. The current implementation resolves it in
+this order:
+
+1. top-level `as_of_date` / `asOfDate`, if present
+2. embedded `Total Net Assets (Month End)` date
+3. latest valid `reports[].as_of_date`
+
+If none of those dates is present and valid, storage must reject the profile
+snapshot as unresolved. `observed_at` is still stored for audit and telemetry,
+but it is not a legal `effective_at` source.
 
 Every endpoint-family rule should be implemented in one place and covered by behavior-focused tests.
 

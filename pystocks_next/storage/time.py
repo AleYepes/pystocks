@@ -36,8 +36,7 @@ ENDPOINT_TIME_POLICIES: dict[str, EndpointTimePolicy] = {
     "profile_and_fees_snapshot": EndpointTimePolicy(
         endpoint="profile_and_fees_snapshot",
         kind="snapshot",
-        date_source="observed_at",
-        observed_at_fallback=True,
+        date_source="source_as_of_date",
     ),
     "holdings_snapshot": EndpointTimePolicy(
         endpoint="holdings_snapshot",

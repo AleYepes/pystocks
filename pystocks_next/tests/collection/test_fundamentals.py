@@ -215,6 +215,49 @@ def test_run_persists_first_slice_end_to_end(
     assert not snapshot_tables["ratios_key_ratios"].empty
 
 
+def test_persist_outcome_skips_profile_snapshot_without_source_date(
+    temp_store,
+) -> None:
+    upsert_instruments(temp_store, [UniverseInstrument(conid="100", symbol="AAA")])
+    collector = FundamentalsCollector(session=_DummySession())
+    outcome = FundamentalsConidOutcome(
+        conid="100",
+        status="success",
+        observed_at="2026-05-04T12:00:00+00:00",
+        endpoint_payloads=(
+            CollectedEndpointPayload(
+                endpoint_name="profile_and_fees",
+                endpoint_family="mf_profile_and_fees",
+                request_path="mf_profile_and_fees/100?sustainability=UK&lang=en",
+                conid="100",
+                observed_at="2026-05-04T12:00:00+00:00",
+                payload={
+                    "objective": "Track an index.",
+                    "symbol": "AAA",
+                    "fund_and_profile": [{"name": "Asset Type", "value": "Equity"}],
+                    "reports": [{"as_of_date": 0}],
+                    "expenses_allocation": [],
+                    "jap_fund_warning": False,
+                },
+                status_code=200,
+                is_useful=True,
+            ),
+        ),
+    )
+
+    result = collector.persist_outcome(temp_store, outcome)
+    snapshot_tables = load_snapshot_feature_tables(temp_store).tables
+
+    assert result.saved_snapshots == 0
+    assert snapshot_tables["profile_overview"].empty
+    assert collector.telemetry.persistence_failures == []
+    assert len(collector.telemetry.persistence_skips) == 1
+    skip = collector.telemetry.persistence_skips[0]
+    assert skip.endpoint_name == "profile_and_fees"
+    assert skip.skip_type == "UnresolvedEffectiveAtError"
+    assert "source_as_of_date is required" in skip.skip_reason
+
+
 def test_run_reports_progress_for_processed_conids(temp_store) -> None:
     collector = FundamentalsCollector(session=_DummySession())
     progress = RecordingProgressSink()

@@ -436,7 +436,6 @@ _PROFILE_FIELD_MAP: dict[str, tuple[str, str]] = {
     "Inception Date": ("inception_date", "date"),
     "Launch Opening Price": ("inception_date", "date"),
     "Management Approach": ("management_approach", "text"),
-    "Management Expenses": ("management_expenses", "percent"),
     "Manager Tenure": ("manager_tenure", "date"),
     "Maturity Date": ("maturity_date", "date"),
     "Objective Type": ("objective_type", "text"),
@@ -456,7 +455,6 @@ _PROFILE_DATE_FIELD_IDS = {
 }
 
 _PROFILE_NUMERIC_FIELD_IDS = {
-    "management_expenses",
     "morningstar_stylebox_x_index",
     "morningstar_stylebox_y_index",
     "redemption_charge_actual",
@@ -813,6 +811,45 @@ def _source_ordered_id(base_id: str, seen: dict[str, int]) -> str:
     return base_id if count == 1 else f"{base_id}_{count}"
 
 
+def _resolve_profile_source_as_of_date(payload: JsonValue | bytes) -> str | None:
+    if isinstance(payload, bytes) or not isinstance(payload, dict):
+        return None
+
+    explicit_as_of_date = to_iso_date(
+        payload.get("as_of_date") or payload.get("asOfDate")
+    )
+    if explicit_as_of_date is not None:
+        return explicit_as_of_date
+
+    fund_and_profile = payload.get("fund_and_profile", [])
+    if isinstance(fund_and_profile, list):
+        for item in fund_and_profile:
+            if not isinstance(item, dict):
+                continue
+            field_name = str(item.get("name") or item.get("name_tag") or "")
+            field_id = _sanitize_segment(field_name)
+            if field_id in {
+                "total_net_assets_month_end",
+                "total_net_assets_value",
+            }:
+                _, net_assets_date = _split_total_net_assets_value(item.get("value"))
+                if net_assets_date is not None:
+                    return net_assets_date
+
+    report_dates: list[str] = []
+    reports = payload.get("reports", [])
+    if isinstance(reports, list):
+        for report in reports:
+            if not isinstance(report, dict):
+                continue
+            report_as_of_date = to_iso_date(
+                report.get("as_of_date") or report.get("asOfDate")
+            )
+            if report_as_of_date is not None:
+                report_dates.append(report_as_of_date)
+    return max(report_dates) if report_dates else None
+
+
 def _extract_profile_overview_row(
     conid: str,
     effective_at: str,
@@ -824,6 +861,7 @@ def _extract_profile_overview_row(
         "symbol": None,
         "objective": None,
         "jap_fund_warning": None,
+        "management_expenses_ratio": None,
     }
     if isinstance(payload, bytes) or not isinstance(payload, dict):
         return row
@@ -832,6 +870,27 @@ def _extract_profile_overview_row(
         str(payload.get("objective")) if payload.get("objective") is not None else None
     )
     row["jap_fund_warning"] = _to_int_bool(payload.get("jap_fund_warning"))
+
+    management_ratio: float | None = None
+    non_management_ratio: float | None = None
+    expenses_allocation = payload.get("expenses_allocation", [])
+    if isinstance(expenses_allocation, list):
+        for item in expenses_allocation:
+            if not isinstance(item, dict):
+                continue
+            expense_id = _sanitize_segment(item.get("name"))
+            ratio = _parse_float(item.get("ratio"))
+            if ratio is None:
+                ratio = _to_fraction_weight(item.get("value"))
+            if expense_id == "management_expenses":
+                management_ratio = ratio
+            elif expense_id == "non_management_expenses":
+                non_management_ratio = ratio
+
+    if management_ratio is None and non_management_ratio is not None:
+        management_ratio = 1.0 - non_management_ratio
+    row["management_expenses_ratio"] = management_ratio
+
     return row
 
 
@@ -854,6 +913,8 @@ def _extract_profile_field_rows(
         field_name = item.get("name")
         name_tag = item.get("name_tag")
         base_id = _sanitize_segment(name_tag or field_name)
+        if base_id == "management_expenses":
+            continue
         field_id = _source_ordered_id(base_id, seen)
         raw_value = item.get("value")
         mapped = _PROFILE_FIELD_MAP.get(str(field_name))
@@ -965,41 +1026,6 @@ def _extract_profile_theme_rows(
                 "conid": conid,
                 "effective_at": effective_at,
                 "theme_id": theme_id,
-            }
-        )
-    return rows
-
-
-def _extract_profile_expense_allocation_rows(
-    conid: str,
-    effective_at: str,
-    payload: JsonValue | bytes,
-) -> list[dict[str, object]]:
-    if isinstance(payload, bytes) or not isinstance(payload, dict):
-        return []
-    values = payload.get("expenses_allocation", [])
-    if not isinstance(values, list):
-        return []
-
-    rows: list[dict[str, object]] = []
-    seen: dict[str, int] = {}
-    for item in values:
-        if not isinstance(item, dict):
-            continue
-        name = item.get("name")
-        if name is None:
-            continue
-        expense_id = _source_ordered_id(_sanitize_segment(name), seen)
-        ratio = _parse_float(item.get("ratio"))
-        if ratio is None:
-            ratio = _to_fraction_weight(item.get("value"))
-        rows.append(
-            {
-                "conid": conid,
-                "effective_at": effective_at,
-                "expense_id": expense_id,
-                "value_text": str(item.get("value")) if item.get("value") else None,
-                "ratio": ratio,
             }
         )
     return rows
@@ -1734,9 +1760,11 @@ def write_profile_and_fees_snapshot(
     capture_batch_id: str | None = None,
 ) -> SnapshotWriteResult:
     batch_id = capture_batch_id or new_capture_batch_id()
+    source_as_of_date = _resolve_profile_source_as_of_date(payload)
     resolution = resolve_effective_at(
         "profile_and_fees_snapshot",
         observed_at=observed_at,
+        source_as_of_date=source_as_of_date,
     )
     effective_at = resolution.effective_at.isoformat()
     capture = capture_raw_payload(
@@ -1746,6 +1774,7 @@ def write_profile_and_fees_snapshot(
         payload=payload,
         observed_at=observed_at,
         conid=conid,
+        source_as_of_date=source_as_of_date,
         capture_batch_id=batch_id,
     )
 
@@ -1753,9 +1782,6 @@ def write_profile_and_fees_snapshot(
     field_rows = _extract_profile_field_rows(conid, effective_at, payload)
     annual_rows, prospectus_rows = _extract_profile_report_rows(conid, payload)
     theme_rows = _extract_profile_theme_rows(conid, effective_at, payload)
-    expense_rows = _extract_profile_expense_allocation_rows(
-        conid, effective_at, payload
-    )
     stylebox_rows = _extract_profile_stylebox_rows(conid, effective_at, payload)
     conn.execute(
         """
@@ -1773,7 +1799,14 @@ def write_profile_and_fees_snapshot(
             capture_batch_id = excluded.capture_batch_id,
             source_as_of_date = excluded.source_as_of_date
         """,
-        (conid, effective_at, observed_at, capture.payload_hash, batch_id, None),
+        (
+            conid,
+            effective_at,
+            observed_at,
+            capture.payload_hash,
+            batch_id,
+            source_as_of_date,
+        ),
     )
     _delete_snapshot_child_rows(
         conn,
@@ -1781,7 +1814,6 @@ def write_profile_and_fees_snapshot(
             "profile_overview",
             "profile_fields",
             "profile_themes",
-            "profile_expense_allocations",
             "profile_stylebox",
         ),
         conid=conid,
@@ -1794,8 +1826,9 @@ def write_profile_and_fees_snapshot(
             effective_at,
             symbol,
             objective,
-            jap_fund_warning
-        ) VALUES (?, ?, ?, ?, ?)
+            jap_fund_warning,
+            management_expenses_ratio
+        ) VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             overview_row["conid"],
@@ -1803,6 +1836,7 @@ def write_profile_and_fees_snapshot(
             overview_row["symbol"],
             overview_row["objective"],
             overview_row["jap_fund_warning"],
+            overview_row["management_expenses_ratio"],
         ),
     )
     for row in field_rows:
@@ -1883,25 +1917,6 @@ def write_profile_and_fees_snapshot(
                 row["conid"],
                 row["effective_at"],
                 row["theme_id"],
-            ),
-        )
-    for row in expense_rows:
-        conn.execute(
-            """
-            INSERT INTO profile_expense_allocations (
-                conid,
-                effective_at,
-                expense_id,
-                value_text,
-                ratio
-            ) VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                row["conid"],
-                row["effective_at"],
-                row["expense_id"],
-                row["value_text"],
-                row["ratio"],
             ),
         )
     for row in stylebox_rows:

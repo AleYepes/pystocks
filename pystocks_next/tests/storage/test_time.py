@@ -18,14 +18,15 @@ def test_snapshot_endpoint_uses_source_as_of_date() -> None:
     assert resolution.source == "source_as_of_date"
 
 
-def test_observed_snapshot_endpoint_falls_back_to_observed_at() -> None:
+def test_profile_snapshot_endpoint_uses_source_as_of_date() -> None:
     resolution = resolve_effective_at(
         "profile_and_fees_snapshot",
         observed_at=datetime(2026, 1, 3, 9, 0, tzinfo=UTC),
+        source_as_of_date=date(2026, 1, 2),
     )
 
-    assert resolution.effective_at == date(2026, 1, 3)
-    assert resolution.source == "observed_at"
+    assert resolution.effective_at == date(2026, 1, 2)
+    assert resolution.source == "source_as_of_date"
 
 
 def test_series_endpoint_uses_row_date() -> None:
@@ -39,7 +40,7 @@ def test_series_endpoint_uses_row_date() -> None:
     assert resolution.source == "row_date"
 
 
-def test_time_resolution_accepts_legacy_date_shapes() -> None:
+def test_time_resolution_accepts_varied_date_shapes() -> None:
     resolution = resolve_effective_at(
         "holdings_snapshot",
         observed_at=datetime(2026, 1, 3, 9, 0, tzinfo=UTC),

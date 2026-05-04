@@ -134,8 +134,13 @@ def _build_profile_features(
     if not overview.empty:
         overview_rows: list[dict[str, object]] = []
         for _, row in overview.iterrows():
-            for field_id in ("symbol", "objective", "jap_fund_warning"):
-                value = row.get(field_id)
+            for col, field_id in (
+                ("symbol", "symbol"),
+                ("objective", "objective"),
+                ("jap_fund_warning", "jap_fund_warning"),
+                ("management_expenses_ratio", "management_expenses_ratio"),
+            ):
+                value = row.get(col)
                 if _is_missing_scalar(value):
                     continue
                 overview_rows.append(
@@ -203,20 +208,6 @@ def _build_profile_features(
                 key_column="theme_id",
                 value_column="value_num",
                 prefix="profile_theme",
-            )
-        )
-
-    expenses = snapshot_tables["profile_expense_allocations"].copy()
-    if not expenses.empty:
-        frames.append(
-            _pivot_keyed_values(
-                _select_frame(
-                    expenses,
-                    ("conid", "effective_at", "expense_id", "ratio"),
-                ),
-                key_column="expense_id",
-                value_column="ratio",
-                prefix="profile_expense",
             )
         )
 

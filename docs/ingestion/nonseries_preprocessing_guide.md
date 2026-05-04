@@ -57,11 +57,12 @@ Dates appear in multiple places and may conflict. Do not remove date fields with
 Use the following canonical policy:
 
 1. Resolve one canonical `effective_at` per scraped snapshot batch:
-- Use only `ratios.as_of_date` (or `ratios.asOfDate`).
-- If ratios date is missing/invalid, skip persisting that snapshot batch.
+- Use the endpoint's own source/payload date hierarchy.
+- Do not use `observed_at`, collection date, current date, or another endpoint's date as a fallback.
+- If the endpoint date hierarchy cannot resolve a valid source/payload date, skip or quarantine that endpoint's canonical snapshot write.
 
 2. Keep at least these date classes:
-- `effective_at`: endpoint-level partition key currently used by storage logic.
+- `effective_at`: endpoint-level partition key derived from source payload contents.
 - `observed_at`: ingestion observation timestamp.
 - source business dates from payload (for example `as_of_date`, publish dates, embedded dates).
 
@@ -71,8 +72,9 @@ Use the following canonical policy:
 
 4. Add tests that lock date behavior.
 - Positive case for preferred source date.
-- Fallback case when preferred date is missing/invalid.
+- Fallback case for the next valid source/payload date in the endpoint hierarchy.
 - Edge case for malformed date formats.
+- Negative case proving `observed_at` is not accepted as an `effective_at` fallback.
 
 ## Holdings Mapping Note
 

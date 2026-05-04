@@ -26,7 +26,7 @@ def test_price_chart_series_row_date_uses_x_then_debug_fallback() -> None:
     assert second.source_field == "debugY"
 
 
-def test_dividends_events_series_row_date_matches_legacy_fallback_order() -> None:
+def test_dividends_events_series_row_date_uses_canonical_fallback_order() -> None:
     raw_point = resolve_series_row_date(
         "dividends_events_series",
         {"x": None, "ex_dividend_date": "2026-01-03"},

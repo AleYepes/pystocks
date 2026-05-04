@@ -317,6 +317,13 @@ def build_sample_profile_and_fees_payload() -> dict[str, object]:
             {"name": "Total Expense Ratio", "value": "0.15%"},
             {"name": "Total Net Assets (Month End)", "value": "$1.2B (2026-01-02)"},
         ],
+        "expenses_allocation": [
+            {
+                "name": "Management Expenses",
+                "value": "100%",
+                "ratio": 1.0,
+            }
+        ],
     }
 
 

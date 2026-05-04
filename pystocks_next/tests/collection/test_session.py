@@ -102,7 +102,7 @@ def test_session_exposes_fundamentals_auth_probe() -> None:
     )
 
 
-def test_default_state_path_matches_legacy_auth_contract(
+def test_default_state_path_matches_canonical_location(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(Path("/tmp"))

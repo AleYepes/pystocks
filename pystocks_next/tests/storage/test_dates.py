@@ -9,7 +9,7 @@ from pystocks_next.storage.dates import (
 )
 
 
-def test_parse_date_candidate_handles_legacy_string_and_timestamp_formats() -> None:
+def test_parse_date_candidate_handles_varied_ibkr_formats() -> None:
     assert parse_date_candidate("20251231") == date(2025, 12, 31)
     assert parse_date_candidate("2025/12/31") == date(2025, 12, 31)
     assert parse_date_candidate("12/31/2025") == date(2025, 12, 31)

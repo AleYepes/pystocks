@@ -72,8 +72,8 @@ def test_build_snapshot_input_bundle_builds_features_and_diagnostics(
     assert bundle.snapshot_features["effective_at"].dt.strftime(
         "%Y-%m-%d"
     ).tolist() == [
+        "2026-01-02",
         "2026-01-03",
-        "2026-01-05",
         "2026-01-30",
         "2026-01-31",
     ]
@@ -81,8 +81,8 @@ def test_build_snapshot_input_bundle_builds_features_and_diagnostics(
     row_asof = bundle.snapshot_features.loc[
         bundle.snapshot_features["effective_at"].dt.strftime("%Y-%m-%d") == "2026-01-03"
     ].iloc[0]
-    row_observed = bundle.snapshot_features.loc[
-        bundle.snapshot_features["effective_at"].dt.strftime("%Y-%m-%d") == "2026-01-05"
+    row_profile = bundle.snapshot_features.loc[
+        bundle.snapshot_features["effective_at"].dt.strftime("%Y-%m-%d") == "2026-01-02"
     ].iloc[0]
     row_lipper = bundle.snapshot_features.loc[
         bundle.snapshot_features["effective_at"].dt.strftime("%Y-%m-%d") == "2026-01-30"
@@ -91,10 +91,10 @@ def test_build_snapshot_input_bundle_builds_features_and_diagnostics(
         bundle.snapshot_features["effective_at"].dt.strftime("%Y-%m-%d") == "2026-01-31"
     ].iloc[0]
 
-    assert row_observed["profile__asset_type"] == "Equity"
-    assert row_observed["profile__management_expenses"] == pytest.approx(0.0012)
-    assert row_observed["profile__total_net_assets_num"] == pytest.approx(1.2e9)
-    assert row_observed["sleeve"] == "equity"
+    assert row_profile["profile__asset_type"] == "Equity"
+    assert row_profile["profile__management_expenses_ratio"] == pytest.approx(1.0)
+    assert row_profile["profile__total_net_assets_num"] == pytest.approx(1.2e9)
+    assert row_profile["sleeve"] == "equity"
 
     assert row_asof["holding_asset__equity"] == pytest.approx(0.85)
     assert row_asof["holding_quality__quality_aa"] == pytest.approx(0.15)

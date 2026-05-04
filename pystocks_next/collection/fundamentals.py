@@ -443,55 +443,86 @@ class FundamentalsCollector:
         inserted_events = 0
         series_latest_rows_upserted = 0
 
+        def record_unresolved_skip(
+            payload: CollectedEndpointPayload,
+            exc: UnresolvedEffectiveAtError,
+        ) -> None:
+            self.telemetry.record_persistence_skip(
+                conid=payload.conid,
+                endpoint_name=payload.endpoint_name,
+                endpoint_family=payload.endpoint_family,
+                request_path=payload.request_path,
+                observed_at=payload.observed_at,
+                status_code=payload.status_code,
+                is_useful=payload.is_useful,
+                skip_type=type(exc).__name__,
+                skip_reason=str(exc),
+            )
+
         for payload in outcome.endpoint_payloads:
             if payload.status_code != 200 or not isinstance(payload.payload, dict):
                 continue
             try:
                 if payload.endpoint_name == "profile_and_fees":
-                    write_profile_and_fees_snapshot(
-                        conn,
-                        conid=payload.conid,
-                        payload=payload.payload,
-                        observed_at=payload.observed_at,
-                        capture_batch_id=batch_id,
-                    )
-                    saved_snapshots += 1
+                    try:
+                        write_profile_and_fees_snapshot(
+                            conn,
+                            conid=payload.conid,
+                            payload=payload.payload,
+                            observed_at=payload.observed_at,
+                            capture_batch_id=batch_id,
+                        )
+                        saved_snapshots += 1
+                    except UnresolvedEffectiveAtError as exc:
+                        record_unresolved_skip(payload, exc)
                 elif payload.endpoint_name == "holdings" and payload.is_useful:
-                    write_holdings_snapshot(
-                        conn,
-                        conid=payload.conid,
-                        payload=payload.payload,
-                        observed_at=payload.observed_at,
-                        capture_batch_id=batch_id,
-                    )
-                    saved_snapshots += 1
+                    try:
+                        write_holdings_snapshot(
+                            conn,
+                            conid=payload.conid,
+                            payload=payload.payload,
+                            observed_at=payload.observed_at,
+                            capture_batch_id=batch_id,
+                        )
+                        saved_snapshots += 1
+                    except UnresolvedEffectiveAtError as exc:
+                        record_unresolved_skip(payload, exc)
                 elif payload.endpoint_name == "ratios" and payload.is_useful:
-                    write_ratios_snapshot(
-                        conn,
-                        conid=payload.conid,
-                        payload=payload.payload,
-                        observed_at=payload.observed_at,
-                        capture_batch_id=batch_id,
-                    )
-                    saved_snapshots += 1
+                    try:
+                        write_ratios_snapshot(
+                            conn,
+                            conid=payload.conid,
+                            payload=payload.payload,
+                            observed_at=payload.observed_at,
+                            capture_batch_id=batch_id,
+                        )
+                        saved_snapshots += 1
+                    except UnresolvedEffectiveAtError as exc:
+                        record_unresolved_skip(payload, exc)
                 elif payload.endpoint_name == "lipper_ratings" and payload.is_useful:
-                    write_lipper_ratings_snapshot(
-                        conn,
-                        conid=payload.conid,
-                        payload=payload.payload,
-                        observed_at=payload.observed_at,
-                        capture_batch_id=batch_id,
-                    )
-                    saved_snapshots += 1
+                    try:
+                        write_lipper_ratings_snapshot(
+                            conn,
+                            conid=payload.conid,
+                            payload=payload.payload,
+                            observed_at=payload.observed_at,
+                            capture_batch_id=batch_id,
+                        )
+                        saved_snapshots += 1
+                    except UnresolvedEffectiveAtError as exc:
+                        record_unresolved_skip(payload, exc)
                 elif payload.endpoint_name == "morningstar" and payload.is_useful:
-                    write_morningstar_snapshot(
-                        conn,
-                        conid=payload.conid,
-                        payload=payload.payload,
-                        observed_at=payload.observed_at,
-                        capture_batch_id=batch_id,
-                    )
-                    saved_snapshots += 1
+                    try:
+                        write_morningstar_snapshot(
+                            conn,
+                            conid=payload.conid,
+                            payload=payload.payload,
+                            observed_at=payload.observed_at,
+                            capture_batch_id=batch_id,
+                        )
+                        saved_snapshots += 1
+                    except UnresolvedEffectiveAtError as exc:
+                        record_unresolved_skip(payload, exc)
                 elif payload.endpoint_name == "dividends" and payload.is_useful:
                     try:
                         write_dividends_snapshot(
@@ -502,8 +533,8 @@ class FundamentalsCollector:
                             capture_batch_id=batch_id,
                         )
                         saved_snapshots += 1
-                    except UnresolvedEffectiveAtError:
-                        pass
+                    except UnresolvedEffectiveAtError as exc:
+                        record_unresolved_skip(payload, exc)
                     dividend_series_result = write_dividend_events_series(
                         conn,
                         conid=payload.conid,

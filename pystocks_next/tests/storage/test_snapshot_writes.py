@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from pystocks_next.storage.time import UnresolvedEffectiveAtError
 from pystocks_next.storage.writes import (
     write_dividends_snapshot,
     write_holdings_snapshot,
@@ -29,7 +30,7 @@ def test_write_profile_and_fees_snapshot_persists_source_shaped_profile_rows(
 
     snapshot_row = temp_store.execute(
         """
-        SELECT effective_at, capture_batch_id
+        SELECT effective_at, capture_batch_id, source_as_of_date
         FROM profile_snapshots
         WHERE conid = '100'
         """
@@ -51,11 +52,13 @@ def test_write_profile_and_fees_snapshot_persists_source_shaped_profile_rows(
     ).fetchall()
     by_field = {row["field_id"]: row for row in field_rows}
 
-    assert result.effective_at == "2026-01-05"
+    assert result.effective_at == "2026-01-02"
+    assert snapshot_row["effective_at"] == "2026-01-02"
+    assert snapshot_row["source_as_of_date"] == "2026-01-02"
     assert snapshot_row["capture_batch_id"] == "batch-profile-001"
     assert overview_row["jap_fund_warning"] == 0
     assert by_field["asset_type"]["value_text"] == "Equity"
-    assert by_field["management_expenses"]["value_num"] == pytest.approx(0.0012)
+    assert "management_expenses" not in by_field
     assert by_field["total_net_assets_month_end"]["value_text"] == "$1.2B"
     assert by_field["total_net_assets_month_end"]["value_date"] == "2026-01-02"
 
@@ -92,7 +95,18 @@ def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
             {"as_of_date": 0},
         ],
         "themes": ["Index Tracking"],
-        "expenses_allocation": [],
+        "expenses_allocation": [
+            {
+                "name": "Management Expenses",
+                "value": "52.5%",
+                "ratio": 0.5250381352562435,
+            },
+            {
+                "name": "Non-Management Expenses",
+                "value": "47.5%",
+                "ratio": 0.47496186474375646,
+            },
+        ],
         "jap_fund_warning": False,
     }
 
@@ -105,7 +119,7 @@ def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
 
     overview = temp_store.execute(
         """
-        SELECT symbol, objective, jap_fund_warning
+        SELECT effective_at, symbol, objective, jap_fund_warning, management_expenses_ratio
         FROM profile_overview
         WHERE conid = '100'
         """
@@ -152,7 +166,9 @@ def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
     annual_by_field = {row["field_id"]: row for row in annual_reports}
 
     assert overview["symbol"] == "SPY"
+    assert overview["effective_at"] == "2026-01-30"
     assert overview["jap_fund_warning"] == 0
+    assert overview["management_expenses_ratio"] == pytest.approx(0.5250381352562435)
     assert by_field["total_net_assets_month_end"]["value_text"] == "$708.92B"
     assert by_field["total_net_assets_month_end"]["value_date"] == "2026-01-30"
     assert annual_reports[0]["effective_at"] == "2025-09-30"
@@ -166,6 +182,29 @@ def test_write_profile_and_fees_snapshot_persists_documented_nested_sections(
     assert stylebox["y_label"] == "Multi"
     assert stylebox["x_index"] == 2
     assert stylebox["y_index"] == 1
+
+
+def test_write_profile_and_fees_snapshot_rejects_payload_without_source_date(
+    temp_store,
+) -> None:
+    upsert_instruments(temp_store, [UniverseInstrument(conid="100", symbol="AAA")])
+
+    with pytest.raises(
+        UnresolvedEffectiveAtError, match="source_as_of_date is required"
+    ):
+        write_profile_and_fees_snapshot(
+            temp_store,
+            conid="100",
+            payload={
+                "objective": "Track an index.",
+                "symbol": "SPY",
+                "fund_and_profile": [{"name": "Asset Type", "value": "Equity"}],
+                "reports": [{"as_of_date": 0}],
+                "expenses_allocation": [],
+                "jap_fund_warning": False,
+            },
+            observed_at="2026-01-05T10:00:00+00:00",
+        )
 
 
 def test_write_holdings_snapshot_persists_tall_factor_rows(

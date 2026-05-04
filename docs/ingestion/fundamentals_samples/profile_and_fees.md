@@ -1,5 +1,11 @@
 ## Profile and Fees
 
+Canonical date rule:
+
+- `effective_at` must be derived from this endpoint payload, never from collection time.
+- Resolve in this order: top-level `as_of_date` / `asOfDate`, embedded `Total Net Assets (Month End)` date, then latest valid `reports[].as_of_date`.
+- If none of those dates is present and valid, do not persist canonical profile snapshot rows. Keep `observed_at` only as raw-capture and telemetry metadata.
+
 Header:
 https://www.interactivebrokers.ie/tws.proxy/fundamentals/mf_profile_and_fees/756733?lang=en
 
@@ -190,7 +196,8 @@ Response:
         }
     ],
     "themes": [
-        "Index Tracking"
+        "Index Tracking",
+        "Hedged"
     ],
     "expenses_allocation": [
         {
