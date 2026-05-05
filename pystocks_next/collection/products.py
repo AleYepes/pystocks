@@ -4,13 +4,17 @@ import asyncio
 import math
 import sqlite3
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any, Protocol
 
 import httpx
 
 from ..progress import ProgressSink
-from ..universe import UniverseInstrument, upsert_instruments
+from ..universe import (
+    UniverseInstrument,
+    mark_instruments_inactive_except,
+    upsert_instruments,
+)
 
 PRODUCT_PAGE_SIZE = 500
 PRODUCT_SEARCH_ENDPOINT = (
@@ -44,8 +48,38 @@ class ProductCollectionResult:
     status: str
     fetched_products: int
     deduped_products: int
+    duplicate_conids: int
+    duplicate_product_rows: int
     products_upserted: int
+    products_deactivated: int
     page_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProductNormalizationResult:
+    instruments: list[UniverseInstrument]
+    duplicate_conids: int
+    duplicate_product_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateProductConflict:
+    conid: str
+    differing_fields: tuple[str, ...]
+
+
+class DuplicateProductConflictError(ValueError):
+    def __init__(self, conflicts: list[DuplicateProductConflict]) -> None:
+        sample = ", ".join(
+            f"{conflict.conid} ({', '.join(conflict.differing_fields)})"
+            for conflict in conflicts[:5]
+        )
+        more = "" if len(conflicts) <= 5 else f", and {len(conflicts) - 5} more"
+        super().__init__(
+            "Conflicting duplicate product rows returned by IBKR for conids: "
+            f"{sample}{more}"
+        )
+        self.conflicts = conflicts
 
 
 def _build_product_search_payload(
@@ -69,36 +103,93 @@ def _build_product_search_payload(
 def _normalize_products(
     products: Sequence[Mapping[str, Any]],
 ) -> list[UniverseInstrument]:
+    return _normalize_product_batch(products).instruments
+
+
+def _normalize_product_batch(
+    products: Sequence[Mapping[str, Any]],
+) -> ProductNormalizationResult:
     deduped: dict[str, UniverseInstrument] = {}
+    duplicate_rows_by_conid: dict[str, int] = {}
+    conflicts: dict[str, DuplicateProductConflict] = {}
     for product in products:
-        conid = _clean_product_text(product.get("conid"))
-        if not conid:
+        instrument = _normalize_product(product)
+        if instrument is None:
             continue
-        deduped[conid] = UniverseInstrument(
-            conid=conid,
-            symbol=_first_product_text(product, "symbol"),
-            local_symbol=_first_product_text(product, "localSymbol", "local_symbol"),
-            name=_first_product_text(product, "name", "description"),
-            exchange=_first_product_text(product, "exchange", "exchangeId"),
-            isin=_first_product_text(product, "isin"),
-            cusip=_first_product_text(product, "cusip"),
-            currency=_first_product_text(product, "currency"),
-            country=_first_product_text(product, "country"),
-            product_type=_first_product_text(
-                product, "type", "productType", "product_type"
-            )
-            or "ETF",
-            under_conid=_first_product_text(product, "underConid", "under_conid"),
-            is_prime_exch_id=_first_product_text(
-                product, "isPrimeExchId", "is_prime_exch_id"
-            ),
-            is_new_pdt=_first_product_text(product, "isNewPdt", "is_new_pdt"),
-            assoc_entity_id=_first_product_text(
-                product, "assocEntityId", "assoc_entity_id"
-            ),
-            fc_conid=_first_product_text(product, "fcConid", "fc_conid"),
+        existing = deduped.get(instrument.conid)
+        if existing is None:
+            deduped[instrument.conid] = instrument
+            continue
+
+        duplicate_rows_by_conid[instrument.conid] = (
+            duplicate_rows_by_conid.get(instrument.conid, 0) + 1
         )
-    return list(deduped.values())
+        differing_fields = _differing_instrument_fields(existing, instrument)
+        if differing_fields:
+            conflicts.setdefault(
+                instrument.conid,
+                DuplicateProductConflict(
+                    conid=instrument.conid,
+                    differing_fields=differing_fields,
+                ),
+            )
+
+    if conflicts:
+        raise DuplicateProductConflictError(list(conflicts.values()))
+
+    return ProductNormalizationResult(
+        instruments=list(deduped.values()),
+        duplicate_conids=len(duplicate_rows_by_conid),
+        duplicate_product_rows=sum(duplicate_rows_by_conid.values()),
+    )
+
+
+def _normalize_product(product: Mapping[str, Any]) -> UniverseInstrument | None:
+    conid = _clean_product_text(product.get("conid"))
+    if not conid:
+        return None
+    return UniverseInstrument(
+        conid=conid,
+        symbol=_first_product_text(product, "symbol"),
+        local_symbol=_first_product_text(product, "localSymbol", "local_symbol"),
+        name=_first_product_text(product, "description", "name"),
+        exchange=_first_product_text(product, "exchangeId", "exchange"),
+        isin=_first_product_text(product, "isin"),
+        cusip=_first_product_text(product, "cusip"),
+        currency=_first_product_text(product, "currency"),
+        country=_first_product_text(product, "country"),
+        product_type=_first_product_text(product, "type", "productType", "product_type")
+        or "ETF",
+        under_conid=_first_product_text(product, "underConid", "under_conid"),
+        is_prime_exch_id=_parse_product_bool(
+            _first_product_text(product, "isPrimeExchId", "is_prime_exch_id")
+        ),
+        is_new_pdt=_parse_product_bool(
+            _first_product_text(product, "isNewPdt", "is_new_pdt")
+        ),
+        assoc_entity_id=_first_product_text(
+            product, "assocEntityId", "assoc_entity_id"
+        ),
+        fc_conid=_first_product_text(product, "fcConid", "fc_conid"),
+    )
+
+
+def _differing_instrument_fields(
+    first: UniverseInstrument,
+    second: UniverseInstrument,
+) -> tuple[str, ...]:
+    return tuple(
+        field.name
+        for field in fields(UniverseInstrument)
+        if getattr(first, field.name) != getattr(second, field.name)
+    )
+
+
+def _parse_product_bool(value: object) -> bool | None:
+    text = _clean_product_text(value)
+    if text is None:
+        return None
+    return text.upper() == "T"
 
 
 def _clean_product_text(value: object) -> str | None:
@@ -185,7 +276,7 @@ async def refresh_product_universe(
     all_products: list[Mapping[str, Any]] = []
     page_count = 0
     try:
-        page_number = 0
+        page_number = 1
         while True:
             page = await fetch_product_page(
                 client_obj,
@@ -219,12 +310,19 @@ async def refresh_product_universe(
                 detail=f"{len(all_products)} products across {page_count} pages"
             )
 
-    instruments = _normalize_products(all_products)
-    products_upserted = upsert_instruments(conn, instruments)
+    normalization = _normalize_product_batch(all_products)
+    products_upserted = upsert_instruments(conn, normalization.instruments)
+    products_deactivated = mark_instruments_inactive_except(
+        conn,
+        [instrument.conid for instrument in normalization.instruments],
+    )
     return ProductCollectionResult(
-        status="ok" if instruments else "no_products",
+        status="ok" if normalization.instruments else "no_products",
         fetched_products=len(all_products),
-        deduped_products=len(instruments),
+        deduped_products=len(normalization.instruments),
+        duplicate_conids=normalization.duplicate_conids,
+        duplicate_product_rows=normalization.duplicate_product_rows,
         products_upserted=products_upserted,
+        products_deactivated=products_deactivated,
         page_count=page_count,
     )

@@ -4,8 +4,10 @@ import asyncio
 from collections.abc import Mapping
 
 import httpx
+import pytest
 
 from pystocks_next.collection.products import (
+    DuplicateProductConflictError,
     _normalize_products,
     fetch_product_page,
     refresh_product_universe,
@@ -27,6 +29,7 @@ class _FakeClient:
     def __init__(self, responses: list[object]) -> None:
         self._responses = list(responses)
         self.post_calls = 0
+        self.payloads: list[Mapping[str, object]] = []
 
     async def post(
         self,
@@ -37,8 +40,9 @@ class _FakeClient:
         headers: Mapping[str, str],
         timeout: float,
     ) -> _FakeResponse:
-        del url, json, headers, timeout
+        del url, headers, timeout
         self.post_calls += 1
+        self.payloads.append(json)
         response = self._responses.pop(0)
         if isinstance(response, Exception):
             raise response
@@ -81,7 +85,7 @@ def test_refresh_product_universe_filters_malformed_and_dedupes(
                 {
                     "products": [
                         {"conid": "100", "symbol": "AAA", "currency": "USD"},
-                        {"conid": "100", "symbol": "AAA2", "currency": "USD"},
+                        {"conid": "100", "symbol": "AAA", "currency": "USD"},
                         {"symbol": "missing"},
                         "bad",
                     ]
@@ -97,9 +101,85 @@ def test_refresh_product_universe_filters_malformed_and_dedupes(
     assert result.status == "ok"
     assert result.fetched_products == 3
     assert result.deduped_products == 1
+    assert result.duplicate_conids == 1
+    assert result.duplicate_product_rows == 1
     assert result.products_upserted == 1
+    assert result.products_deactivated == 0
     assert result.page_count == 1
-    assert [(item.conid, item.symbol) for item in instruments] == [("100", "AAA2")]
+    assert [(item.conid, item.symbol) for item in instruments] == [("100", "AAA")]
+
+
+def test_refresh_product_universe_marks_missing_instruments_inactive(
+    temp_store,
+) -> None:
+    client = _FakeClient(
+        [
+            _FakeResponse(200, {"products": [{"conid": "100", "symbol": "AAA"}]}),
+            _FakeResponse(200, {"products": []}),
+        ]
+    )
+    asyncio.run(
+        refresh_product_universe(
+            temp_store,
+            client=_FakeClient(
+                [
+                    _FakeResponse(
+                        200,
+                        {
+                            "products": [
+                                {"conid": "100", "symbol": "AAA"},
+                                {"conid": "200", "symbol": "OLD"},
+                            ]
+                        },
+                    ),
+                    _FakeResponse(200, {"products": []}),
+                ]
+            ),
+        )
+    )
+
+    result = asyncio.run(refresh_product_universe(temp_store, client=client))
+    instruments = {item.conid: item for item in list_instruments(temp_store)}
+
+    assert result.products_upserted == 1
+    assert result.products_deactivated == 1
+    assert instruments["100"].is_active is True
+    assert instruments["200"].is_active is False
+
+
+def test_refresh_product_universe_starts_at_first_server_page(temp_store) -> None:
+    client = _FakeClient(
+        [
+            _FakeResponse(200, {"products": [{"conid": "100"}]}),
+            _FakeResponse(200, {"products": []}),
+        ]
+    )
+
+    asyncio.run(refresh_product_universe(temp_store, client=client, page_size=1))
+
+    assert [payload["pageNumber"] for payload in client.payloads] == [1, 2]
+
+
+def test_refresh_product_universe_rejects_conflicting_duplicate_conids(
+    temp_store,
+) -> None:
+    client = _FakeClient(
+        [
+            _FakeResponse(
+                200,
+                {
+                    "products": [
+                        {"conid": "100", "symbol": "AAA", "currency": "USD"},
+                        {"conid": "100", "symbol": "BBB", "currency": "USD"},
+                    ]
+                },
+            ),
+            _FakeResponse(200, {"products": []}),
+        ]
+    )
+
+    with pytest.raises(DuplicateProductConflictError, match="100 .*symbol"):
+        asyncio.run(refresh_product_universe(temp_store, client=client))
 
 
 def test_normalize_products_handles_ibkr_catalog_field_names() -> None:
@@ -151,13 +231,13 @@ def test_normalize_products_handles_ibkr_catalog_field_names() -> None:
     assert instruments[0].name == "SS SPDR S&P 500 ETF TRUST-US"
     assert instruments[0].product_type == "ETF"
     assert instruments[0].under_conid is None
-    assert instruments[0].is_prime_exch_id == "T"
-    assert instruments[0].is_new_pdt == "F"
+    assert instruments[0].is_prime_exch_id is True
+    assert instruments[0].is_new_pdt is False
     assert instruments[0].assoc_entity_id is None
     assert instruments[0].fc_conid == "1"
     assert instruments[1].conid == "45540646"
     assert instruments[1].name == "STE STR SPDR PT S&P 500 ETF"
-    assert instruments[1].exchange == "DRCTEDGE"
+    assert instruments[1].exchange == "IGNORED"
     assert instruments[1].currency is None
 
 

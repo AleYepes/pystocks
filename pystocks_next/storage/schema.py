@@ -56,12 +56,11 @@ MIGRATIONS: tuple[Migration, ...] = (
                 is_active INTEGER NOT NULL DEFAULT 1,
                 updated_at TEXT NOT NULL,
                 local_symbol TEXT,
-                primary_listing_exchange TEXT,
                 cusip TEXT,
                 country TEXT,
                 under_conid TEXT,
-                is_prime_exch_id TEXT,
-                is_new_pdt TEXT,
+                is_prime_exch_id INTEGER,
+                is_new_pdt INTEGER,
                 assoc_entity_id TEXT,
                 fc_conid TEXT
             )

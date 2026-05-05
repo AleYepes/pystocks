@@ -32,8 +32,8 @@ def test_upsert_instruments_preserves_catalog_fields(temp_store) -> None:
                 country="US",
                 product_type="ETF",
                 under_conid="200",
-                is_prime_exch_id="T",
-                is_new_pdt="F",
+                is_prime_exch_id=True,
+                is_new_pdt=False,
                 assoc_entity_id="300",
                 fc_conid="1",
             )
@@ -46,8 +46,8 @@ def test_upsert_instruments_preserves_catalog_fields(temp_store) -> None:
     assert instrument.cusip == "000000001"
     assert instrument.country == "US"
     assert instrument.under_conid == "200"
-    assert instrument.is_prime_exch_id == "T"
-    assert instrument.is_new_pdt == "F"
+    assert instrument.is_prime_exch_id is True
+    assert instrument.is_new_pdt is False
     assert instrument.assoc_entity_id == "300"
     assert instrument.fc_conid == "1"
 

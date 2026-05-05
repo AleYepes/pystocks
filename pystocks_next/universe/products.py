@@ -18,8 +18,8 @@ class UniverseInstrument:
     country: str | None = None
     product_type: str | None = None
     under_conid: str | None = None
-    is_prime_exch_id: str | None = None
-    is_new_pdt: str | None = None
+    is_prime_exch_id: bool | None = None
+    is_new_pdt: bool | None = None
     assoc_entity_id: str | None = None
     fc_conid: str | None = None
     is_active: bool = True
@@ -48,8 +48,10 @@ def upsert_instruments(
                 instrument.country,
                 instrument.product_type,
                 instrument.under_conid,
-                instrument.is_prime_exch_id,
-                instrument.is_new_pdt,
+                None
+                if instrument.is_prime_exch_id is None
+                else int(instrument.is_prime_exch_id),
+                None if instrument.is_new_pdt is None else int(instrument.is_new_pdt),
                 instrument.assoc_entity_id,
                 instrument.fc_conid,
                 int(instrument.is_active),
@@ -101,6 +103,43 @@ def upsert_instruments(
     return len(normalized_rows)
 
 
+def mark_instruments_inactive_except(
+    conn: sqlite3.Connection,
+    active_conids: list[str],
+) -> int:
+    if not active_conids:
+        return 0
+
+    observed_at = datetime.now(tz=UTC).isoformat()
+    conn.execute(
+        """
+        CREATE TEMP TABLE IF NOT EXISTS current_universe_conids (
+            conid TEXT PRIMARY KEY
+        )
+        """
+    )
+    conn.execute("DELETE FROM current_universe_conids")
+    conn.executemany(
+        "INSERT INTO current_universe_conids (conid) VALUES (?)",
+        [(conid,) for conid in active_conids],
+    )
+    cursor = conn.execute(
+        """
+        UPDATE universe_instruments
+        SET is_active = 0,
+            updated_at = ?
+        WHERE is_active = 1
+          AND conid NOT IN (
+              SELECT conid
+              FROM current_universe_conids
+          )
+        """,
+        (observed_at,),
+    )
+    conn.execute("DROP TABLE current_universe_conids")
+    return cursor.rowcount
+
+
 def list_instruments(
     conn: sqlite3.Connection,
     *,
@@ -147,8 +186,12 @@ def list_instruments(
             country=row["country"],
             product_type=row["product_type"],
             under_conid=row["under_conid"],
-            is_prime_exch_id=row["is_prime_exch_id"],
-            is_new_pdt=row["is_new_pdt"],
+            is_prime_exch_id=bool(row["is_prime_exch_id"])
+            if row["is_prime_exch_id"] is not None
+            else None,
+            is_new_pdt=bool(row["is_new_pdt"])
+            if row["is_new_pdt"] is not None
+            else None,
             assoc_entity_id=row["assoc_entity_id"],
             fc_conid=row["fc_conid"],
             is_active=bool(row["is_active"]),
