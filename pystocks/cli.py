@@ -195,7 +195,7 @@ class PyStocksCLI:
 
     def run_pipeline(
         self,
-        limit: int | None = 100,
+        limit: int | None = 99999,
         verbose: bool = False,
         force: bool = False,
         conids_file: str | None = None,
